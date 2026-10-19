@@ -6,12 +6,12 @@ use std::time::Instant;
 
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
-use md_core::deconv::{Component, DeconvSettings, deconvolute};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::deconv::Component;
 use md_core::{Chromatogram, decimate};
 
 mod calibration;
 mod identify;
+mod settings;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -56,6 +56,7 @@ struct App {
     mz: f32,
     tolerance: f32,
     ri: calibration::Calibration,
+    settings: settings::Settings,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
 }
@@ -74,6 +75,7 @@ impl Default for App {
             mz: 147.0,
             tolerance: 0.5,
             ri: calibration::Calibration::default(),
+            settings: settings::Settings::default(),
             library: None,
             library_job: None,
         }
@@ -94,8 +96,9 @@ struct Run {
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
-    /// Deconvoluted substances with the old default settings, ordered by retention time.
+    /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
+    analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
     component: Option<usize>,
@@ -128,17 +131,14 @@ impl App {
     /// Every file loads on its own thread, so many runs load in parallel.
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let p = path.clone();
+        let key = self.settings.key();
         let rx = spawn(ctx, move || {
             md_core::andi::read(&p)
                 .map_err(|e| e.to_string())
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let traces = IonTraces::new(&data);
-                        let peaks = traces.detect_peaks(&PeakSettings::default());
-                        let mut components =
-                            deconvolute(&traces, &peaks, &DeconvSettings::default());
-                        components.sort_by_key(|k| k.apex_scan);
+                        let components = settings::analyze(&data, &key);
                         Ok(Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
@@ -149,6 +149,7 @@ impl App {
                             sic_for: None,
                             sic_job: None,
                             components,
+                            analysis: settings::Analysis::new(key),
                             scan: 0,
                             component: None,
                             visible: true,
@@ -268,6 +269,7 @@ fn trace_plot(
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_loading();
+        self.settings.update_runs(ui.ctx(), &mut self.runs);
         self.update_identification(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -290,17 +292,26 @@ impl eframe::App for App {
                     if ui.button("RI calibration…").clicked() {
                         self.ri.open = true;
                     }
+                    if ui.button("Settings…").clicked() {
+                        self.settings.open = true;
+                    }
                 });
             });
         });
 
         self.ri.window(ui.ctx(), self.runs.get(self.active));
+        self.settings.window(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(format!("Loading {} file(s)…", self.loading.len()));
+                });
+            } else if self.runs.iter().any(|r| r.analysis.busy()) {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Re-analysing with the new settings…");
                 });
             } else if let Some(e) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);

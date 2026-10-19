@@ -14,6 +14,8 @@ pub struct Library {
     pub name: String,
     compounds: Vec<LibraryCompound>,
     prepared: PreparedLibrary,
+    /// What `prepared` was scaled and filtered with; searches use the same.
+    settings: SearchSettings,
 }
 
 /// Identification of one run and the library it was computed with.
@@ -21,14 +23,6 @@ pub type Identified = (Arc<Library>, Identification);
 
 /// A text on the TIC: position, name, colour.
 pub type Label = ([f64; 2], String, egui::Color32);
-
-/// The old GUI searches with cutoff 0 and colours the labels by score (§5.8).
-fn settings() -> SearchSettings {
-    SearchSettings {
-        cutoff: 0.0,
-        ..Default::default()
-    }
-}
 
 /// Old label colours: above 0.9, above 0.7, the rest.
 fn score_color(score: f64) -> egui::Color32 {
@@ -45,7 +39,7 @@ pub fn is_library(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("lbr") || e.eq_ignore_ascii_case("msl"))
 }
 
-fn load(path: &Path) -> Result<Library, String> {
+fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
     let lbr = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("lbr"));
@@ -61,7 +55,8 @@ fn load(path: &Path) -> Result<Library, String> {
             .unwrap_or_default()
             .to_string_lossy()
             .into(),
-        prepared: PreparedLibrary::new(&compounds, &settings()),
+        prepared: PreparedLibrary::new(&compounds, &s),
+        settings: s,
         compounds,
     })
 }
@@ -78,7 +73,8 @@ impl App {
     }
 
     pub fn open_library(&mut self, ctx: &egui::Context, path: PathBuf) {
-        self.library_job = Some(spawn(ctx, move || load(&path).map(Arc::new)));
+        let s = self.settings.applied.search();
+        self.library_job = Some(spawn(ctx, move || load(&path, s).map(Arc::new)));
     }
 
     /// Takes a loaded library and (re)identifies every run that was not searched with the current one.
@@ -95,6 +91,22 @@ impl App {
         let Some(lib) = &self.library else {
             return;
         };
+        // New search settings: prepare the library again, then every run is searched again.
+        let wanted = self.settings.applied.search();
+        if lib.settings != wanted {
+            if self.library_job.is_none() {
+                let lib = lib.clone();
+                self.library_job = Some(spawn(ctx, move || {
+                    Ok(Arc::new(Library {
+                        name: lib.name.clone(),
+                        prepared: PreparedLibrary::new(&lib.compounds, &wanted),
+                        compounds: lib.compounds.clone(),
+                        settings: wanted,
+                    }))
+                }));
+            }
+            return;
+        }
         for run in &mut self.runs {
             if let Some((l, rx)) = &run.ident_job
                 && let Ok(id) = rx.try_recv()
@@ -108,7 +120,7 @@ impl App {
             {
                 let (lib2, comps) = (lib.clone(), run.components.clone());
                 let rx = spawn(ctx, move || {
-                    map_compounds_to_library(&comps, None, &lib2.prepared, &settings())
+                    map_compounds_to_library(&comps, None, &lib2.prepared, &lib2.settings)
                 });
                 run.ident_job = Some((lib.clone(), rx));
             }

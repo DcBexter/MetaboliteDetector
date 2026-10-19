@@ -261,6 +261,23 @@ as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kep
 `tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
 `MD_LBR_SAMPLE` points to it; the file is never committed.
 
+## Settings
+
+`md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
+converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. It reads and writes the old settings
+file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because algorithms.md §1 reports
+one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
+every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
+(not decoded). `LS_CUTOFF`, `AN_MIN_HEIGHT_BP`, `AN_MODELED_VALUES_FOR_INTEGRATION` and `LS_MASS_FILTER`
+are not in the old file; loading keeps their current value. `SF_*`, `AN_MAX_BASE_DEV`, `LS_RESOLUTION`,
+`LS_USE_SCALED_LIB` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are stored and shown, but
+no step reads them yet. The GUI searches with cutoff 0 (§5.8), so `LS_CUTOFF` has no effect there.
+
+In the app (`src/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
+Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
+dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
+New runs open with the applied settings.
+
 ## Build and test
 
 ```sh
