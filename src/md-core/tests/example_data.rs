@@ -56,7 +56,7 @@ fn detects_peaks_in_example_runs() {
     for path in runs() {
         let c = md_core::andi::read(&path).unwrap();
         let t = Instant::now();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let index = t.elapsed();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let total = t.elapsed();
@@ -85,7 +85,7 @@ fn deconvolutes_example_runs() {
     for path in runs() {
         let c = md_core::andi::read(&path).unwrap();
         let t = Instant::now();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let s = DeconvSettings::default();
         let comps = deconvolute(&traces, &peaks, &s);
