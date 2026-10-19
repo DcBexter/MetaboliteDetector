@@ -528,5 +528,14 @@ mod tests {
             shift_to_reference(&cal, &times, &weak, &lib, 1, 0.8, &s),
             None
         );
+        // Gly at 243 s scores (1 · 0.755)^(1/3) = 0.91.
+        assert_eq!(
+            shift_to_reference(&cal, &times, &comps, &lib, 1, 0.95, &s),
+            None
+        );
+        // Searched with the shifted RIs, Gly matches its library RI exactly.
+        let ris = shifted.component_ris(&times, &comps);
+        let id = map_compounds_to_library(&comps, Some(&ris), &lib, &s);
+        assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
     }
 }

@@ -112,7 +112,8 @@ impl App {
         let cal = &self.ri.cal;
         let reference = (self.ri.reference.as_ref())
             .filter(|_| cal.is_some())
-            .and_then(|n| lib.compounds.iter().position(|c| &c.name == n))
+            // The window offers only compounds with RI; a namesake without RI must not shadow them.
+            .and_then(|n| (lib.compounds.iter()).position(|c| &c.name == n && c.spectrum.ri >= 0.0))
             .map(|k| (k, self.ri.ref_cutoff));
         let current = |k: &Key| {
             Arc::ptr_eq(&k.0, lib)

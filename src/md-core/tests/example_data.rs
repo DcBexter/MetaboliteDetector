@@ -258,6 +258,14 @@ fn amino_acids_get_ri_score_with_lib_aa() {
             let on_time =
                 shift_to_reference(&cal, &c.scan_times_s, &comps, &prepared, gly, 0.8, &s);
             assert!((shifted.shift_s - on_time.unwrap().shift_s - 4.0).abs() < 1e-9);
+            // Searched with the shifted RIs, the reference is assigned with its full RI score.
+            let ris = shifted.component_ris(&late, &comps);
+            let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+            let h = id.assigned[k.unwrap()].unwrap();
+            assert_eq!(
+                (h.compound, h.ri_sim.map(|r| r > 0.999_999)),
+                (gly, Some(true))
+            );
             corrected += 1;
         }
     }

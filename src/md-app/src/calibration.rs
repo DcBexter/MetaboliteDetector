@@ -27,6 +27,8 @@ pub struct Calibration {
     /// overall score it must reach there (old spin box; default `LS_CUTOFF`).
     pub reference: Option<String>,
     pub ref_cutoff: f64,
+    /// Cutoff being edited; applied when the drag ends, so dragging does not search on every frame.
+    cutoff_edit: f64,
     /// Running alkane search and the source it will set.
     job: Option<(String, mpsc::Receiver<Result<RiCalibration, String>>)>,
     error: Option<String>,
@@ -46,6 +48,7 @@ impl Default for Calibration {
             threshold: 100,
             reference: None,
             ref_cutoff: 0.8,
+            cutoff_edit: 0.8,
             job: None,
             error: None,
         }
@@ -54,10 +57,11 @@ impl Default for Calibration {
 
 impl Calibration {
     /// The run's calibration: shifted onto the reference when it was found there, else the global one.
+    /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
     fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
         let ptr = |c: &Option<Arc<RiCalibration>>| c.as_ref().map(Arc::as_ptr);
         (run.ident.as_ref())
-            .filter(|i| ptr(&i.0.1) == ptr(&self.cal))
+            .filter(|i| run.ident_job.is_none() && ptr(&i.0.1) == ptr(&self.cal))
             .and_then(|i| i.2.as_ref())
             .or(self.cal.as_deref())
     }
@@ -213,11 +217,14 @@ impl Calibration {
                     }
                 });
             ui.label("Cutoff");
-            ui.add(
-                egui::DragValue::new(&mut self.ref_cutoff)
+            let edit = ui.add(
+                egui::DragValue::new(&mut self.cutoff_edit)
                     .range(0.0..=1.0)
                     .speed(0.01),
             );
+            if !edit.dragged() {
+                self.ref_cutoff = self.cutoff_edit;
+            }
         });
         if self.reference.is_none() {
             return;
