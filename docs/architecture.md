@@ -82,14 +82,17 @@ old app only uses in the RI calibration dialog (and deconvolution, §4.5).
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 
-Conscious deviations from the old app, each to be checked against old output in the golden-test issue:
+Conscious deviations from the old app; the golden test (below) shows that none of them changes the
+peaks of the example runs:
 
 - **Traces per nominal mass.** m/z is rounded and points of one nominal mass in a scan are summed. The
   old app's trace construction for ANDI data is unknown; the example runs are unit-resolution, so this
   matches them. High-resolution data needs exact-mass traces and `reorderPeaks` (§4.2).
-- **Noise factor 1.0.** The old detector keeps its constructor value 1.0; `GCMSAnalyzer` overwrites it
-  from a source not found yet (§2.3). The noise factor and MAD of `analyzeBaseline` are not computed
-  because the detector never reads them.
+- **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
+  `DataProvider::getGlobalNoiseFactor` (§2.3). On all 15 example runs the old app logs
+  "Error determining nf. Using nf=1", so 1.0 is what it uses there. Data where the old app finds another
+  noise factor would differ. The noise factor and MAD of `analyzeBaseline` are not computed because the
+  detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
@@ -107,7 +110,7 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose until the golden test (issue 17) has compared both versions: the first
+The old quirks are kept on purpose; with them, 225 of 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
@@ -122,6 +125,51 @@ Conscious deviations:
   re-implemented (round to 8 significant digits).
 - **No `reorderPeaks`** (unit-mass data only, see peak detection) and **no RI** yet (issue 20).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
+
+## Golden test
+
+`src/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
+MetaboliteDetector 3.3 (Linux) on the 15 example runs of `example-data/`; it passes without checking
+anything when they are missing. The reference `src/md-core/tests/data/old-md-3.3.tsv` holds the old peaks
+(ion, first, apex and last scan, S/N) of 7235eg04, eg20 and eg32 and the components (apex scan, ions,
+heights, integrals) of all 15 runs.
+
+How the reference is made: `docs/reverse-engineering/tools/golden/make-reference.sh` (Linux or WSL, old
+`.deb` installed) loads a small driver into the old binary with `LD_PRELOAD`. The driver replaces `main`
+and calls the binary's own functions in the order of the GUI's "Detect components": `CdfImporter`,
+`GCMSDiskScan`, `GCMSAnalyzer::detectAllPeaks(true, 10, 0.05)`, `deconvoluteChromatogram`. It uses the
+static `AN_*` defaults compiled into the binary, which are also the values of a fresh config file. This
+is the old code itself, not a re-implementation. The GUI export and `.cmp` files were not used because
+they need clicks per run and `.cmp` holds no peak bounds. The script checks the binary's SHA-256, so
+another build cannot silently produce a different reference. Neither the binary nor the example data are
+committed.
+
+Tolerances and their reasons:
+
+| Compared | Tolerance | Reason |
+|---|---|---|
+| Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
+| Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
+| Component ions and apex scan | exact for 231 of 246 | 15 known differences, issue 46 |
+| Ion height | ±1 | the old code rounds a few modelled heights the other way |
+| Ion integral | 1e-5 relative | the reference prints 7 significant digits |
+
+Remaining differences, all in deconvolution (issue 46):
+
+- 3 old components are missing.
+- 12 components differ by 1–4 ions.
+- 6 components have the same ions, but all heights and integrals differ by about 0.1–5 %. A different
+  model peak is the likely cause.
+
+The test fails when one of these counts grows. The counts are lowered as issue 46 fixes them.
+
+The golden test found three porting errors in peak detection, now fixed:
+
+- After an accepted peak the old loop steps back one scan, so a tailing peak starts right after the
+  previous one.
+- The apex search starts at the last rising scan, so a tie keeps the later scan.
+- The baseline fit takes half of the distinct residuals (`std::map` keys), not half of all points, and
+  the pivot tie goes to the right.
 
 ## Libraries
 

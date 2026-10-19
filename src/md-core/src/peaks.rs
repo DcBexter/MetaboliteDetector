@@ -238,12 +238,14 @@ pub fn detect_peaks(
     let mut tailing = false;
     let mut i = 2;
     while i < n - 2 {
-        if let Some((beg, en)) = candidate(&mut i, d, sm, &base, s, tailing) {
-            match check_peak(v, beg, en, s) {
+        if let Some((beg, en, mx)) = candidate(&mut i, d, sm, &base, s, tailing) {
+            match check_peak(v, beg, en, mx, s) {
                 Some(p) => {
                     let last = v[p.last_scan as usize] as f64 - base.mean;
                     tailing = last > 0.2 * (v[p.apex_scan as usize] as f64 - base.mean);
                     out.push(p);
+                    // The old loop steps back one scan here, so a tailing peak starts where the last one ended + 1.
+                    i -= 1;
                 }
                 None => {
                     tailing = false;
@@ -265,7 +267,7 @@ fn candidate(
     base: &Baseline,
     s: &PeakSettings,
     tailing: bool,
-) -> Option<(usize, usize)> {
+) -> Option<(usize, usize, usize)> {
     let n = d.len();
     if !(d[*i] > s.threshold_begin || tailing) {
         return None;
@@ -293,46 +295,54 @@ fn candidate(
     while *i + 1 < n {
         if d[*i] > s.threshold_end && d[*i + 1] > s.threshold_end {
             let en = *i - 1;
-            return (en - beg > 3 && mx != beg && mx != en).then_some((beg, en));
+            return (en - beg > 3 && mx != beg && mx != en).then_some((beg, en, mx));
         }
         *i += 1;
     }
     None
 }
 
-/// Noise factor of the old detector: `AbstractPeakDetector` starts with 1.0 and `detectPeaks` never
-/// changes it. The old `GCMSAnalyzer` may overwrite it from a source not found yet (algorithms.md §2.3).
+/// Noise factor of the old detector. The old `GCMSAnalyzer` sets it from the run's global noise factor,
+/// which is 1.0 on the example runs (algorithms.md §2.3, docs/architecture.md).
 const NOISE_FACTOR: f64 = 1.0;
 
-/// First index of the highest value (strict `>`, like the old code).
-fn argmax(w: &[f32]) -> usize {
-    (0..w.len()).fold(0, |m, k| if w[k] > w[m] { k } else { m })
+/// Index of the highest value, starting from `start`: a later index wins only with a strictly
+/// higher value (strict `>`, like the old code).
+fn argmax(w: &[f32], start: usize) -> usize {
+    (0..w.len()).fold(start, |m, k| if w[k] > w[m] { k } else { m })
 }
 
 /// Old `createPeak` (§3.2, border extension off as in the old default) and `calculateBaseline`
 /// (§2.2): fit a robust baseline and keep the peak if it stands `min_peak_height` noise units above it.
-fn check_peak(v: &[f32], first: usize, last: usize, s: &PeakSettings) -> Option<Peak> {
+fn check_peak(v: &[f32], first: usize, last: usize, mx: usize, s: &PeakSettings) -> Option<Peak> {
     let w = &v[first..=last];
-    let argmin = |r: std::ops::Range<usize>| r.min_by(|a, b| w[*a].total_cmp(&w[*b])).unwrap();
-    let apex = argmax(w);
+    // createPeak starts the apex search at the last rising scan of the flank search.
+    let apex = argmax(w, mx - first);
     let max = w[apex] as f64;
-
-    // Line through the lowest points left and right of the apex, then pivot it around the
-    // overall lowest point until no point lies more than 0.1 below it.
-    let (l, r) = (argmin(0..apex.max(1)), argmin(apex..w.len()));
-    let pivot = if w[l] <= w[r] { l } else { r };
     let at = |k: usize| w[k] as f64;
+
+    // Line through the lowest points left of and from the apex on (both start at the apex, strict
+    // `<`), then pivot it around the lower one (right one on a tie) until no point lies more than
+    // 0.1 below it. Same arithmetic as the old code: residual ties decide which points the fit uses.
+    let lowest = |r: std::ops::Range<usize>| r.fold(apex, |m, k| if w[k] < w[m] { k } else { m });
+    let (l, r) = (lowest(0..apex), lowest(apex..w.len()));
+    let pivot = if w[l] < w[r] { l } else { r };
     let mut slope = if l == r {
         0.0
     } else {
-        (at(r) - at(l)) / (r as f64 - l as f64)
+        (at(r) - at(l)) / (r - l) as f64
     };
+    let mut icpt = at(l) - l as f64 * slope;
     for _ in 0..=w.len() {
         let mut moved = false;
         for k in 0..w.len() {
-            let line = at(pivot) + slope * (k as f64 - pivot as f64);
-            if line - at(k) > 0.1 {
-                slope = (at(k) - at(pivot)) / (k as f64 - pivot as f64);
+            if (k as f64 * slope + icpt) - at(k) > 0.1 {
+                slope = if k < pivot {
+                    (at(pivot) - at(k)) / (pivot - k) as f64
+                } else {
+                    (at(k) - at(pivot)) / (k - pivot) as f64
+                };
+                icpt = at(pivot) - pivot as f64 * slope;
                 moved = true;
             }
         }
@@ -340,13 +350,14 @@ fn check_peak(v: &[f32], first: usize, last: usize, s: &PeakSettings) -> Option<
             break;
         }
     }
-    // Least-squares line through the half of the points closest to (or below) that line.
+    // Least-squares line through the first half (+1) of the distinct residuals, lowest first
+    // (old std::map<double, index>: a repeated residual keeps its first index and counts once).
     let mut res: Vec<(f64, usize)> = (0..w.len())
-        .map(|k| (at(k) - at(pivot) - slope * (k as f64 - pivot as f64), k))
+        .map(|k| (at(k) - (k as f64 * slope + icpt), k))
         .collect();
     res.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     res.dedup_by(|a, b| a.0 == b.0);
-    res.truncate(w.len() / 2 + 1);
+    res.truncate(res.len() / 2 + 1);
     let (icpt, fit_slope) = fit_line(res.iter().map(|(_, k)| (*k as f64, at(*k))));
 
     let nu = max.sqrt() * NOISE_FACTOR;
@@ -357,6 +368,7 @@ fn check_peak(v: &[f32], first: usize, last: usize, s: &PeakSettings) -> Option<
     Some(peak(
         w,
         first,
+        apex,
         NOISE_FACTOR,
         (height / nu) as f32,
         s.number_bins,
@@ -364,8 +376,7 @@ fn check_peak(v: &[f32], first: usize, last: usize, s: &PeakSettings) -> Option<
 }
 
 /// Old `Peak` constructor (§3.5): a peak over `w = trace[first..first + w.len()]` with its metrics.
-fn peak(w: &[f32], first: usize, nf: f64, signal_to_noise: f32, bins: u32) -> Peak {
-    let apex = argmax(w);
+fn peak(w: &[f32], first: usize, apex: usize, nf: f64, signal_to_noise: f32, bins: u32) -> Peak {
     Peak {
         row: 0,
         first_scan: first as u32,
@@ -421,7 +432,8 @@ pub fn detect_peaks_matched(v: &[f32], density: usize, threshold: i32, bins: u32
                 break;
             };
             if end - i > 2 {
-                peaks.push(peak(&f[i..=end], i, 0.5, 0.0, bins));
+                let w = &f[i..=end];
+                peaks.push(peak(w, i, argmax(w, 0), 0.5, 0.0, bins));
             }
             i = end;
         }
@@ -558,7 +570,9 @@ mod tests {
         v[148..=152].fill(41_000.0); // detector saturation
         let p = detect(&v);
         assert_eq!(p.len(), 1, "{p:?}");
-        assert_eq!(p[0].apex_scan, 148);
+        // Like the old code: the apex search starts at the last scan whose slope is still ≥ 0, the
+        // plateau's middle, and earlier equal values do not replace it.
+        assert_eq!(p[0].apex_scan, 150);
     }
 
     #[test]
