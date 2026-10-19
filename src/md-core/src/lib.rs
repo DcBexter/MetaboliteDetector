@@ -11,6 +11,7 @@ pub mod library;
 pub mod peaks;
 pub mod ri;
 pub mod search;
+pub mod settings;
 
 /// A GC/MS run: one mass spectrum per scan, stored as flat arrays (ANDI-MS layout).
 ///
