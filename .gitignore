@@ -9,3 +9,10 @@
 
 # Local copies of the original MetaboliteDetector binaries (reference only, not distributed)
 /Old/
+
+# Rust build output
+/target/
+__pycache__/
+# Example data (downloaded by example-data/fetch.*)
+/example-data/TargetSearchData/
+/example-data/*.tar.gz
