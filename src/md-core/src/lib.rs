@@ -12,6 +12,7 @@ pub mod library;
 pub mod peaks;
 pub mod ri;
 pub mod search;
+pub mod settings;
 
 /// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), else ANDI-MS NetCDF.
 pub fn read_run(path: &std::path::Path) -> Result<Chromatogram, String> {

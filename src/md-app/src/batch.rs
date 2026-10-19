@@ -10,6 +10,7 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{RunResult, ScanSettings, Table, TableSettings, scan_runs, table};
 use md_core::ri::RiCalibration;
+use md_core::search::SearchSettings;
 
 use crate::identify::Library;
 use crate::spawn;
@@ -38,6 +39,8 @@ pub struct Batch {
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     settings: TableSettings,
+    /// Peak detection and deconvolution settings of the app (Analysis → Settings), set every frame.
+    pub analysis: crate::settings::Key,
     job: Option<Job>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
@@ -53,6 +56,7 @@ impl Default for Batch {
             // 15 example runs: 1.1 s with 1, 0.17 s with 4 (90 MiB), 0.10 s with 15 (189 MiB).
             parallel: 4,
             settings: TableSettings::default(),
+            analysis: Default::default(),
             job: None,
             scan: None,
             table: None,
@@ -107,8 +111,13 @@ impl Batch {
         );
         // The library was prepared with the app's search settings, which differ only in the cutoff.
         let s = ScanSettings {
+            peaks: self.analysis.0,
+            deconv: self.analysis.1.clone(),
+            search: SearchSettings {
+                cutoff: SearchSettings::default().cutoff,
+                ..lib.settings.clone()
+            },
             calibration: cal.cloned(),
-            ..Default::default()
         };
         let (paths, l, d, c, parallel) = (
             self.paths.clone(),
