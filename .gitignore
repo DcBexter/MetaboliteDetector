@@ -6,3 +6,6 @@
 **/.impeccable/config.local.json
 **/skills/impeccable/scripts/bin/
 /.scratch/
+
+# Local copies of the original MetaboliteDetector binaries (reference only, not distributed)
+/Old/

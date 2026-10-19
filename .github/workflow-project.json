@@ -1,0 +1,14 @@
+{
+  "repository": "DcBexter/MetaboliteDetector",
+  "owner": "DcBexter",
+  "number": 2,
+  "id": "PVT_kwHOACPOas4BnwJT",
+  "url": "https://github.com/users/DcBexter/projects/2",
+  "start": "ready",
+  "optionalReviewers": [
+    "coderabbitai"
+  ],
+  "awaitApps": [
+    "sonarqubecloud"
+  ]
+}
