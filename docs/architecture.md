@@ -25,13 +25,15 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
+  src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
+  src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-library search, RI calibration, quantification, MID and statistics.
+RI calibration, quantification, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -63,6 +65,8 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Ion traces (index, 500 traces) | 26 ms |
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
+| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -125,6 +129,41 @@ Conscious deviations:
   re-implemented (round to 8 significant digits).
 - **No `reorderPeaks`** (unit-mass data only, see peak detection) and **no RI** yet (issue 20).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
+
+## Library search
+
+`md_core::search` ports the old `LibrarySearch` ([algorithms.md](reverse-engineering/algorithms.md) §5).
+`PreparedLibrary::new` bins, mass-filters and scales every library spectrum once (mass² · intensity^0.6 with the
+default `LS_SCALE_FACTOR_*`), like the old pre-scaled cache. `library_hits` scores one spectrum against every
+entry: the pure score is a cosine over all peaks of both spectra, the impure score over the library peaks only
+(peaks without a partner are weighted with `LS_SCALE_FACTOR_NO_MATCH`), the spectrum score is
+`0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
+Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
+components in parallel and then assigns library compounds greedily by best overall score, each library compound
+and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
+With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
+spectrum, so no fragment pre-filter is needed (table above).
+
+The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
+open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
+above 0.7, red otherwise, like the old app) and lists the best hits of the selected component.
+
+Conscious deviations:
+
+- **No RI yet → spectrum only.** Components have no RI until the RI calibration (issue 20). When the component or
+  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
+  no hit). The old code then compares retention times / 1000 with the same sigma instead; that is not ported,
+  because times of different runs and instruments only become comparable after calibration.
+- **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
+  the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
+  which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
+  and masses below 0.5 are dropped.
+- **Hits need a score above zero.** The old search keeps pairs with score 0 and may even assign them; here they are
+  no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
+  yields the same assignments above it, because the greedy assignment takes pairs in descending score.
+- **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
+- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
+  not ported (semantics unknown, §5.9).
 
 ## Golden test
 
