@@ -9,13 +9,3 @@
 
 # Local copies of the original MetaboliteDetector binaries (reference only, not distributed)
 /Old/
-
-# Only Claude Code and Codex are used here. The kit generators always write every
-# provider; keep the other agents' copies out of the repository.
-/.agent/
-/.cursor/
-/.opencode/
-/.pi/
-/.github/skills/
-/.github/agents/
-/.github/hooks/
