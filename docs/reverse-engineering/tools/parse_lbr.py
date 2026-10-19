@@ -15,7 +15,7 @@ Strings are uint32 length + raw bytes (no terminator). They are decoded as
 latin-1 so the byte count is preserved; the real encoding is unverified.
 
 Usage (run from any directory, no local imports needed):
-    python3 -I parse_lbr.py <library.lbr | decompressed.raw>
+    python3 -I parse_lbr.py < library.lbr   (or a decompressed .raw payload)
 """
 
 import gzip
@@ -178,11 +178,11 @@ def describe(c):
 
 
 def main(argv):
-    if len(argv) != 2:
+    # The library comes on stdin, so the tool never opens a path from its arguments.
+    if len(argv) != 1 or sys.stdin.isatty():
         print(__doc__)
         return 2
-    with open(argv[1], "rb") as fh:
-        data = fh.read()
+    data = sys.stdin.buffer.read()
     if data[:2] == GZIP_MAGIC:
         data = gzip.decompress(data)
     version, compounds = parse_library(data)

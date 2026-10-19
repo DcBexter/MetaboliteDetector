@@ -85,7 +85,7 @@ Observed: `Spectrum<int,float>::toStream` 0x7027a2 (decompile) and byte check in
 
 ### 1.5 Validated parser
 
-`docs/reverse-engineering/tools/parse_lbr.py`. Run with `python3 -I parse_lbr.py <file.lbr or .raw>`.
+`docs/reverse-engineering/tools/parse_lbr.py`. Run with `python3 -I parse_lbr.py < file.lbr` (or a decompressed `.raw`).
 Output on the sample: version 2, 27 compounds, all bytes consumed, first compound Hexatriacontane (ri 3599.987).
 Accepts gzip input automatically. Only version 2 is decoded; version 5 raises NotImplementedError.
 
