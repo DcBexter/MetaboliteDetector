@@ -1,9 +1,11 @@
 //! Performance smoke test on a synthetic large run.
 //! `cargo run --release -p md-core --example perf -- [scans] [ions_per_scan]`
-//! Default: 60 min at 20 scans/s with 500 ions per scan (36 000 scans, 18 M points, 300 000 peaks).
+//! Default: 60 min at 20 scans/s with 500 ions per scan (36 000 scans, 18 M points, 300 000 peaks,
+//! 12 000 substances).
 
 use std::time::Instant;
 
+use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::{Chromatogram, decimate};
 
@@ -21,10 +23,11 @@ fn main() {
         mz: (0..scans * ions)
             .map(|k| 50.0 + (k % ions) as f32)
             .collect(),
-        // Noise plus a Gaussian peak (sigma 2 scans) every 60 scans in each ion trace.
+        // Noise plus a Gaussian peak (sigma 2 scans) every 60 scans in each ion trace; every 20th
+        // ion shares its apex, so each 60 scans hold 20 co-eluting substances of 25 ions.
         intensity: (0..scans * ions)
             .map(|k| {
-                let x = ((k / ions + 7 * (k % ions)) % 60) as f32 - 30.0;
+                let x = ((k / ions + 7 * (k % ions % 20)) % 60) as f32 - 30.0;
                 (k % 997) as f32 * 0.05 + 20_000.0 * (-x * x / 8.0).exp()
             })
             .collect(),
@@ -61,5 +64,13 @@ fn main() {
     let t = Instant::now();
     let peaks = traces.detect_peaks(&PeakSettings::default());
     println!("peaks in all traces ({}): {:?}", peaks.len(), t.elapsed());
+
+    let t = Instant::now();
+    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    println!(
+        "deconvolution ({} components): {:?}",
+        comps.len(),
+        t.elapsed()
+    );
     assert_eq!(sic.len(), scans);
 }

@@ -43,8 +43,8 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
-5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Deconvolution
-   will build an ion-major index once per run instead of rescanning spectra per ion.
+5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Peak detection
+   and deconvolution share one ion-major index per run (`IonTraces`) instead of rescanning spectra per ion.
 6. **Measure.** `examples/perf.rs` reports timings; each new algorithm adds a case, and PRs that
    touch hot paths report before/after numbers against the table below.
 7. Memory-mapped or streamed access (like the old disk scan) is added when real runs exceed RAM;
@@ -59,9 +59,11 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Decimate TIC for drawing | 0.05 ms |
 | Ion traces (index, 500 traces) | 26 ms |
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
+| Deconvolution (12 000 substances of 25 ions) | 19 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
-file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces
+file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
+with deconvolution 5–10 ms per file, 13–20 components of 15–21 ions
 (`cargo test --release -p md-core --test example_data -- --nocapture`).
 The whole file is read into memory first because `netcdf3` seeks per record (1.8 s per file on a
 plain `File`).
@@ -89,6 +91,33 @@ Conscious deviations from the old app, each to be checked against old output in 
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
+
+## Deconvolution
+
+`md_core::deconv::deconvolute` ports the old `deconvoluteChromatogram` ([algorithms.md](reverse-engineering/algorithms.md)
+§4.4–4.9): the apex intensities of all peaks go into a histogram of `AN_NUMBER_BINS` bins per scan, the
+matched filter (`AN_DECONVOLUTION_WIDTH` scans) marks regions above 5, and each region becomes a component.
+Its model peak is the sum of the sharpest clean peaks (quality ≤ 10, at most a quarter); every ion trace is
+fitted as `c0 + c1 * scan + c2 * model`, and `c2 * max(model)` is that ion's height in the spectrum.
+Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults. The app runs
+peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
+shows its deconvoluted spectrum.
+
+The old quirks are kept on purpose until the golden test (issue 17) has compared both versions: the first
+and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
+towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
+of a spectrum share one scale factor.
+
+Conscious deviations:
+
+- **No precise apex → apex scan.** Where the parabola fit was refused, the histogram uses the apex scan.
+  What the old field holds then is unknown.
+- **Collinear fits drop the peak.** The old code uses an SVD (`gsl_multifit_linear`), which also returns a
+  minimum-norm fit when model and scan are collinear; here those peaks are skipped.
+- **Filter edges are zero-padded** (old edge handling unknown, §4.11), and `roundSignificantFigures` is
+  re-implemented (round to 8 significant digits).
+- **No `reorderPeaks`** (unit-mass data only, see peak detection) and **no RI** yet (issue 20).
+- `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
 
 ## Build and test
 
