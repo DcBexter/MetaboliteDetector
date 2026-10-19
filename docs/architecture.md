@@ -151,7 +151,8 @@ come from library search (issue 19); the app does not offer the correction yet.
 Conscious deviations:
 
 - **At least two points, RI rising with RT.** The old code accepted any table and returned -1 below two
-  points; a falling table has no inverse. Such calibrations and `.calib` files are rejected with an error.
+  points; a falling table has no inverse. A slope outside 1e-9 to 1e9 RI per second would overflow on
+  extrapolation. Such calibrations and `.calib` files are rejected with an error.
 - **Above the last point** the old code dereferenced `end()` (undefined, §6.2); here the last segment
   continues, as for every other time above the range.
 - **The shift does not stack.** The old code subtracted the previous shift once more (§6.5), so only

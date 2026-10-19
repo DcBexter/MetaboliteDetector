@@ -52,8 +52,9 @@ impl Calibration {
             .unwrap_or_default()
     }
 
+    /// Also drops a running alkane search, so its late result cannot replace this calibration.
     fn set(&mut self, cal: RiCalibration, source: String) {
-        (self.cal, self.source, self.error) = (Some(cal), source, None);
+        (self.cal, self.source, self.error, self.job) = (Some(cal), source, None, None);
     }
 
     pub fn window(&mut self, ctx: &egui::Context, run: Option<&Run>) {
@@ -124,7 +125,7 @@ impl Calibration {
                     self.error = Some(format!("{}: {e}", path.display()));
                 }
                 if ui.button("Clear").clicked() {
-                    self.cal = None;
+                    (self.cal, self.job) = (None, None);
                 }
             }
         });

@@ -54,6 +54,17 @@ impl RiCalibration {
                 w[1].1, w[1].0, w[0].1, w[0].0
             )));
         }
+        // Finite numbers can still give slopes that overflow on extrapolation (huge RI steps,
+        // near-equal times). Real series have about 1 to 1000 RI units per second.
+        if let Some(w) = points.windows(2).find(|w| {
+            let slope = (w[1].1 - w[0].1) / (w[1].0 - w[0].0);
+            !(1e-9..=1e9).contains(&slope)
+        }) {
+            return Err(CalibError::Invalid(format!(
+                "slope between {} s and {} s is outside 1e-9 to 1e9 RI per second",
+                w[0].0, w[1].0
+            )));
+        }
         Ok(Self {
             points,
             shift_s: 0.0,
@@ -258,6 +269,9 @@ mod tests {
         assert!(RiCalibration::new([(1.0, 1000.0), (2.0, 1000.0)]).is_err());
         assert!(RiCalibration::new([(1.0, 1000.0), (2.0, 900.0)]).is_err());
         assert!(RiCalibration::new([(1.0, 1000.0), (f64::NAN, 1100.0)]).is_err());
+        // Finite points whose slope overflows.
+        assert!(RiCalibration::new([(0.0, -1e308), (1.0, 1e308)]).is_err());
+        assert!(RiCalibration::new([(0.0, 1000.0), (1e-300, 1100.0)]).is_err());
         // Order of input does not matter.
         let c = RiCalibration::new([(400.0, 1200.0), (100.0, 1000.0), (200.0, 1100.0)]).unwrap();
         assert_eq!(c, alkanes());
