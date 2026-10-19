@@ -1,0 +1,308 @@
+//! Batch quantification window: scans many runs on a worker thread against the open library and
+//! shows the substance × run table (`md_core::batch`). Filters and groups apply without a rescan.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
+
+use eframe::egui;
+use egui_extras::{Column, TableBuilder};
+use md_core::batch::{RunResult, ScanSettings, Table, TableSettings, scan_runs, table};
+use md_core::ri::RiCalibration;
+
+use crate::identify::Library;
+use crate::spawn;
+
+type Scanned = Option<(Vec<RunResult>, Vec<String>)>;
+
+struct Job {
+    total: usize,
+    done: Arc<AtomicUsize>,
+    cancel: Arc<AtomicBool>,
+    started: Instant,
+    lib: Arc<Library>,
+    rx: mpsc::Receiver<Scanned>,
+}
+
+struct Scan {
+    lib: Arc<Library>,
+    runs: Vec<RunResult>,
+    errors: Vec<String>,
+    took: Duration,
+}
+
+pub struct Batch {
+    pub open: bool,
+    paths: Vec<PathBuf>,
+    /// Runs in memory at once; each run is analysed in parallel anyway.
+    parallel: usize,
+    settings: TableSettings,
+    job: Option<Job>,
+    scan: Option<Scan>,
+    /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
+    table: Option<(TableSettings, Result<Table, String>)>,
+    note: String,
+}
+
+impl Default for Batch {
+    fn default() -> Self {
+        Self {
+            open: false,
+            paths: Vec::new(),
+            // 15 example runs: 470 ms with 1, 115 ms with 4 (92 MiB), 70 ms with 15 (210 MiB).
+            parallel: 4,
+            settings: TableSettings::default(),
+            job: None,
+            scan: None,
+            table: None,
+            note: String::new(),
+        }
+    }
+}
+
+impl Batch {
+    pub fn window(
+        &mut self,
+        ctx: &egui::Context,
+        lib: Option<&Arc<Library>>,
+        cal: Option<&RiCalibration>,
+    ) {
+        self.poll(ctx);
+        let mut open = self.open;
+        egui::Window::new("Batch quantification")
+            .open(&mut open)
+            .default_size([900.0, 600.0])
+            .show(ctx, |ui| self.contents(ui, lib, cal));
+        self.open = open;
+    }
+
+    fn poll(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.job else { return };
+        match job.rx.try_recv() {
+            Ok(Some((runs, errors))) => {
+                self.scan = Some(Scan {
+                    lib: job.lib.clone(),
+                    runs,
+                    errors,
+                    took: job.started.elapsed(),
+                });
+                (self.table, self.note) = (None, String::new());
+            }
+            Ok(None) => self.note = "Cancelled.".into(),
+            Err(mpsc::TryRecvError::Empty) => {
+                // Keeps the progress bar moving.
+                ctx.request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => self.note = "Batch crashed.".into(),
+        }
+        self.job = None;
+    }
+
+    fn start(&mut self, ctx: &egui::Context, lib: &Arc<Library>, cal: Option<&RiCalibration>) {
+        let (done, cancel) = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        // The library was prepared with the app's search settings, which differ only in the cutoff.
+        let s = ScanSettings {
+            calibration: cal.cloned(),
+            ..Default::default()
+        };
+        let (paths, l, d, c, parallel) = (
+            self.paths.clone(),
+            lib.clone(),
+            done.clone(),
+            cancel.clone(),
+            self.parallel,
+        );
+        let rx = spawn(ctx, move || {
+            scan_runs(&paths, &l.prepared, &s, parallel, &d, &c)
+        });
+        self.job = Some(Job {
+            total: self.paths.len(),
+            done,
+            cancel,
+            started: Instant::now(),
+            lib: lib.clone(),
+            rx,
+        });
+    }
+
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        lib: Option<&Arc<Library>>,
+        cal: Option<&RiCalibration>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui.button("Add runs…").clicked()
+                && let Some(p) = rfd::FileDialog::new()
+                    .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                    .pick_files()
+            {
+                self.paths.extend(p);
+                self.paths.sort();
+                self.paths.dedup();
+            }
+            if ui.button("Clear").clicked() {
+                self.paths.clear();
+            }
+            ui.label(format!("{} runs", self.paths.len()));
+        });
+        let s = &mut self.settings;
+        egui::Grid::new("batch settings").show(ui, |ui| {
+            ui.label("Runs in memory at once");
+            ui.add(egui::DragValue::new(&mut self.parallel).range(1..=64));
+            ui.end_row();
+            ui.label("Quant ions per substance");
+            ui.add(egui::DragValue::new(&mut s.quant.ion_number).range(1..=20));
+            ui.end_row();
+            ui.label("Min. distance of quant ions");
+            ui.add(
+                egui::DragValue::new(&mut s.quant.min_dist)
+                    .range(0.0..=100.0)
+                    .speed(0.1),
+            );
+            ui.end_row();
+            ui.label("Quant ion quality cut-off");
+            ui.add(
+                egui::DragValue::new(&mut s.quant.quality_cutoff)
+                    .range(0.0..=100.0)
+                    .speed(0.1),
+            );
+            ui.end_row();
+            ui.label("Replicate groups (regex on file name)");
+            ui.add(
+                egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
+            )
+            .on_hover_text("Group = first capture group, else the whole match. Empty: one group.");
+            ui.end_row();
+            ui.label("Min. reproducibility in a group");
+            ui.add(egui::Slider::new(&mut s.min_reproducibility, 0.0..=1.0));
+            ui.end_row();
+            ui.label("Min. quant ions found");
+            ui.add(egui::DragValue::new(&mut s.min_ions).range(1..=20));
+            ui.end_row();
+        });
+        ui.horizontal(|ui| match &self.job {
+            Some(job) => {
+                let d = job.done.load(Relaxed);
+                ui.add(
+                    egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
+                        .text(format!("{d} / {} runs", job.total))
+                        .desired_width(300.0),
+                );
+                if ui.button("Cancel").clicked() {
+                    job.cancel.store(true, Relaxed);
+                }
+            }
+            None => {
+                let ready = lib.filter(|_| !self.paths.is_empty());
+                if ui
+                    .add_enabled(ready.is_some(), egui::Button::new("Start"))
+                    .clicked()
+                    && let Some(l) = ready
+                {
+                    self.start(ui.ctx(), l, cal);
+                }
+                match lib {
+                    Some(l) => ui.label(format!(
+                        "Library {}, {}",
+                        l.name,
+                        if cal.is_some() {
+                            "RI calibrated"
+                        } else {
+                            "no RI calibration"
+                        }
+                    )),
+                    None => ui.label("Open a library first (File → Open library)."),
+                };
+                ui.label(&self.note);
+            }
+        });
+        let Some(scan) = &self.scan else { return };
+        if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
+            let t =
+                table(&scan.runs, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
+            self.table = Some((self.settings.clone(), t));
+        }
+        ui.separator();
+        ui.label(format!(
+            "{} runs scanned in {:.2?} against {}",
+            scan.runs.len(),
+            scan.took,
+            scan.lib.name
+        ));
+        for e in &scan.errors {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+        match self.table.as_ref().map(|t| &t.1) {
+            Some(Ok(t)) => table_view(ui, t),
+            Some(Err(e)) => {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Replicate pattern: {e}"),
+                );
+            }
+            None => {}
+        }
+    }
+}
+
+/// Rows are virtualised, so only the visible ones are laid out each frame.
+/// shortcut: all columns are laid out per visible row; virtualise columns too if studies with
+/// thousands of runs feel slow.
+fn table_view(ui: &mut egui::Ui, t: &Table) {
+    ui.label(format!(
+        "{} substances × {} runs; values are summed quant ion integrals",
+        t.rows.len(),
+        t.runs.len()
+    ));
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        // Rows have a fixed height, so cells must not wrap.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        TableBuilder::new(ui)
+            .id_salt("batch table")
+            .striped(true)
+            .column(Column::auto().at_least(160.0))
+            .columns(Column::auto(), 2)
+            .columns(Column::auto().at_least(70.0), t.runs.len())
+            .header(36.0, |mut h| {
+                for title in ["Substance", "RT (min)", "Quant ions"] {
+                    h.col(|ui| {
+                        ui.strong(title);
+                    });
+                }
+                for (run, group) in t.runs.iter().zip(&t.groups) {
+                    h.col(|ui| {
+                        ui.vertical(|ui| {
+                            ui.strong(run);
+                            ui.label(group);
+                        });
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(18.0, t.rows.len(), |mut row| {
+                    let r = &t.rows[row.index()];
+                    let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
+                    row.col(|ui| {
+                        ui.label(&r.name);
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{:.2}", r.rt_s / 60.0));
+                    });
+                    row.col(|ui| {
+                        ui.label(ions.join(" "));
+                    });
+                    for v in &r.values {
+                        row.col(|ui| {
+                            ui.label(v.map_or("–".into(), |v| format!("{v:.0}")));
+                        });
+                    }
+                });
+            });
+    });
+}

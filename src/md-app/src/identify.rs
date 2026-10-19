@@ -12,8 +12,8 @@ use crate::{App, Run, spawn};
 
 pub struct Library {
     pub name: String,
-    compounds: Vec<LibraryCompound>,
-    prepared: PreparedLibrary,
+    pub compounds: Vec<LibraryCompound>,
+    pub prepared: PreparedLibrary,
 }
 
 /// Identification of one run and the library it was computed with.
