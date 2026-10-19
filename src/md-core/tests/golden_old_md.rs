@@ -16,10 +16,10 @@ const SN_TOLERANCE: f64 = 1e-5;
 const HEIGHT_TOLERANCE: u32 = 1;
 /// Integrals: the reference prints 7 significant digits.
 const INTEGRAL_TOLERANCE: f64 = 1e-5;
-/// Known deconvolution differences, issue #46: lower these when it is fixed.
-const KNOWN_MISSING_COMPONENTS: usize = 3;
-const KNOWN_OTHER_IONS: usize = 12;
-const KNOWN_OTHER_VALUES: usize = 6;
+/// Known deconvolution differences: precise-apex ties the old GSL fit rounds up (docs/architecture.md).
+const KNOWN_MISSING_COMPONENTS: usize = 1;
+const KNOWN_OTHER_IONS: usize = 3;
+const KNOWN_OTHER_VALUES: usize = 1;
 
 #[derive(Default)]
 struct RefRun {

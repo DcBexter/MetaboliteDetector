@@ -101,6 +101,11 @@ peaks of the example runs:
   detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
+- **Precise apex ties round down.** The old app fits the parabola with `gsl_multifit_linear` in absolute
+  bin coordinates; at an exact half-step tie its rounding error decides the direction. Here the vertex is
+  exact and ties round down, which the old app does in 217 of 267 ties on the example runs. On a flat top
+  (three equal values) the old fit returns an arbitrary vertex near the apex; here there is no precise apex.
+  This only moves peaks between deconvolution histogram bins (golden test).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -116,7 +121,7 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose; with them, 225 of 246 old components match exactly (golden test below): the first
+The old quirks are kept on purpose; with them, 241 of 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
@@ -228,18 +233,16 @@ Tolerances and their reasons:
 |---|---|---|
 | Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
 | Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
-| Component ions and apex scan | exact for 231 of 246 | 15 known differences, issue 46 |
+| Component ions and apex scan | exact for 242 of 246 | 4 known differences, see below |
 | Ion height | ±1 | the old code rounds a few modelled heights the other way |
 | Ion integral | 1e-5 relative | the reference prints 7 significant digits |
 
-Remaining differences, all in deconvolution (issue 46):
+Remaining differences, all in deconvolution: 1 old component is missing, 3 differ by one or more ions,
+and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
+deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
+A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
 
-- 3 old components are missing.
-- 12 components differ by 1–4 ions.
-- 6 components have the same ions, but all heights and integrals differ by about 0.1–5 %. A different
-  model peak is the likely cause.
-
-The test fails when one of these counts grows. The counts are lowered as issue 46 fixes them.
+The test fails when one of these counts grows.
 
 The golden test found three porting errors in peak detection, now fixed:
 

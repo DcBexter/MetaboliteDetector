@@ -456,7 +456,9 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
 }
 
 /// §3.6: vertex of the parabola through apex − 1, apex, apex + 1 of the peak values, rounded to
-/// `1 / bins` scan, relative to the peak start; `None` at the peak edge or for a shift of ≥ 1 scan.
+/// `1 / bins` scan, relative to the peak start; `None` at the peak edge, on a flat top or for a shift of
+/// ≥ 1 scan. Exact half-step ties round down: the old SVD fit in absolute bins lands just below the tie in
+/// 217 of 267 ties of the example runs (docs/architecture.md, "Golden test").
 fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
@@ -464,7 +466,7 @@ fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
     let (a, b, c) = (v[apex - 1] as f64, v[apex] as f64, v[apex + 1] as f64);
     let shift = 0.5 * (a - c) / (a - 2.0 * b + c);
     let bins = bins as f64;
-    let t = ((apex as f64 + shift) * bins + 0.5).floor() / bins;
+    let t = ((apex as f64 + shift) * bins - 0.5).ceil() / bins;
     ((t - apex as f64).abs() < 1.0).then_some(t as f32)
 }
 
@@ -507,6 +509,14 @@ fn sharpness(w: &[f32], apex: usize, nu: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precise_apex_rounds_ties_down() {
+        // Vertex at 1.25 scans = 12.5 bins: the old fit mostly lands just below the tie.
+        assert_eq!(precise_apex(&[1.0, 4.0, 3.0], 1, 10), Some(1.2));
+        assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 1, 10), Some(0.7));
+        assert_eq!(precise_apex(&[5.0, 5.0, 5.0], 1, 10), None);
+    }
 
     /// Baseline of 1000 with deterministic noise of about ±20 (sd ≈ 12).
     fn noisy(n: usize) -> Vec<f32> {
