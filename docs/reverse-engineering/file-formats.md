@@ -88,6 +88,9 @@ Observed: `Spectrum<int,float>::toStream` 0x7027a2 (decompile) and byte check in
 `docs/reverse-engineering/tools/parse_lbr.py`. Run with `python3 -I parse_lbr.py < file.lbr` (or a decompressed `.raw`).
 Output on the sample: version 2, 27 compounds, all bytes consumed, first compound Hexatriacontane (ri 3599.987).
 Accepts gzip input automatically. Only version 2 is decoded; version 5 raises NotImplementedError.
+The Rust reader `md_core::library::parse_lbr` returns the same values for every field of all 27 sample
+compounds (`tools/dump_lbr.py` against `md-core/tests/lbr_sample.rs`, 2026-10-19). It rejects version 5
+and compounds with peak records as not supported.
 
 ### Unknowns (section 1)
 - Meaning of the 40-byte block list (1.3) and its relation to the v5 layout.
@@ -481,6 +484,11 @@ and `MST N` (purpose Unknown). The `Initial import from` string suggests a progr
 
 Timing fields (`rt`, `ri`): the importer stores them as `d_rt` and `d_ri`. Which key holds them is not
 recovered (Gap).
+
+Rewrite choices (`md_core::library`, not verified against the old app): `RI:` is the spectrum ri, `RT:` is
+minutes (AMDIS convention) and is stored as ms, `RESOLUTION:` is the spectrum bin width, `NUM PEAKS:` must
+equal the number of pairs. Imported compounds get `comb_spec` = spectrum, `ion_freq` 1 per ion and
+`spec_count` 1 like the sample library. Export writes the same keys, then features, then 5 pairs per line.
 
 ### 6.2 MSL export: `DialogExportLibrary` (not decompiled)
 
