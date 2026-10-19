@@ -58,12 +58,14 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | TIC | 2.0 ms |
 | SIC (one m/z) | 1.0 ms |
 | Decimate TIC for drawing | 0.05 ms |
+| Overlay frame: decimate TIC + SIC of 15 runs | 0.8 ms |
 | Ion traces (index, 500 traces) | 26 ms |
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces
 (`cargo test --release -p md-core --test example_data -- --nocapture`).
+The app opens all 15 as an overlay in 0.06–0.21 s (one loader thread per file; status bar shows the time).
 The whole file is read into memory first because `netcdf3` seeks per record (1.8 s per file on a
 plain `File`).
 
