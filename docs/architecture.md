@@ -165,8 +165,17 @@ In `7235eg06` TargetSearch took a peak at 321.1 s as the middle marker, where m/
 the marker peak at 311.1 s, as in all other runs, reaches 221 839. Filter width 40 scans, threshold 100.
 
 RT shift correction (§6.5): `pick_reference` chooses the substance with the best library score for the
-reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI. The scores
-come from `md_core::search`; the app does not offer the correction yet (issue 45).
+reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI.
+`md_core::search::shift_to_reference` combines them with the library search: window `3 · LS_RI_DIFF`, score
+= overall score of the reference among the component's hits. Because that score contains the RI score, a run
+shifted by more than about half a sigma (10 RI) no longer reaches the default cutoff 0.8; the old code
+behaves the same. In the app the calibration window offers a reference substance (library compounds with RI)
+and the cutoff once a calibration and a library are loaded. Each run's identification job then shifts the
+calibration onto the reference, searches with the shifted RIs and keeps the shifted calibration for the
+status bar; the window lists the shift per run, or that the reference was not found (then the run uses the
+unshifted calibration). Reference and cutoff are part of the `run.ident` key. Tests: a synthetic run 10 s
+late (`search.rs`) and the example runs made 4 s late, where Glycine 3TMS lands on its `lib_aa` RI again and
+the shift grows by exactly 4 s (`tests/example_data.rs`).
 
 Conscious deviations:
 
