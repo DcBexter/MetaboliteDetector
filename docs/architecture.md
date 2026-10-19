@@ -148,12 +148,13 @@ above 0.7, red otherwise, like the old app) and lists the best hits of the selec
 Conscious deviations:
 
 - **No RI yet → spectrum only.** Components have no RI until the RI calibration (issue 20). When the component or
-  the library entry has no RI, the overall score is the spectrum score alone. The old code then compares
+  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
+  no hit). The old code then compares
   retention times / 1000 with the same sigma instead; that is not ported, because times of different runs and
   instruments only become comparable after calibration.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
-  which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Non-positive intensities
+  which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
   and masses below 0.5 are dropped.
 - **Hits need a score above zero.** The old search keeps pairs with score 0 and may even assign them; here they are
   no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff

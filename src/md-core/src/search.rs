@@ -91,7 +91,7 @@ impl PreparedLibrary {
                     .masses
                     .iter()
                     .zip(&c.spectrum.values)
-                    .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v > 0)
+                    .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v >= 0)
                     .map(|(m, v)| (m.round() as u32, *v as f64)),
             );
             peaks.sort_unstable_by_key(|p| p.0);
@@ -204,6 +204,8 @@ pub fn library_hits(
                 (true, Some(r)) => (spec_sim * spec_sim * r).cbrt(),
                 (true, None) => spec_sim.abs(),
                 (false, Some(r)) => r,
+                // Only RI asked for but none known: nothing to score (old: RT fallback, not ported).
+                (false, None) if s.use_ri => 0.0,
                 (false, None) => 1.0,
             };
             (overall > 0.0 && overall >= s.cutoff).then_some(LibraryHit {
@@ -412,6 +414,15 @@ mod tests {
         assert_eq!(h.len(), 3);
         assert!(h.iter().all(|h| (h.overall - 1.0).abs() < 1e-12));
         assert_eq!(h[1].ri_sim, Some(0.0));
+        // RI only: entries without RI are no hits.
+        let s = SearchSettings {
+            use_ri: true,
+            use_spec: false,
+            ..s
+        };
+        let h = library_hits(&as_comp(&ALA, 1), Some(1000.0), &lib, &s);
+        assert_eq!(h.iter().map(|h| h.compound).collect::<Vec<_>>(), [0]);
+        assert!(library_hits(&as_comp(&ALA, 1), None, &lib, &s).is_empty());
     }
 
     #[test]
@@ -425,6 +436,7 @@ mod tests {
             (190.0, 50),
             (0.2, 5),
             (200.0, -3),
+            (300.0, 0),
         ];
         let lib = PreparedLibrary::new(&[entry("Ala", -1.0, &split)], &s);
         assert!((library_hits(&as_comp(&ALA, 1), None, &lib, &s)[0].overall - 1.0).abs() < 1e-12);
