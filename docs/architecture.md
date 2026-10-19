@@ -25,13 +25,15 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
+  src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
+  src/calibration.rs    RI calibration window (alkane search, .calib load/save)
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-library search, RI calibration, quantification, MID and statistics.
+library search, quantification, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -120,8 +122,44 @@ Conscious deviations:
   minimum-norm fit when model and scan are collinear; here those peaks are skipped.
 - **Filter edges are zero-padded** (old edge handling unknown, §4.11), and `roundSignificantFigures` is
   re-implemented (round to 8 significant digits).
-- **No `reorderPeaks`** (unit-mass data only, see peak detection) and **no RI** yet (issue 20).
+- **No `reorderPeaks`** (unit-mass data only, see peak detection).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
+
+## Retention index
+
+`md_core::ri::RiCalibration` ports the old `RICalculator` ([algorithms.md](reverse-engineering/algorithms.md) §6):
+RT → RI is piecewise linear through the calibration points, and outside them the first or last segment
+continues (§6.2). `rt` is the inverse (§6.3), `component_ris` gives the RI of each component at its apex
+scan (§6.4). Times are seconds like `Chromatogram`; the `.calib` file holds milliseconds.
+
+Calibration from a run: `marker_peaks` runs the matched detector (§3.3) on the marker ion trace (± 0.5)
+and takes the highest raw scan of each peak. `series_points` gives the n highest peaks, in time order, the
+RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` takes the highest peak in a known
+time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
+(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs, and the
+status bar shows the RI of the scan or selected component.
+
+Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
+the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
+In `7235eg06` TargetSearch took a peak at 321.1 s as the middle marker, where m/z 87 reaches 36 512;
+the marker peak at 311.1 s, as in all other runs, reaches 221 839. Filter width 40 scans, threshold 100.
+
+RT shift correction (§6.5): `pick_reference` chooses the substance with the best library score for the
+reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI. The scores
+come from library search (issue 19); the app does not offer the correction yet.
+
+Conscious deviations:
+
+- **At least two points, RI rising with RT.** The old code accepted any table and returned -1 below two
+  points; a falling table has no inverse. Such calibrations and `.calib` files are rejected with an error.
+- **Above the last point** the old code dereferenced `end()` (undefined, §6.2); here the last segment
+  continues, as for every other time above the range.
+- **The shift does not stack.** The old code subtracted the previous shift once more (§6.5), so only
+  the first correction was exact.
+- **`.calib`** is read as `<rt in ms> <RI>` per line (any whitespace, blank lines skipped; the ms unit
+  is inferred, file-formats.md §4.1) and written with full precision instead of 6 significant digits.
+  Reading is a trust boundary: at most 1 MiB, UTF-8, two finite numbers per line, errors name the line.
+- **Marker apex** is the highest raw scan of the matched-filter peak; the old dialog's choice is unknown (§6.7).
 
 ## Libraries
 

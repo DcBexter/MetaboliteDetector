@@ -10,6 +10,8 @@ use md_core::deconv::{Component, DeconvSettings, deconvolute};
 use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::{Chromatogram, decimate};
 
+mod calibration;
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -48,6 +50,7 @@ struct App {
     trace: Trace,
     mz: f32,
     tolerance: f32,
+    ri: calibration::Calibration,
 }
 
 impl Default for App {
@@ -63,6 +66,7 @@ impl Default for App {
             // TMS fragment; many runs start scanning above m/z 73.
             mz: 147.0,
             tolerance: 0.5,
+            ri: calibration::Calibration::default(),
         }
     }
 }
@@ -261,8 +265,15 @@ impl eframe::App for App {
                         (self.runs, self.active) = (Vec::new(), 0);
                     }
                 });
+                ui.menu_button("Analysis", |ui| {
+                    if ui.button("RI calibration…").clicked() {
+                        self.ri.open = true;
+                    }
+                });
             });
         });
+
+        self.ri.window(ui.ctx(), self.runs.get(self.active));
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {
@@ -283,11 +294,12 @@ impl eframe::App for App {
                     None => format!("{} components (click a dot)", r.components.len()),
                 };
                 ui.label(format!(
-                    "{} — {} scans — scan {} at {:.3} min (←/→ to step) — {shown} — {}",
+                    "{} — {} scans — scan {} at {:.3} min{} (←/→ to step) — {shown} — {}",
                     r.path.display(),
                     r.data.scan_count(),
                     r.scan + 1,
                     r.minutes[r.scan],
+                    self.ri.ri_note(r, r.scan),
                     self.load_note
                 ));
             } else {
