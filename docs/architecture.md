@@ -325,8 +325,8 @@ panics. Caches with a TOF calibration polynomial are rejected (the old app appli
 
 `andi::write` exports a `Chromatogram` as ANDI-MS NetCDF (64-bit-offset NetCDF-3): the raw-data
 variables `scan_acquisition_time`, `scan_index`, `point_count`, `mass_values`, `intensity_values` and
-`total_intensity` (the sum of each spectrum). The app's File menu opens `.bin` files and exports the
-active run.
+`total_intensity` (the sum of each spectrum). `md_core::read_run` picks the reader by extension, so the
+app's File menu and the batch view open `.bin` files; File → Export as NetCDF writes the active run.
 
 Proof: `docs/reverse-engineering/tools/diskscan/make-cache.sh` converts the 15 example runs with the
 old binary's own `CdfImporter` (`LD_PRELOAD` driver, like the golden test). The test

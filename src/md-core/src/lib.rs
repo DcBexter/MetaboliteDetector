@@ -13,6 +13,17 @@ pub mod peaks;
 pub mod ri;
 pub mod search;
 
+/// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), else ANDI-MS NetCDF.
+pub fn read_run(path: &std::path::Path) -> Result<Chromatogram, String> {
+    match path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
+    {
+        true => diskscan::read(path).map_err(|e| e.to_string()),
+        false => andi::read(path).map_err(|e| e.to_string()),
+    }
+}
+
 /// A GC/MS run: one mass spectrum per scan, stored as flat arrays (ANDI-MS layout).
 ///
 /// Values are `f32` like the original (`GCMSDiskScan<int, float>`): half the memory of `f64`
