@@ -1,0 +1,45 @@
+name: CI
+on:
+  # Runs on main keep the shared cache warm for every PR.
+  push:
+    branches: [main]
+    paths: &rust
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    # Draft pushes run nothing; ready_for_review starts the run for the head that counts.
+    # converted_to_draft starts a skipped run that cancels a running one through the concurrency group.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths: *rust
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  check:
+    name: Rust (${{ matrix.os }})
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Caches ~/.cargo and target. Only main saves, so PR caches cannot fill the 10 GB repo limit.
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --all --check
+        if: runner.os == 'Linux'
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Example data is not fetched; its tests skip themselves.
+      - run: cargo test --workspace
