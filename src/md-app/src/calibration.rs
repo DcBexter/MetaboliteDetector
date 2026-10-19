@@ -1,10 +1,12 @@
-//! RI calibration window: alkanes found in one run, or a `.calib` file; applies to every open run.
+//! RI calibration window: alkanes found in one run, or a `.calib` file; applies to every open run,
+//! optionally shifted per run onto a reference substance from the library (RT shift correction).
 
 use std::sync::{Arc, mpsc};
 
 use eframe::egui;
 use md_core::ri::{RiCalibration, marker_peaks, series_points};
 
+use crate::identify::Library;
 use crate::{Run, spawn};
 
 pub struct Calibration {
@@ -21,6 +23,12 @@ pub struct Calibration {
     /// the markers of 20 Hz example runs).
     density: usize,
     threshold: i32,
+    /// Library compound (by name) whose position shifts the calibration per run, and the minimum
+    /// overall score it must reach there (old spin box; default `LS_CUTOFF`).
+    pub reference: Option<String>,
+    pub ref_cutoff: f64,
+    /// Cutoff being edited; applied when the drag ends, so dragging does not search on every frame.
+    cutoff_edit: f64,
     /// Running alkane search and the source it will set.
     job: Option<(String, mpsc::Receiver<Result<RiCalibration, String>>)>,
     error: Option<String>,
@@ -38,6 +46,9 @@ impl Default for Calibration {
             last: 36,
             density: 40,
             threshold: 100,
+            reference: None,
+            ref_cutoff: 0.8,
+            cutoff_edit: 0.8,
             job: None,
             error: None,
         }
@@ -45,10 +56,19 @@ impl Default for Calibration {
 }
 
 impl Calibration {
+    /// The run's calibration: shifted onto the reference when it was found there, else the global one.
+    /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
+    fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
+        let ptr = |c: &Option<Arc<RiCalibration>>| c.as_ref().map(Arc::as_ptr);
+        (run.ident.as_ref())
+            .filter(|i| run.ident_job.is_none() && ptr(&i.0.1) == ptr(&self.cal))
+            .and_then(|i| i.2.as_ref())
+            .or(self.cal.as_deref())
+    }
+
     /// ", RI …" for the scan, or nothing without a calibration.
     pub fn ri_note(&self, run: &Run, scan: usize) -> String {
-        self.cal
-            .as_ref()
+        self.for_run(run)
             .map(|c| format!(", RI {:.1}", c.ri(run.data.scan_times_s[scan])))
             .unwrap_or_default()
     }
@@ -58,7 +78,13 @@ impl Calibration {
         (self.cal, self.source, self.error, self.job) = (Some(Arc::new(cal)), source, None, None);
     }
 
-    pub fn window(&mut self, ctx: &egui::Context, run: Option<&Run>) {
+    pub fn window(
+        &mut self,
+        ctx: &egui::Context,
+        runs: &[Run],
+        active: usize,
+        lib: Option<&Library>,
+    ) {
         if let Some((source, rx)) = &self.job
             && let Ok(result) = rx.try_recv()
         {
@@ -71,7 +97,10 @@ impl Calibration {
         let mut open = self.open;
         egui::Window::new("RI calibration")
             .open(&mut open)
-            .show(ctx, |ui| self.contents(ui, run));
+            .show(ctx, |ui| {
+                self.contents(ui, runs.get(active));
+                self.shift_contents(ui, runs, lib);
+            });
         self.open = open;
     }
 
@@ -160,6 +189,61 @@ impl Calibration {
                         }
                     });
             });
+    }
+}
+
+impl Calibration {
+    /// RT shift correction (§6.5): reference choice and the shift found in each run.
+    fn shift_contents(&mut self, ui: &mut egui::Ui, runs: &[Run], lib: Option<&Library>) {
+        if self.cal.is_none() {
+            return;
+        }
+        ui.separator();
+        let Some(lib) = lib else {
+            ui.label("Open a library to correct RT shifts with a reference substance.");
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label("Reference substance");
+            let shown = self.reference.as_deref().unwrap_or("None");
+            egui::ComboBox::from_id_salt("reference")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.reference, None, "None");
+                    // Only compounds with a library RI can anchor the shift.
+                    for c in lib.compounds.iter().filter(|c| c.spectrum.ri >= 0.0) {
+                        let label = format!("{} (RI {:.1})", c.name, c.spectrum.ri);
+                        ui.selectable_value(&mut self.reference, Some(c.name.clone()), label);
+                    }
+                });
+            ui.label("Cutoff");
+            let edit = ui.add(
+                egui::DragValue::new(&mut self.cutoff_edit)
+                    .range(0.0..=1.0)
+                    .speed(0.01),
+            );
+            if !edit.dragged() {
+                self.ref_cutoff = self.cutoff_edit;
+            }
+        });
+        if self.reference.is_none() {
+            return;
+        }
+        egui::Grid::new("shifts").striped(true).show(ui, |ui| {
+            ui.strong("Run");
+            ui.strong("RT shift (s)");
+            ui.end_row();
+            for run in runs {
+                ui.label(&run.name);
+                let shift = match (&run.ident, &run.ident_job) {
+                    (_, Some(_)) | (None, None) => "searching…".into(),
+                    (Some((_, _, Some(c))), None) => format!("{:+.2}", c.shift_s),
+                    (Some(_), None) => "reference not found, unshifted".into(),
+                };
+                ui.label(shift);
+                ui.end_row();
+            }
+        });
     }
 }
 

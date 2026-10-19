@@ -6,6 +6,7 @@ use rayon::prelude::*;
 
 use crate::deconv::Component;
 use crate::library::LibraryCompound;
+use crate::ri::{RiCalibration, pick_reference};
 
 /// The old `LS_*` settings; defaults are the old static values (file-formats.md §5.1).
 #[derive(Debug, Clone, PartialEq)]
@@ -270,6 +271,30 @@ pub fn map_compounds_to_library(
     Identification { hits, assigned }
 }
 
+/// RT shift correction (§6.5) for one run: finds library compound `reference` among `comps` within
+/// `3 * ri_diff` of its library RI, with an overall score of at least `cutoff`, and returns `cal` shifted
+/// so that this component's apex gets the library RI. `None` when the reference has no RI or is not found.
+pub fn shift_to_reference(
+    cal: &RiCalibration,
+    scan_times_s: &[f64],
+    comps: &[Component],
+    lib: &PreparedLibrary,
+    reference: usize,
+    cutoff: f64,
+    s: &SearchSettings,
+) -> Option<RiCalibration> {
+    let reference_ri = lib.ris[reference]?;
+    let ris = cal.component_ris(scan_times_s, comps);
+    let score = |i: usize| {
+        library_hits(&comps[i].spectrum, Some(ris[i]), lib, s)
+            .iter()
+            .find(|h| h.compound == reference)
+            .map_or(0.0, |h| h.overall)
+    };
+    let i = pick_reference(&ris, reference_ri, 3.0 * s.ri_diff, cutoff, score)?;
+    Some(cal.shifted_to(scan_times_s[comps[i].apex_scan as usize], reference_ri))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +493,49 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, Some(0), None]
         );
+    }
+
+    #[test]
+    fn shift_moves_reference_onto_its_library_ri() {
+        let s = all(SearchSettings::default());
+        let lib = PreparedLibrary::new(
+            &[entry("Ala", 1100.0, &ALA), entry("Gly", 1200.0, &GLY)],
+            &s,
+        );
+        let cal = RiCalibration::new([(100.0, 1000.0), (300.0, 1300.0)]).unwrap();
+        // Scan i at i seconds; the run is 10 s late, Gly elutes at 243 s instead of 233.3 s.
+        let times: Vec<f64> = (0..400).map(f64::from).collect();
+        let at = |scan, peaks: &[(f32, i32)]| Component {
+            apex_scan: scan,
+            ..component(&as_comp(peaks, 1))
+        };
+        let comps = [at(187, &ALA), at(243, &GLY)];
+        let shifted = shift_to_reference(&cal, &times, &comps, &lib, 1, 0.8, &s).unwrap();
+        assert!((shifted.ri(243.0) - 1200.0).abs() < 1e-9);
+        assert!((shifted.shift_s - (243.0 - cal.rt(1200.0))).abs() < 1e-9);
+        // Another spectrum at that place, a cutoff above the score or a reference outside the window: no shift.
+        assert_eq!(
+            shift_to_reference(&cal, &times, &comps[..1], &lib, 1, 0.8, &s),
+            None
+        );
+        let far = [at(330, &GLY)];
+        assert_eq!(
+            shift_to_reference(&cal, &times, &far, &lib, 1, 0.8, &s),
+            None
+        );
+        let weak = [at(243, &ALA)];
+        assert_eq!(
+            shift_to_reference(&cal, &times, &weak, &lib, 1, 0.8, &s),
+            None
+        );
+        // Gly at 243 s scores (1 · 0.755)^(1/3) = 0.91.
+        assert_eq!(
+            shift_to_reference(&cal, &times, &comps, &lib, 1, 0.95, &s),
+            None
+        );
+        // Searched with the shifted RIs, Gly matches its library RI exactly.
+        let ris = shifted.component_ris(&times, &comps);
+        let id = map_compounds_to_library(&comps, Some(&ris), &lib, &s);
+        assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
     }
 }

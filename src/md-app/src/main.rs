@@ -10,6 +10,7 @@ use md_core::deconv::{Component, DeconvSettings, deconvolute};
 use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::{Chromatogram, decimate};
 
+mod batch;
 mod calibration;
 mod identify;
 mod isotopes;
@@ -60,6 +61,7 @@ struct App {
     isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
+    batch: batch::Batch,
 }
 
 impl Default for App {
@@ -79,6 +81,7 @@ impl Default for App {
             isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
+            batch: batch::Batch::default(),
         }
     }
 }
@@ -293,6 +296,9 @@ impl eframe::App for App {
                     if ui.button("RI calibration…").clicked() {
                         self.ri.open = true;
                     }
+                    if ui.button("Batch quantification…").clicked() {
+                        self.batch.open = true;
+                    }
                     if ui.button("Natural isotopes…").clicked() {
                         self.isotopes.open = true;
                     }
@@ -300,7 +306,10 @@ impl eframe::App for App {
             });
         });
 
-        self.ri.window(ui.ctx(), self.runs.get(self.active));
+        self.ri
+            .window(ui.ctx(), &self.runs, self.active, self.library.as_deref());
+        self.batch
+            .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
         self.isotopes.window(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
