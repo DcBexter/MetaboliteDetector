@@ -365,6 +365,11 @@ cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
 
+`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy ... -D warnings` and
+`cargo test --workspace` on Ubuntu and Windows for every non-draft PR and every push to `main` that
+touches `src/`, `Cargo.toml`, `Cargo.lock` or the workflow. It does not fetch the example data, so
+those tests skip themselves; run them locally. Only `main` saves the cargo cache; PRs restore it.
+
 ## Compatibility goals
 
 - Read the old binary files students already have: `.lbr` libraries first, then `.cmp`, `.calib`,
