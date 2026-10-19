@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics are reconstructed. Deconvolution, library search, RI, quantification, MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 7).
+Status: partial. Noise/baseline, peak detection, peak metrics, deconvolution (Section 4), library scoring (Section 5), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -282,7 +282,7 @@ So the field called `overall_sharpness` is the SUM OF RAW APEX INTENSITIES in th
 components.clear()
 W = (size_t)(AN_NUMBER_BINS * width)                       # width = AN_DECONVOLUTION_WIDTH (scans)
 v[i] = bins[i].overall_sharpness
-f = tools::Filter::matched2ndDerivativeGaussianFilter<double>(v, W)   # filter internals: Section 7 gap 5
+f = tools::Filter::matched2ndDerivativeGaussianFilter<double>(v, W)   # filter internals: Section 8 gap 2
 T = 5.0                                                     # rodata 0xa96c60
 prev = (int) f[0]; i = 0
 while i < f.size:
@@ -354,7 +354,7 @@ for comp in components:
 scan->getRICalculator().calculateRI(compounds)          # Section 6
 ```
 - The QUANT_EXCL_IONS test is inclusive on both ends (`lo <= ion <= hi`). Observed.
-- AN_MIN_HEIGHT_BP is a fraction of the base peak of the deconvoluted spectrum. Its default value is Unknown (it is not in GCMSSettings::toStream, see Section 1).
+- AN_MIN_HEIGHT_BP is a fraction of the base peak of the deconvoluted spectrum. Its default value is Unknown.
 - The compound spectrum is the set of modelled apex heights `c2 * max(model)`, rounded toward zero. It is NOT the raw apex intensities. Observed.
 
 ### 4.7 ModelPeak(vector<Peak*> m) (0x647ce4, Observed)
@@ -404,28 +404,290 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
 - Whether the duplicated bin peaks from 4.5 are intended. A port should reproduce them first to match golden output.
 
-## 5. Library search and RI - NOT ANALYZED
-- RICalculator::calculateRI<int,float> at syms 0x3f98f4 (not decompiled beyond the entry).
-- LibrarySearch, SpectrumFunctions: not decompiled.
-- Settings in play: LS_RI_DIFF, LS_PURE_FACTOR, LS_IMPURE_FACTOR, LS_SCALE_FACTOR_ION/VALUE/NO_MATCH, LS_RESOLUTION, LS_USE_RI, LS_USE_SCALED_LIB, LS_USE_SPEC, LS_CUTOFF (names only).
+## 5. Library search and scoring
 
-## 6. Quantification, MID, normalizers, Statistics, PCA - NOT ANALYZED
-- Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS.
-- tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640), polynomialRegression (0x6c3292): entry points only.
+Template instance `<int,float>`. vtable `LibrarySearch<int,float>` at 0xcb7258 (Observed):
 
-## 7. Open gaps (ranked by impact on reproducing results)
-1. Deconvolution and component detection (Section 4). Without it no component table can be reproduced.
-2. Library search scoring and RI (Section 5). Needed for identification output.
-3. Default setting values. Storage format is known (Section 1); the default values are not in code I read. Need to find `fromDisk` callers and any shipped default settings file, or the GUI defaults.
-4. DefaultPeakDetector details: exact SG filter coefficients and window (only 5 inferred), derivative definition, the C=0.2 tail rule (value read from rodata, not verified against output), the `i` update after a rejected peak (possible off-by-one), and the identity of vtbl[4]/[5].
-5. Matched filter internals (matched2ndDerivativeGaussianFilter<int>), and whether MatchedPeakDetector should use raw or filtered values in createPeak.
-6. Pooled statistics formulas (collectedMean/collectedVariance) and the meaning of the `n` field in BaselineStatistics.
-7. Whether DefaultPeakDetector writes stat.nf into the noise factor used by Peak (Section 2.3).
-8. Peak sharpness right-side condition (Section 3.8).
-9. Quantification, MID, normalizers, statistics tests, PCA: not started.
+| Slot | Function |
+|---|---|
+| 0 | getLibraryHits 0x62657a |
+| 2 | calculatePureSpecSimScore 0x621fa6 |
+| 3 | calculateImpureSpecSimScore 0x6226d8 |
+| 4, 5 | ...Wave variants 0x622b92 / 0x623e1a |
+| 7 | filterMass 0x626236 |
+| 11 | mapCompoundsToLibrary 0x629526 |
 
-## 8. Ranked next steps
-- Decompile deconvoluteChromatogram and detectComponents (use objdump for truncated parts).
-- Read LibrarySearch/SpectrumFunctions scoring and RICalculator::calculateRI.
+`Compound<int,float>` vtable (0xca2cc0, Observed):
+
+| Slot | Function |
+|---|---|
+| 2 | getRetentionTime |
+| 3 | getRetentionIndex |
+| 6 | getCentroidCompound |
+| 7 | getBinnedCentroidCompound(w) |
+| 8 | getPeakEssentials |
+| 16 | autoQuantificationIonAssignment(excl, min_dist, n, q) |
+| 17 | autoQuantificationIonAssignment(n) |
+
+### 5.1 Intensity weighting: Library::scaleCompound(Spectrum<int,float>) (0x621960, objdump; Observed)
+```
+for each peak i: scaled[i] = (float)( pow(ion_i, LS_SCALE_FACTOR_ION) * pow((double)intensity_i, LS_SCALE_FACTOR_VALUE) )
+return new Spectrum<float,float>(ions, scaled) with the same bin width, RI and RT
+```
+This is the Stein-Scott style mass/intensity weighting m^a * I^b. LS_SCALE_FACTOR_ION is at 0xcc2138 and LS_SCALE_FACTOR_VALUE at 0xcc2140. No normalisation happens here; the cosine in 5.3/5.4 is scale-invariant.
+
+### 5.2 Mass filter: Library::filterMass(ion) (0x626236, Observed)
+Returns true (ion excluded) if `lo <= ion <= hi` for any pair in `LS_MASS_FILTER` (a set<pair<float,float>>, so it is sorted). It returns false early at the first pair with `ion < lo`. Excluded ions are skipped on the library side and are not counted as unmatched observed ions.
+
+### 5.3 Pure score: calculatePureSpecSimScore(obs, lib) (0x621fa6, Ghidra; Observed)
+Both inputs are scaled spectra (5.1). Ions are assumed ascending (Inferred: the merge logic needs it). This is a weighted cosine over the union of peaks. Unmatched peaks on either side are down-weighted by `NM = LS_SCALE_FACTOR_NO_MATCH`.
+```
+num = d1 = d2 = 0; io = 0; it = 0           # io: obs match cursor, it: obs "consumed" cursor
+for k in 0 .. lib.n-1:
+    L = lib.ion[k]
+    o = io < obs.n ? obs.ion[io] : -1.0
+    if filterMass(L): continue
+    while io < obs.n - 1 and o < L: io += 1; o = obs.ion[io]
+    dist = DBL_MAX
+    if o != L:
+        dist = |o - L|
+        if io > 0 and |obs.ion[io-1] - L| <= dist: io -= 1; o = obs.ion[io]; dist = |o - L|
+    while it < io and it < obs.n:            # observed peaks passed over = unmatched
+        if not filterMass(obs.ion[it]): d2 += (NM * obs.val[it])^2
+        it += 1
+    vl = lib.val[k]; vo = 0
+    if o == L or dist <= 0.01:
+        vo = obs.val[io]; it += 1 (if it < obs.n); io += 1
+    else:
+        vl = NM * vl
+    num += vl*vo; d1 += vl^2; d2 += vo^2
+for remaining it < obs.n: if not filterMass(obs.ion[it]): d2 += (NM * obs.val[it])^2
+return (d1 > 0 and d2 > 0) ? num / (sqrt(d1) * sqrt(d2)) : 0
+```
+- The match tolerance is a hard-coded 0.01 m/z (Observed literal), in addition to exact equality.
+- Quirk (Inferred from the control flow): if step-back (`io -= 1`) lands on an observed peak that was already matched, that peak matches twice. `it` is then one ahead, and the next observed peak is never added to `d2`. This only occurs with closely spaced high-resolution ions.
+
+### 5.4 Impure score: calculateImpureSpecSimScore(obs, lib) (0x6226d8, Ghidra; Observed)
+Same matching as 5.3 without the `it` bookkeeping. Observed peaks that match no library ion are ignored, which gives a "reverse search" cosine over library ions only:
+```
+for each non-filtered lib ion: match as in 5.3 (tolerance 0.01)
+   matched: vo = obs.val[io]; io += 1      unmatched: vl *= NM; vo = 0
+   num += vl*vo; d1 += vl^2; d2 += vo^2
+return (d1 > 0 and d2 > 0) ? num / (sqrt(d1)*sqrt(d2)) : 0
+```
+
+### 5.5 RI score: Library::calculateRISimScore(ri1, ri2, sigma) (0x622ae0, Observed)
+```
+if |ri1 - ri2| > 3*sigma: return 0
+return exp( -(ri1 - ri2)^2 / (2*sigma^2) )          # sigma = LS_RI_DIFF
+```
+
+### 5.6 LibrarySearch::getLibraryHits(comp, bin_width) (0x62657a, Ghidra + objdump; Observed unless marked)
+```
+PF = LS_PURE_FACTOR (0xcc2120); IF = LS_IMPURE_FACTOR (0xcc2128); sigma = LS_RI_DIFF (0xcc2118)
+has_ri = comp.RI >= 0
+ri_c = has_ri ? comp.RI : comp.correctedRT / 1000
+b_comp = comp
+if comp.binWidth < bin_width:
+    print "INFORMATION: Binning compound to bin width <w>"
+    b_comp = comp.getBinnedCentroidCompound(bin_width)                 # vtbl[7], 0x6266f8
+for L in lib (std::set<LibraryCompound*>, i.e. pointer order):
+    if L.RI == -1.0 or not has_ri: ri_l = L.correctedRT/1000; ri_c = comp.correctedRT/1000 (if has_ri)
+    else: ri_l = L.RI; ri_c = comp.RI
+    ri = calculateRISimScore(ri_l, ri_c, sigma)
+    if LS_USE_RI and ri <= 0: continue
+    bring b_comp and L to a common bin width (rebinning the finer one with getBinnedCentroidCompound)
+    spec_lib = (L unchanged) ? getPreScaledSpectrum(L) : scaleCompound(L_rebinned)   # pre-scaled cache, 0x62d428
+    spec_comp = scaleCompound(b_comp) (cached while the bin width does not change)
+    impure = vtbl[3](spec_comp, spec_lib); pure = vtbl[2](spec_comp, spec_lib)
+    s = PF*pure + IF*impure
+    o = 1.0
+    if LS_USE_SPEC: o = s*s
+    if LS_USE_RI:   o = o*ri
+    if LS_USE_SPEC and LS_USE_RI: o = o^(1/3)      # = s^(2/3) * ri^(1/3)
+    elif LS_USE_SPEC: o = sqrt(o)                   # = |s|
+    hits.push(LibraryHit(L, spec_sim=s, ri_sim=ri, overall=o))
+std::sort(hits) by overall ascending (LibraryHit::operator< 0x62dcbe); std::reverse -> descending
+```
+- If neither score is enabled, every hit has overall = 1.0 (0xa96c48). If only RI is enabled, overall = ri.
+- When either RI is missing, the "RI" comparison uses corrected RT / 1000 with the same sigma (Observed). The time unit is Inferred to be ms, so the comparison is in seconds.
+- The bin-width branch at 0x626800..0x626a80 has three cases: lib coarser than compound, lib finer than compound, and equal. Their outcome is summarised above (Inferred intent). The exact branch conditions are in the Ghidra output and were not re-verified in objdump.
+- The `LibrarySearch(vector, bool)` ctor builds the pre-scaled cache (createScaledLib 0x62d10c → add2ScaledLib for every entry). The role of LS_USE_SCALED_LIB in that choice is Unknown.
+- `AMSLibrary<int,float>::getLibraryHits` (0x62e8f4) is a variant: no rebinning or scaling, filter `ri >= 0` (always true), `overall = s * ri` with no cube root (Observed).
+
+### 5.7 mapCompoundsToLibrary(comps, cutoff, alternatives*) (0x629526, Ghidra; Observed)
+This is a greedy one-to-one assignment between detected compounds and library entries.
+```
+alternatives.clear(); unassigned = set(comps); all_hits = map<LibraryCompound*, list<LibraryHit>>
+for comp in comps (pointer order):
+    hits = getLibraryHits(comp, (float) LS_RESOLUTION)           # LS_RESOLUTION 0xcc2150 = bin width
+    for h in hits while h.overall >= cutoff:                     # hits are sorted, so this stops at the first miss
+        alternatives[comp].push(h)
+        all_hits[h.libCompound].push(LibraryHit(comp, h.spec_sim, h.ri_sim, h.overall))
+for each L: sort all_hits[L] by overall desc
+while all_hits not empty:
+    best = -1.0; best_ref = null
+    for L in all_hits (pointer order):
+        any = false
+        for h in all_hits[L]:
+            if h.comp in unassigned:
+                any = true
+                if h.overall > best: best = h.overall; best_ref = L; best_hit = h
+        if not any: drop L
+    if best_ref: result[best_ref] = best_hit; unassigned.remove(best_hit.comp); all_hits.erase(best_ref)
+return result        # map<LibraryCompound*, LibraryHit(detected compound)>
+```
+Ties are broken by pointer order (first strictly greater wins), so tie results are not reproducible across runs (Inferred).
+
+### 5.8 GUI flow: ComponentDetector::librarySearch (0x4b3bc2, Observed)
+- It calls `mapCompoundsToLibrary(comps, cutoff = 0.0, &all_hits)`; the `pxor xmm0` at 0x4b3d2f shows the cutoff is zero.
+- `compounds[comp]` = all hits for comp (descending). `mapping[comp]` = the assigned library hit, or `LibraryHit(null)` if there is none.
+- `LS_CUTOFF` is not applied during the search. It is compared against `getOverallScore()` later:
+  - DataTableModel::getData (0x4c88db)
+  - CompoundMapper::findCompound (0x4b6e1e..0x4b6e32, hit accepted if overall >= cutoff; Inferred from the comisd/jb)
+  - BatchQuantificator::startAnalysis/createLibrary
+
+### 5.9 Unknowns (library search)
+- Defaults of all LS_* settings.
+- The exact `Spectrum::getBinnedSpectrum` / `getCentroidCompound` algorithms (0x6019d6, 0x60e212). These were not decompiled.
+- The Wave score variants (vtbl 4/5) and `calculateScore_frag` (vtbl 6): when they are used.
+- `LS_IDENTIFICATION_ALGORITHM` and `LS_USE_SCALED_LIB` semantics.
+- SQLLibrary::getLibraryHits (0x6e306c) reads LS_CUTOFF directly. Not read.
+- Whether spectra are guaranteed sorted by ion before 5.3/5.4. They are built from std::map in 4.6, so deconvoluted spectra are sorted (Observed); library spectra are Unknown.
+
+## 6. RI calibration and RT shift correction
+
+### 6.1 RICalculator data (Observed)
+- `rt2ri` and `ri2rt` are `std::map<double,double>`. `drt` is a global retention-time shift. `source` is a string (the ctor argument).
+- `addCalibrationPair(rt, ri)` (0x6d21f0) inserts rt→ri and ri→rt. std::map::insert keeps the FIRST value for a duplicate key.
+- `isCalibrated()` = `rt2ri.size() != 0` (0x6d2faa).
+- `getRetentionTimeShift(rt)` (0x6d3566, vtbl[2]) and `getRetentionTimeCorrection()` both return `drt`. The shift is constant, not RT-dependent.
+
+### 6.2 calculateRI(rt) (0x6d2b06, Observed) - piecewise linear, linear extrapolation
+```
+if rt2ri.size < 2: return -1.0
+c = rt - drt
+it = rt2ri.lower_bound(c)                  # first calibration RT >= c
+if it->rt == c: return it->ri              # NB: dereferences end() if c > max RT (UB, then falls through)
+if it == begin: ++it                       # below range -> use first segment
+if it == end:   --it                       # above range -> use last segment
+(rt1, ri1) = prev(it); (rt2, ri2) = it
+return ri1 + (c - rt1) * (ri2 - ri1) / (rt2 - rt1)
+```
+This is the linear (van den Dool-Kratz) form only. No Kovats logarithmic form exists in the code: there is no other RICalculator implementation, and "ESTIMATED KOVATS RI" is only a UI label (Observed via symbols/strings). Extrapolation outside the calibration range uses the first or last segment.
+
+### 6.3 calculateRT(ri) (0x6d2d34, Observed)
+Inverse over `ri2rt` with the same segment selection: `rt = rt1 + (ri - ri1)*(rt2 - rt1)/(ri2 - ri1) + drt`. An exact key match returns `rt + drt`. With fewer than 2 pairs it returns -1.
+
+### 6.4 Applying RI to compounds: calculateRI<int,float>(compounds) (0x3f98f4, Observed)
+```
+for comp in compounds:
+    rt = comp.getRetentionTime()
+    comp.setRetentionTimeCorrection(getRetentionTimeShift(rt))   # = drt
+    comp.setRetentionIndex(calculateRI(rt))
+```
+Called at the end of every deconvolution (4.6). `getCorrectedRetentionTime()` (used in 5.6) is Inferred to be `RT - correction`.
+
+### 6.5 RT shift correction: applyRetentionTimeCorrection<int,float>(comps, lib, ref, cutoff) (0x3f9e9e, Observed)
+This is the "advanced RT shift correction". One reference library compound is located in the run, and the whole calibration is shifted so that the reference compound lands on its library RI.
+```
+win = 3 * LS_RI_DIFF; best = null; best_score = 0
+for comp in comps:
+    if comp.RI == -1: a = comp.RT/1000; b = ref.RT/1000  else: a = comp.RI; b = ref.RI
+    if |a - b| < win:
+        for h in lib.getLibraryHits(comp, (float) LS_RESOLUTION) while h.overall >= cutoff:
+            if h.compound == ref and h.overall > best_score: best_score = h.overall; best = comp
+if best == null: drt = 0
+elif best.RI == -1: drt = best.RT - ref.RT
+else: drt = calculateRT(best.RI) - calculateRT(ref.RI)      # RICalculator vtbl[1], Inferred = calculateRT
+return drt
+```
+Callers then run `calculateRI(comps)` again:
+- `RICalibrationWizard::RISetter::applyRICorrection` (0x3f5b32) uses its stored ref_comp and cutoff.
+- `CalibrationSetter::applyRICorrection` (0x494f40) uses the reference compound from a combo box and the cutoff from a spin box.
+
+Quirk (Inferred): `calculateRT` adds the OLD `drt`. A second application therefore computes the new drt relative to the old one, and does not accumulate it. The result is exact only when the old drt is 0.
+
+### 6.6 Building the calibration: CalibrationPage::setDataToChromatogram (0x3eff6e, objdump; Observed)
+```
+ric = RICalculator("not available")
+for row i in table:
+    rt = toDouble(item(i, 1)); ri = toDouble(item(i, 2))
+    if rt >= 0: ric.addCalibrationPair(MainWindow::mapXUnitToTime(rt), ri)   # display unit -> internal time
+scan.setRICalculator(ric); scan.writeIndexFile()
+```
+`mapXUnitToTime` (0x3b5d6e) applies `TimeMapper::mapUnitToTime` only when a TIC plot exists.
+
+### 6.7 Unknowns (RI)
+- How the wizard proposes the alkane RT/RI table rows (CompoundDetector + library matching in RICalibrationWizard, startRICalibration 0x3e93b8). Not read.
+- TimeMapper units, and the internal RT unit (ms is Inferred from the `/1000` fallbacks).
+- RICalculator ctor default of `drt` (Inferred 0). The stream format (fromStream 0x6d315a) was not read.
+- `recalibrateChromatograms` (0x3f52ec) was not read.
+
+## 7. Quantification ion selection (Observed); other quantification NOT ANALYZED
+
+### 7.1 Compound::autoQuantificationIonAssignment(n) (0x6109b0)
+Calls slot 16 with `excl = QUANT_EXCL_IONS`, `min_dist = (float) QUANT_MIN_DIST_IONS` and `quality_cutoff = (float) QUANT_QUALITY_CUTOFF`.
+
+### 7.2 Compound::autoQuantificationIonAssignment(excl, min_dist, n, quality_cutoff) (0x610442, Ghidra + objdump)
+```
+peaks = getPeakEssentials()                  # the PeakEssential copies stored in 4.6
+if peaks empty: return {}
+order = peaks sorted by integral DESC        # list::sort with peakEssentialCompare (0x5fa2c6: b.integral > a.integral), iterated in reverse
+Q = set<float>(); count = 0
+for p in order while count < n:
+    if p.quality < quality_cutoff
+       and not any(lo <= p.ion <= hi for (lo, hi) in excl)
+       and all(|q - p.ion| >= min_dist for q in Q):
+        Q.insert(p.ion); count += 1
+if count < n:
+    print "WARNING: Was not able to assign n quantification ions ... Using the first n with the highest intensity"
+    for p in order while count < n: Q.insert(p.ion); count += 1     # restarts at the top, no filters
+return Q
+```
+- Quality is "lower is better", consistent with the `quality <= 10` model-peak rule in 4.6.
+- Fallback quirk (Observed): the fallback restarts from the highest-integral peak. Re-inserting an ion that is already selected still increments `count`, so the result can hold fewer than n ions.
+- Duplicate ions from the duplicated peaks in 4.5 behave the same way.
+- Ties in integral are ordered by list position (list::sort is stable, then reversed).
+
+### 7.3 QuantIonChecker::detectQuantIons (0x5b70aa)
+For every mapped compound `c`:
+```
+cc = c.getCentroidCompound()
+added = cc.autoQuantificationIonAssignment(this.ion_number)
+delete cc
+if added is empty: drop the entry
+else: comp2ions[c] = added
+```
+
+### 7.4 Unknowns (quantification)
+- `LibraryCompound` overrides of the assignment (0x61db1c, 0x61e19a).
+- `getCentroidCompound` (whether it keeps PeakEssentials).
+- `QuantIonChecker::detectCompounds2Process`.
+- The source of `ion_number` (Inferred QUANT_ION_NUMBER).
+- The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
+- MID, normalizers, statistics tests and PCA are not analyzed. Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+
+## 8. Open gaps (ranked by impact on reproducing results)
+1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
+2. `tools::Filter::matched2ndDerivativeGaussianFilter<double>` kernel. It sets the component boundaries in 4.5 together with the fixed threshold 5.0.
+3. Spectrum binning and centroiding (`getBinnedSpectrum`, `getCentroidCompound`). Library scores depend on them when bin widths differ.
+4. DefaultPeakDetector details:
+   - the exact SG filter coefficients and window (only 5 is inferred)
+   - the derivative definition
+   - the C=0.2 tail rule (value read from rodata, not verified against output)
+   - the `i` update after a rejected peak (possible off-by-one)
+   - the identity of vtbl[4]/[5]
+5. Whether MatchedPeakDetector should use raw or filtered values in createPeak.
+6. The RI wizard's automatic alkane assignment (6.7).
+7. Pooled statistics formulas (collectedMean/collectedVariance) and the meaning of the `n` field in BaselineStatistics.
+8. Whether DefaultPeakDetector writes stat.nf into the noise factor used by Peak (Section 2.3).
+9. Peak sharpness right-side condition (Section 3.8).
+10. MID, normalizers, statistics tests, PCA: not started.
+
+## 9. Ranked next steps
 - Locate `GCMSSettings::fromDisk` callers and any default settings file in the install.
-- Verify the Section 3.1 loop against a real chromatogram output (golden data) before the Rust port.
+- Decompile `tools::Filter::matched2ndDerivativeGaussianFilter<double>` and `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
+- Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
+
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6; wizard auto-assignment open). Quantification ion selection complete (Section 7.1-7.3). Remaining quantification/statistics not analyzed.
