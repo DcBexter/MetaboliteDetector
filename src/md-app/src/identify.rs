@@ -17,7 +17,7 @@ use crate::{App, Run, spawn};
 pub struct Library {
     pub name: String,
     pub compounds: Vec<LibraryCompound>,
-    prepared: PreparedLibrary,
+    pub prepared: PreparedLibrary,
 }
 
 /// Library, RI calibration and RT shift reference (library index, cutoff) an identification was

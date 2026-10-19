@@ -28,16 +28,19 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
+  src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   examples/perf.rs      performance smoke test on synthetic large runs
+  examples/batch.rs     batch quantification timing on real files
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
+  src/batch.rs          batch quantification window and result table
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-quantification, MID and statistics.
+normalisation, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -71,6 +74,7 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
 | Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -230,6 +234,29 @@ Conscious deviations:
 - `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
   not ported (semantics unknown, §5.9).
 
+## Batch quantification
+
+`md_core::batch` finds the library substances in many runs (old `BatchQuantificator`, F10–F12) in two
+passes. `scan_runs` reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
+a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
+`parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
+well. Progress is an atomic counter, cancelling stops before the next file, unreadable files are listed
+and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
+rescan:
+
+- **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
+  `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
+  cell is the summed integral of the quant ions found in that run.
+- **Replicate groups**: the first capture group (else the whole match) of a regex on the file name.
+- **Filters**: minimum quant ions found per cell, minimum reproducibility (share of runs in a group).
+
+All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
+2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
+(90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
+memory depends on the runs in memory, not on the study size (`examples/batch.rs`). Reading the file
+(~27 ms per run) is the largest share. Not ported yet (#58): the non-targeted mode, the SIC rescan of missing quant
+ions (`ResultSeries::scanIons`, §4.0), the discrepancy index and `QUANT_EXCL_IONS` in the app.
+
 ## Golden test
 
 `src/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
@@ -292,6 +319,7 @@ cargo build --release            # binary: target/release/metabolite-detector(.e
 cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo run --release -p md-core --example perf
+cargo run --release -p md-core --example batch -- 4 library.msl run1.cdf run2.cdf
 cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
