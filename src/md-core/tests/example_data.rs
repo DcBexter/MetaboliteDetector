@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::peaks::{IonTraces, PeakSettings};
 
 fn runs() -> Vec<PathBuf> {
@@ -75,6 +76,40 @@ fn detects_peaks_in_example_runs() {
                 "{p:?}"
             );
             assert!(p.signal_to_noise >= 20.0, "{p:?}");
+        }
+    }
+}
+
+#[test]
+fn deconvolutes_example_runs() {
+    for path in runs() {
+        let c = md_core::andi::read(&path).unwrap();
+        let t = Instant::now();
+        let traces = IonTraces::new(&c);
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        let s = DeconvSettings::default();
+        let comps = deconvolute(&traces, &peaks, &s);
+        let total = t.elapsed();
+        let ions: usize = comps.iter().map(|k| k.spectrum.len()).sum();
+        eprintln!(
+            "{}: {} peaks -> {} components ({:.1} ions each), index+peaks+deconvolution {total:?}",
+            name(&path),
+            peaks.len(),
+            comps.len(),
+            ions as f64 / comps.len().max(1) as f64,
+        );
+        // A derivatised plant extract has dozens of substances; none or thousands means a broken step.
+        assert!((10..500).contains(&comps.len()), "{}", path.display());
+        for k in &comps {
+            // Like the old code, duplicated peaks count towards the minimum, distinct masses may be fewer.
+            assert!(
+                k.peaks.len() >= s.min_peak_number && !k.spectrum.is_empty(),
+                "{k:?}"
+            );
+            assert!(
+                k.first_scan <= k.apex_scan && k.apex_scan <= k.last_scan,
+                "{k:?}"
+            );
         }
     }
 }

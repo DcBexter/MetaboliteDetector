@@ -134,6 +134,10 @@ impl IonTraces {
         self.masses.is_empty()
     }
 
+    pub fn scan_count(&self) -> usize {
+        self.scans
+    }
+
     /// Intensity of one nominal mass in every scan.
     pub fn trace(&self, row: usize) -> &[f32] {
         &self.values[row * self.scans..(row + 1) * self.scans]
@@ -377,7 +381,7 @@ fn peak(w: &[f32], first: usize, nf: f64, signal_to_noise: f32, bins: u32) -> Pe
 /// Old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): correlation with a negative
 /// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace.
 /// It responds most to Gaussian peaks with sigma ≈ `density / 4` scans.
-pub fn matched_filter(v: &[f32], density: usize) -> Vec<f64> {
+pub fn matched_filter<T: Copy + Into<f64>>(v: &[T], density: usize) -> Vec<f64> {
     let d = density.max(1) as isize;
     let kernel: Vec<f64> = (-d..=d)
         .map(|x| {
@@ -388,7 +392,10 @@ pub fn matched_filter(v: &[f32], density: usize) -> Vec<f64> {
     (0..v.len() as isize)
         .map(|i| {
             (-d..=d)
-                .filter_map(|x| v.get(usize::try_from(i + x).ok()?).map(|y| (x, *y as f64)))
+                .filter_map(|x| {
+                    v.get(usize::try_from(i + x).ok()?)
+                        .map(|y| (x, (*y).into()))
+                })
                 .map(|(x, y)| kernel[(x + d) as usize] * y)
                 .sum()
         })

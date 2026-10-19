@@ -5,7 +5,9 @@ use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Line, Plot, VLine};
+use egui_plot::{Bar, BarChart, Line, Plot, Points, VLine};
+use md_core::deconv::{Component, DeconvSettings, deconvolute};
+use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::{Chromatogram, decimate};
 
 fn main() -> eframe::Result {
@@ -79,7 +81,11 @@ struct Run {
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
+    /// Deconvoluted substances with the old default settings, ordered by retention time.
+    components: Vec<Component>,
     scan: usize,
+    /// Selected component; its deconvoluted spectrum replaces the raw one.
+    component: Option<usize>,
     visible: bool,
 }
 
@@ -111,18 +117,27 @@ impl App {
                 .map_err(|e| e.to_string())
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
-                    _ => Ok(Run {
-                        name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
-                        minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
-                        tic: data.tic(),
-                        data: Arc::new(data),
-                        path: p.clone(),
-                        sic: Vec::new(),
-                        sic_for: None,
-                        sic_job: None,
-                        scan: 0,
-                        visible: true,
-                    }),
+                    _ => {
+                        let traces = IonTraces::new(&data);
+                        let peaks = traces.detect_peaks(&PeakSettings::default());
+                        let mut components =
+                            deconvolute(&traces, &peaks, &DeconvSettings::default());
+                        components.sort_by_key(|k| k.apex_scan);
+                        Ok(Run {
+                            name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
+                            minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
+                            tic: data.tic(),
+                            data: Arc::new(data),
+                            path: p.clone(),
+                            sic: Vec::new(),
+                            sic_for: None,
+                            sic_job: None,
+                            components,
+                            scan: 0,
+                            component: None,
+                            visible: true,
+                        })
+                    }
                 })
                 .map_err(|e| format!("{}: {e}", p.display()))
         });
@@ -180,7 +195,9 @@ impl App {
     }
 }
 
-/// One chromatogram plot with a line per run; returns the clicked retention time (min).
+/// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
+/// time (min).
+#[allow(clippy::too_many_arguments)]
 fn trace_plot(
     ui: &mut egui::Ui,
     id: &str,
@@ -189,6 +206,7 @@ fn trace_plot(
     runs: &[Run],
     cursor_min: f64,
     trace: fn(&Run) -> &[f64],
+    marks: &[[f64; 2]],
 ) -> Option<f64> {
     let link = egui::Id::unique("chromatograms");
     let plot = Plot::new(id)
@@ -214,6 +232,9 @@ fn trace_plot(
                     let points = decimate(&run.minutes, ys, lo, hi, width);
                     p.line(Line::new(run.name.as_str(), points).color(color(i)));
                 }
+            }
+            if !marks.is_empty() {
+                p.points(Points::new("components", marks.to_vec()).radius(3.0));
             }
             p.vline(VLine::new("", cursor_min));
             p.pointer_coordinate()
@@ -252,8 +273,17 @@ impl eframe::App for App {
             } else if let Some(e) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             } else if let Some(r) = self.runs.get(self.active) {
+                let shown = match r.component {
+                    Some(k) => format!(
+                        "component {} of {} ({} ions)",
+                        k + 1,
+                        r.components.len(),
+                        r.components[k].spectrum.len()
+                    ),
+                    None => format!("{} components (click a dot)", r.components.len()),
+                };
                 ui.label(format!(
-                    "{} — {} scans — scan {} at {:.3} min (←/→ to step) — {}",
+                    "{} — {} scans — scan {} at {:.3} min (←/→ to step) — {shown} — {}",
                     r.path.display(),
                     r.data.scan_count(),
                     r.scan + 1,
@@ -324,10 +354,10 @@ impl eframe::App for App {
             let last = run.data.scan_count() - 1;
             ui.input(|i| {
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    run.scan = (run.scan + 1).min(last);
+                    (run.scan, run.component) = ((run.scan + 1).min(last), None);
                 }
                 if i.key_pressed(egui::Key::ArrowLeft) {
-                    run.scan = run.scan.saturating_sub(1);
+                    (run.scan, run.component) = (run.scan.saturating_sub(1), None);
                 }
             });
             let cursor = run.minutes[run.scan];
@@ -337,28 +367,77 @@ impl eframe::App for App {
             let height = ui.available_height() / plots;
             let mut clicked = None;
             if self.trace != Trace::Sic {
-                clicked = trace_plot(ui, "tic", "TIC", height, &self.runs, cursor, |r| &r.tic);
+                // Components of the active run as dots on its TIC.
+                let marks: Vec<[f64; 2]> = run
+                    .components
+                    .iter()
+                    .map(|k| {
+                        [
+                            run.minutes[k.apex_scan as usize],
+                            run.tic[k.apex_scan as usize],
+                        ]
+                    })
+                    .collect();
+                clicked = trace_plot(
+                    ui,
+                    "tic",
+                    "TIC",
+                    height,
+                    &self.runs,
+                    cursor,
+                    |r| &r.tic,
+                    &marks,
+                );
             }
             if self.trace != Trace::Tic {
                 let label = format!("SIC m/z {} ± {}", self.mz, self.tolerance);
-                let sic = trace_plot(ui, "sic", &label, height, &self.runs, cursor, |r| &r.sic);
+                let sic = trace_plot(
+                    ui,
+                    "sic",
+                    &label,
+                    height,
+                    &self.runs,
+                    cursor,
+                    |r| &r.sic,
+                    &[],
+                );
                 clicked = clicked.or(sic);
             }
 
             let run = &mut self.runs[self.active];
             if let Some(s) = clicked.and_then(|x| run.data.scan_at(x * 60.0)) {
-                run.scan = s;
+                // A click within 3 scans of a component apex selects that component.
+                run.component = (0..run.components.len())
+                    .min_by_key(|k| run.components[*k].apex_scan.abs_diff(s as u32))
+                    .filter(|k| run.components[*k].apex_scan.abs_diff(s as u32) <= 3);
+                run.scan = run
+                    .component
+                    .map_or(s, |k| run.components[k].apex_scan as usize);
             }
-            let (mz, intensity) = run.data.spectrum(run.scan);
-            let bars = mz
-                .iter()
-                .zip(intensity)
-                .map(|(m, i)| Bar::new(*m as f64, *i as f64).width(0.3))
-                .collect();
+
+            let (name, bars) = match run.component {
+                Some(k) => (
+                    "deconvoluted spectrum",
+                    run.components[k]
+                        .spectrum
+                        .iter()
+                        .map(|(m, h)| Bar::new(*m as f64, *h as f64).width(0.3))
+                        .collect(),
+                ),
+                None => {
+                    let (mz, intensity) = run.data.spectrum(run.scan);
+                    let bars = mz
+                        .iter()
+                        .zip(intensity)
+                        .map(|(m, i)| Bar::new(*m as f64, *i as f64).width(0.3))
+                        .collect();
+                    ("spectrum", bars)
+                }
+            };
             Plot::new("spectrum")
                 .x_axis_label("m/z")
                 .y_axis_label(format!("Intensity — {}", run.name))
-                .show(ui, |p| p.bar_chart(BarChart::new("spectrum", bars)));
+                .show(ui, |p| p.bar_chart(BarChart::new(name, bars)));
         });
     }
 }

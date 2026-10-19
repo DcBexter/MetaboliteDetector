@@ -4,6 +4,7 @@
 use rayon::prelude::*;
 
 pub mod andi;
+pub mod deconv;
 pub mod library;
 pub mod peaks;
 
