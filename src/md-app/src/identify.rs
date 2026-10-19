@@ -17,9 +17,9 @@ use crate::{App, Run, spawn};
 pub struct Library {
     pub name: String,
     pub compounds: Vec<LibraryCompound>,
-    prepared: PreparedLibrary,
+    pub prepared: PreparedLibrary,
     /// What `prepared` was scaled and filtered with; searches use the same.
-    settings: SearchSettings,
+    pub settings: SearchSettings,
 }
 
 /// Library, RI calibration and RT shift reference (library index, cutoff) an identification was
