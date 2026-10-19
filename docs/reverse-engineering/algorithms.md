@@ -37,6 +37,7 @@ Settings used by the analysis (name, storage address, where read):
 ## 2. Noise and baseline (Observed unless marked)
 
 ### 2.1 analyzeBaseline<int,float> (MCP 0x6ee06e; syms 0x5ee06e)
+
 Called via a virtual slot (vtbl[5]) from DefaultPeakDetector::detectPeaks with (SG-smoothed intensities, derivative, segment_length = 15).
 
 ```
@@ -56,10 +57,12 @@ analyzeBaseline(values v[N], slope s[N], L):
   nf     = median(all nfSeg)
   return {mean: pooledMean, sd: allSd, msd: allMsd, nf: nf, n: L * countAccepted}
 ```
+
 - Note: the n field is typed long long; `L*count` is Inferred from the cast pattern.
 - Source of `s` (the derivative) and `pooledVar` details: Inferred.
 
 ### 2.2 AbstractPeakDetector<int,float>::calculateBaseline(Peak*) (MCP 0x6ed5ee; virtual, called as checkPeak via vtbl[4])
+
 ```
 calculateBaseline(p):
   v[i] = EIC intensities, i = 0..n-1, scan index relative to firstScan
@@ -79,10 +82,12 @@ calculateBaseline(p):
   sn = roundSig(h / nu, 8); setSignalToNoise(sn)
   accept iff h >= AN_MIN_PEAK_HEIGHT * nu
 ```
+
 - Constant 0.1 in the re-anchor test: Observed.
 - The baseline is a robust line through the lowest-residual half of the points: Inferred from the sort/fit pattern.
 
 ### 2.3 Noise factor
+
 - AbstractPeakDetector ctor (MCP 0x6ed4f0): vptr set, nf = 1.0. Observed.
 - Peaks created by MatchedPeakDetector get nf = 0.5 (Observed, Section 3.3).
 - Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). The value used in the detector is set from analyzeBaseline's result `nf`. That linkage (whether detectPeaks writes stat.nf into this->nf) is Unknown.
@@ -90,7 +95,9 @@ calculateBaseline(p):
 ## 3. Peak detection
 
 ### 3.1 DefaultPeakDetector<int,float>::detectPeaks (MCP 0x6ef020; syms 0x5ef020)
+
 Setup (Observed):
+
 ```
 if N < 5: return empty
 BEGIN = AN_PEAK_THRESHOLD_BEGIN ; END = AN_PEAK_THRESHOLD_END
@@ -98,7 +105,9 @@ D  = SavitzkyGolayFilterFirstDerivative<float>(float(values))   # window 5 Infer
 S  = SavitzkyGolayFilter<int>(values)                         # window 5 Inferred
 stat = analyzeBaseline(S, D, 15)                              # Section 2.1
 ```
+
 Loop (reconstructed from objdump, syms 0x5ef1a7..0x5ef773; Observed control flow, names Inferred):
+
 ```
 i = 2; tailing = false
 while i < N - 2:
@@ -131,11 +140,13 @@ while i < N - 2:
             peaks.push_back(p)
     i += 1
 ```
+
 Notes:
 - The exact handling of `i` after the tail branch (i = i-1 at one path) was recovered from assembly and may be off by one. Verify with a test case.
 - Behavior when `i` equals the break index is Inferred.
 
 ### 3.2 DefaultPeakDetector<int,float>::createPeak (MCP 0x6efa1c; syms 0x5efa1c)
+
 ```
 createPeak(ion, begin, end, max, values, D, extend, stat):
   if extend:
@@ -144,10 +155,12 @@ createPeak(ion, begin, end, max, values, D, extend, stat):
   apex = argmax over [begin, end] (first maximum wins, strict >)
   return Peak(ion, begin, end, apex, values[begin..end], nf = getNoiseFactor())
 ```
+
 - The exact border conditions (direction check, and which side of stat is used) come from the decompile. Monotonicity check is Observed; exact comparison operator direction: Inferred.
 - The "3 * sd" constant: Observed.
 
 ### 3.3 MatchedPeakDetector<int,float>::detectPeaks (MCP 0x6ee9ce; syms 0x5ee9ce)
+
 ```
 W = peak_width (ctor arg); thr = ctor threshold (int)
 f = tools::Filter::matched2ndDerivativeGaussianFilter<int>(values, 4*W)   # Observed call
@@ -155,18 +168,22 @@ regions: begin at i where f[i-1] < thr < f[i]; end at first j > i with f[j] <= t
 accept region if (end - begin) > 2
 createPeak(ion, begin, end, f[begin..end])
 ```
+
 - Whether createPeak gets the raw or the filtered vector is ambiguous. The decompile passes the filtered vector (Observed), so the peak area is taken from the filtered data (Inferred interpretation).
 
 ### 3.4 MatchedPeakDetector<int,float>::createPeak (MCP 0x6eed8e; syms 0x5eed8e)
+
 - apex = argmax over [begin, end] (strict >) on the supplied values.
 - Peak(ion, begin, end, apex, values, nf = 0.5). Observed.
 
 ### 3.5 Peak<int,float>::Peak(ion, begin, end, maxScan, values, nf) (MCP 0x6f2754; syms 0x5f2754)
+
 - PeakEssential<float>(ion, begin, end, maxScan); stores values and nf.
 - Throws if (end - begin + 1) != values.size() (Observed).
 - If ion != 0: determinePreciseMaximizationTime(); determinePeakQuality(); calculatePeakSharpness().
 
 ### 3.6 determinePreciseMaximizationTime (MCP 0x6f3782; syms 0x5f3782)
+
 ```
 points: scans m-1, m, m+1 around maxScan (m = apex)   # Observed
 X_i = AN_NUMBER_BINS * scan_abs_i ; Y_i = v_i
@@ -178,6 +195,7 @@ bounds failure: "Strange peak ... Can not calculate precise maximization time!"
 ```
 
 ### 3.7 determinePeakQuality (MCP 0x6f3d28; syms 0x5f3d28)
+
 ```
 norm = 0; pen = 0
 for i in 0 .. n-2:
@@ -189,15 +207,18 @@ for i in 0 .. n-2:
 quality = 100 if norm == 0 else 100 * pen / norm
 if quality is NaN: print "Bad quality..." and do not set
 ```
+
 - Observed.
 
 ### 3.8 calculatePeakSharpness (MCP 0x6f3f98; syms 0x5f3f98)
+
 ```
 nu = sqrt(maxValue) * nf
 sharpL = max over i < apex with v[i] >= 0 of (maxValue - v[i]) / ((apex - i) * nu)
 sharpR = max over i > apex with v[i] >= 0 of (maxValue - v[i]) / ((i - apex) * nu)   # symmetric; exact form Inferred
 sharpness = max(0, (sharpL + sharpR) / 2), rounded roundSig 8
 ```
+
 - Observed (summary of decompile); the right-side condition should be verified with the decompile before porting.
 
 ## 4. Deconvolution / component detection
@@ -205,6 +226,7 @@ sharpness = max(0, (sharpL + sharpR) / 2), rounded roundSig 8
 All addresses below are syms addresses (MCP = +0x100000). Ghidra cuts most of these functions at `std::endl` and `operator new` (it marks both no-return). The control flow after those calls was read from objdump.
 
 ### 4.0 Pipeline and entry points (Observed)
+
 - GUI path: `metabolitedetector::ComponentDetector::detectComponents()` (0x4b3a0c) calls `GCMSAnalyzer::detectAllPeaks(reorder=true, scan_dist=10.0f, ion_dist=0.05f)` (call at 0x4b3a87; floats at rodata 0xa81010 = 10.0 and 0xa8100c = 0.05). Then it calls `deconvoluteChromatogram()` (0x5e907e).
 - RI calibration wizard: `RICalibrationWizard::CompoundDetector::detect()` calls `detectAllPeaks(reorder=false, ...)` (0x3f4710), then `deconvoluteChromatogram()`.
 - Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window.
@@ -212,6 +234,7 @@ All addresses below are syms addresses (MCP = +0x100000). Ghidra cuts most of th
 - `deconvoluteChromatogram()` (0x5e907e) = `deconvoluteChromatogram(this->peaks, scan->vtbl[3]() /*scan count*/, 0, AN_DECONVOLUTION_WIDTH)`. Observed.
 
 ### 4.1 detectAllPeaks(reorder, scan_dist, ion_dist) (0x5e8ac0)
+
 ```
 clear peaks, bins, components, compounds
 for i in 0 .. scan->vtbl[4]() - 1:              # number of ion traces
@@ -223,10 +246,13 @@ if cancelled: return false
 if reorder and scan->getDataType() != 2: reorderPeaks(scan_dist, ion_dist)
 return true
 ```
+
 Observed (tail at 0x5e8e99..0x5e8f15). The meaning of data type 2 is Unknown. Deconvolution passes 1.0 as the Compound "resolution" for type 2, else 0.0 (Section 4.6), so type 2 is most likely nominal-mass (unit resolution) data (Inferred).
 
 ### 4.2 reorderPeaks(scan_dist, ion_dist) (0x5eac2c) - align apexes of split masses
+
 Used for non-type-2 (high-resolution) data, where one nominal fragment can be split over neighbouring m/z traces. With ion_dist = 0.05 it never merges unit-mass traces. Observed (Ghidra decompile, structure confirmed):
+
 ```
 peaks.sort(Peak_sort(ION))                      # by ion asc, then firstScan asc
 all_ions = set(scan->getAllIons())
@@ -253,19 +279,23 @@ for each profile (each once, `processed` flag):
             q.setMaxScan(s.maxScan); q.setInterpolatedMaxScan(s.interpolatedMaxScan)
 delete all profiles
 ```
+
 - `insertIonProfile(bin, bins, dist, p)` (0x5eb972, objdump): `prof = new IonProfile(p)`. Then `lo = (int)(bin - dist) < 0 ? 0 : bin - dist` and `hi = min(bin + dist, bins.size - 1)`. It pushes `prof` into `bins[k]` for k in [lo, hi). The upper bound is exclusive, so bin `hi` is not filled (Observed: `jae` at 0x5eba59).
 - `IonProfile(p)` (0x649594): processed = false; addPeak(p). `IonProfile::addPeak(p)` (0x648f90): push p; last_ion = p.ion; max_scan = Peak(peaks).maxScan (the apex of the summed profile). Observed.
 
 ### 4.3 Peak(list<Peak*>) - summed peak (0x5f28f8, Observed)
+
 ```
 begin = min firstScan; end = max lastScan; sn = mean of member S/N
 values[i] = sum over members covering scan i of member.getValue(i)   # int sum
 maxScan = first argmax(values); throws if the list is empty
 determinePreciseMaximizationTime(); determinePeakQuality(); calculatePeakSharpness()   # Section 3.6-3.8
 ```
+
 `Peak::getValue(scan)` throws if scan is outside [firstScan, lastScan] (0x5f2efa). `Peak::getMaxValue()` = values[maxScan - firstScan], the raw apex intensity (0x5f2ea6).
 
 ### 4.4 initializeBins(scan_count, first_scan) (0x5ec31c, Observed)
+
 ```
 NB = AN_NUMBER_BINS
 bins = vector<Bin>(NB * (scan_count + 1) + 1); bins[i].ID = i
@@ -275,9 +305,11 @@ for p in peaks:
     else: bins[b].addPeak(p)
 Bin::addPeak(p) (0x649e58): bin.peaks.push_back(p); bin.overall_sharpness += p.getMaxValue()
 ```
+
 So the field called `overall_sharpness` is the SUM OF RAW APEX INTENSITIES in the bin (a binned "apex TIC"), not a sharpness. Observed. AN_NUMBER_BINS is the number of sub-scan bins per scan. It also sets the time quantum of the precise apex in 3.6.
 
 ### 4.5 detectComponents(width) (0x5ebac4, objdump; Observed)
+
 ```
 components.clear()
 W = (size_t)(AN_NUMBER_BINS * width)                       # width = AN_DECONVOLUTION_WIDTH (scans)
@@ -301,6 +333,7 @@ while i < f.size:
         components.push(DeconvolutedCompound(begin, end, t_peaks))
     prev = (int) f[i]; i += 1
 ```
+
 Quirks that a faithful port must keep or consciously drop (all Observed):
 - Both flank extensions start at n = begin / n = end. They therefore insert `bins[begin].peaks` (if f[begin] > f[begin-1]) and `bins[end].peaks` (if f[end] > f[end+1]) a SECOND time. `t_peaks` then holds duplicate Peak pointers. This changes the peak count used against MIN_PEAK_NUMBER, the 25 % model-peak quota, the ModelPeak sum (a duplicated model peak counts twice) and the stored compound peak list (4.6).
 - The flank extension stops one bin before the local minimum of f. The stop bin itself is not added.
@@ -309,6 +342,7 @@ Quirks that a faithful port must keep or consciously drop (all Observed):
 - `DeconvolutedCompound(start_bin, stop_bin, peaks)` (0x5ed4a2) only stores the three values.
 
 ### 4.6 deconvoluteChromatogram(peaks, scan_count, start_scan, width) (0x5e90de, Ghidra + objdump; Observed)
+
 ```
 this.peaks = peaks; compounds.clear()
 initializeBins(scan_count, start_scan); detectComponents(width)
@@ -353,11 +387,13 @@ for comp in components:
     if C.values empty: print "No values... During deconvoluition..."
 scan->getRICalculator().calculateRI(compounds)          # Section 6
 ```
+
 - The QUANT_EXCL_IONS test is inclusive on both ends (`lo <= ion <= hi`). Observed.
 - AN_MIN_HEIGHT_BP is a fraction of the base peak of the deconvoluted spectrum. Its default value is Unknown.
 - The compound spectrum is the set of modelled apex heights `c2 * max(model)`, rounded toward zero. It is NOT the raw apex intensities. Observed.
 
 ### 4.7 ModelPeak(vector<Peak*> m) (0x647ce4, Observed)
+
 ```
 if m empty: throw
 begin = min firstScan; end = max lastScan
@@ -366,10 +402,13 @@ maxScan = first argmax of values (strict >), scanning begin..end
 getValue(scan) = values[scan - begin], prints "scan, begin, end" to cerr if outside (0x64852c)
 getMaxValue() = getValue(maxScan)   (0x648176)
 ```
+
 The model peak is the plain SUM of raw intensities of the selected model peaks. It is not normalised.
 
 ### 4.8 calculatePeakFunction(peak, model) (0x5ea4f0, Observed)
+
 Ordinary least-squares fit of each ion trace against the model shape over the overlap of the two scan ranges:
+
 ```
 lo = max(model.begin, peak.firstScan); hi = min(model.end, peak.lastScan)
 n = hi - lo + 1; if n < 3: return []
@@ -377,17 +416,21 @@ X row k = [1, (double) scan, model.getValue(scan)], Y_k = peak.getValue(scan), s
 gsl_multifit_linear(X, Y) -> c = (c0, c1, c2)
 return [roundSig(c0, 8), roundSig(c1, 8), roundSig(c2, 8)]
 ```
+
 So intensity_ion(scan) ~ c0 + c1*scan + c2*model(scan). c0 + c1*scan is a local linear baseline. c2 is the share of the model peak in this ion trace. `roundSig` is `PeakEssential::roundSignificantFigures(x, 8)`.
 
 ### 4.9 calculatePeakIntegral(model, c2, peak) (0x5ea99e, Observed)
+
 ```
 lo = max(model.begin, peak.firstScan); hi = min(model.end, peak.lastScan)
 integral = sum over scan in [lo, hi] of (AN_MODELED_VALUES_FOR_INTEGRATION ? c2 * model.getValue(scan) : peak.getValue(scan))
 peak.setIntegral(integral)
 ```
+
 Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). Observed.
 
 ### 4.10 Settings summary (deconvolution)
+
 | Setting | Use | Evidence |
 |---|---|---|
 | AN_DECONVOLUTION_WIDTH | width W (in scans) of the matched 2nd-derivative Gaussian filter on the binned apex-intensity trace; filter length = AN_NUMBER_BINS * W bins | 0x5e907e, 0x5ebb30 |
@@ -398,6 +441,7 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 | QUANT_EXCL_IONS | ions excluded from model-peak selection only | 0x5e946a |
 
 ### 4.11 Unknowns (deconvolution)
+
 - `tools::Filter::matched2ndDerivativeGaussianFilter<double>` kernel (sigma vs. W, kernel length, normalisation, edge handling). This is needed to reproduce the threshold T = 5.0 exactly.
 - Default values of AN_DECONVOLUTION_WIDTH, AN_NUMBER_BINS, AN_MIN_PEAK_NUMBER, AN_MIN_HEIGHT_BP and the GCMSAnalyzer ctor default of MIN_PEAK_NUMBER.
 - Meaning of `getDataType() == 2`, and how `Compound(rt, ints, ions, res)` uses `res`.
@@ -430,17 +474,22 @@ Template instance `<int,float>`. vtable `LibrarySearch<int,float>` at 0xcb7258 (
 | 17 | autoQuantificationIonAssignment(n) |
 
 ### 5.1 Intensity weighting: Library::scaleCompound(Spectrum<int,float>) (0x621960, objdump; Observed)
+
 ```
 for each peak i: scaled[i] = (float)( pow(ion_i, LS_SCALE_FACTOR_ION) * pow((double)intensity_i, LS_SCALE_FACTOR_VALUE) )
 return new Spectrum<float,float>(ions, scaled) with the same bin width, RI and RT
 ```
+
 This is the Stein-Scott style mass/intensity weighting m^a * I^b. LS_SCALE_FACTOR_ION is at 0xcc2138 and LS_SCALE_FACTOR_VALUE at 0xcc2140. No normalisation happens here; the cosine in 5.3/5.4 is scale-invariant.
 
 ### 5.2 Mass filter: Library::filterMass(ion) (0x626236, Observed)
+
 Returns true (ion excluded) if `lo <= ion <= hi` for any pair in `LS_MASS_FILTER` (a set<pair<float,float>>, so it is sorted). It returns false early at the first pair with `ion < lo`. Excluded ions are skipped on the library side and are not counted as unmatched observed ions.
 
 ### 5.3 Pure score: calculatePureSpecSimScore(obs, lib) (0x621fa6, Ghidra; Observed)
+
 Both inputs are scaled spectra (5.1). Ions are assumed ascending (Inferred: the merge logic needs it). This is a weighted cosine over the union of peaks. Unmatched peaks on either side are down-weighted by `NM = LS_SCALE_FACTOR_NO_MATCH`.
+
 ```
 num = d1 = d2 = 0; io = 0; it = 0           # io: obs match cursor, it: obs "consumed" cursor
 for k in 0 .. lib.n-1:
@@ -464,11 +513,14 @@ for k in 0 .. lib.n-1:
 for remaining it < obs.n: if not filterMass(obs.ion[it]): d2 += (NM * obs.val[it])^2
 return (d1 > 0 and d2 > 0) ? num / (sqrt(d1) * sqrt(d2)) : 0
 ```
+
 - The match tolerance is a hard-coded 0.01 m/z (Observed literal), in addition to exact equality.
 - Quirk (Inferred from the control flow): if step-back (`io -= 1`) lands on an observed peak that was already matched, that peak matches twice. `it` is then one ahead, and the next observed peak is never added to `d2`. This only occurs with closely spaced high-resolution ions.
 
 ### 5.4 Impure score: calculateImpureSpecSimScore(obs, lib) (0x6226d8, Ghidra; Observed)
+
 Same matching as 5.3 without the `it` bookkeeping. Observed peaks that match no library ion are ignored, which gives a "reverse search" cosine over library ions only:
+
 ```
 for each non-filtered lib ion: match as in 5.3 (tolerance 0.01)
    matched: vo = obs.val[io]; io += 1      unmatched: vl *= NM; vo = 0
@@ -477,12 +529,14 @@ return (d1 > 0 and d2 > 0) ? num / (sqrt(d1)*sqrt(d2)) : 0
 ```
 
 ### 5.5 RI score: Library::calculateRISimScore(ri1, ri2, sigma) (0x622ae0, Observed)
+
 ```
 if |ri1 - ri2| > 3*sigma: return 0
 return exp( -(ri1 - ri2)^2 / (2*sigma^2) )          # sigma = LS_RI_DIFF
 ```
 
 ### 5.6 LibrarySearch::getLibraryHits(comp, bin_width) (0x62657a, Ghidra + objdump; Observed unless marked)
+
 ```
 PF = LS_PURE_FACTOR (0xcc2120); IF = LS_IMPURE_FACTOR (0xcc2128); sigma = LS_RI_DIFF (0xcc2118)
 has_ri = comp.RI >= 0
@@ -509,6 +563,7 @@ for L in lib (std::set<LibraryCompound*>, i.e. pointer order):
     hits.push(LibraryHit(L, spec_sim=s, ri_sim=ri, overall=o))
 std::sort(hits) by overall ascending (LibraryHit::operator< 0x62dcbe); std::reverse -> descending
 ```
+
 - If neither score is enabled, every hit has overall = 1.0 (0xa96c48). If only RI is enabled, overall = ri.
 - When either RI is missing, the "RI" comparison uses corrected RT / 1000 with the same sigma (Observed). The time unit is Inferred to be ms, so the comparison is in seconds.
 - The bin-width branch at 0x626800..0x626a80 has three cases: lib coarser than compound, lib finer than compound, and equal. Their outcome is summarised above (Inferred intent). The exact branch conditions are in the Ghidra output and were not re-verified in objdump.
@@ -516,7 +571,9 @@ std::sort(hits) by overall ascending (LibraryHit::operator< 0x62dcbe); std::reve
 - `AMSLibrary<int,float>::getLibraryHits` (0x62e8f4) is a variant: no rebinning or scaling, filter `ri >= 0` (always true), `overall = s * ri` with no cube root (Observed).
 
 ### 5.7 mapCompoundsToLibrary(comps, cutoff, alternatives*) (0x629526, Ghidra; Observed)
+
 This is a greedy one-to-one assignment between detected compounds and library entries.
+
 ```
 alternatives.clear(); unassigned = set(comps); all_hits = map<LibraryCompound*, list<LibraryHit>>
 for comp in comps (pointer order):
@@ -537,9 +594,11 @@ while all_hits not empty:
     if best_ref: result[best_ref] = best_hit; unassigned.remove(best_hit.comp); all_hits.erase(best_ref)
 return result        # map<LibraryCompound*, LibraryHit(detected compound)>
 ```
+
 Ties are broken by pointer order (first strictly greater wins), so tie results are not reproducible across runs (Inferred).
 
 ### 5.8 GUI flow: ComponentDetector::librarySearch (0x4b3bc2, Observed)
+
 - It calls `mapCompoundsToLibrary(comps, cutoff = 0.0, &all_hits)`; the `pxor xmm0` at 0x4b3d2f shows the cutoff is zero.
 - `compounds[comp]` = all hits for comp (descending). `mapping[comp]` = the assigned library hit, or `LibraryHit(null)` if there is none.
 - `LS_CUTOFF` is not applied during the search. It is compared against `getOverallScore()` later:
@@ -548,6 +607,7 @@ Ties are broken by pointer order (first strictly greater wins), so tie results a
   - BatchQuantificator::startAnalysis/createLibrary
 
 ### 5.9 Unknowns (library search)
+
 - Defaults of all LS_* settings.
 - The exact `Spectrum::getBinnedSpectrum` / `getCentroidCompound` algorithms (0x6019d6, 0x60e212). These were not decompiled.
 - The Wave score variants (vtbl 4/5) and `calculateScore_frag` (vtbl 6): when they are used.
@@ -558,38 +618,46 @@ Ties are broken by pointer order (first strictly greater wins), so tie results a
 ## 6. RI calibration and RT shift correction
 
 ### 6.1 RICalculator data (Observed)
+
 - `rt2ri` and `ri2rt` are `std::map<double,double>`. `drt` is a global retention-time shift. `source` is a string (the ctor argument).
 - `addCalibrationPair(rt, ri)` (0x6d21f0) inserts rt→ri and ri→rt. std::map::insert keeps the FIRST value for a duplicate key.
 - `isCalibrated()` = `rt2ri.size() != 0` (0x6d2faa).
 - `getRetentionTimeShift(rt)` (0x6d3566, vtbl[2]) and `getRetentionTimeCorrection()` both return `drt`. The shift is constant, not RT-dependent.
 
 ### 6.2 calculateRI(rt) (0x6d2b06, Observed) - piecewise linear, linear extrapolation
+
 ```
 if rt2ri.size < 2: return -1.0
 c = rt - drt
 it = rt2ri.lower_bound(c)                  # first calibration RT >= c
-if it->rt == c: return it->ri              # NB: dereferences end() if c > max RT (UB, then falls through)
+if it->rt == c: return it->ri              # NB: dereferences end() if c > max RT (UB); control flow after that is unknown
 if it == begin: ++it                       # below range -> use first segment
 if it == end:   --it                       # above range -> use last segment
 (rt1, ri1) = prev(it); (rt2, ri2) = it
 return ri1 + (c - rt1) * (ri2 - ri1) / (rt2 - rt1)
 ```
+
 This is the linear (van den Dool-Kratz) form only. No Kovats logarithmic form exists in the code: there is no other RICalculator implementation, and "ESTIMATED KOVATS RI" is only a UI label (Observed via symbols/strings). Extrapolation outside the calibration range uses the first or last segment.
 
 ### 6.3 calculateRT(ri) (0x6d2d34, Observed)
+
 Inverse over `ri2rt` with the same segment selection: `rt = rt1 + (ri - ri1)*(rt2 - rt1)/(ri2 - ri1) + drt`. An exact key match returns `rt + drt`. With fewer than 2 pairs it returns -1.
 
 ### 6.4 Applying RI to compounds: calculateRI<int,float>(compounds) (0x3f98f4, Observed)
+
 ```
 for comp in compounds:
     rt = comp.getRetentionTime()
     comp.setRetentionTimeCorrection(getRetentionTimeShift(rt))   # = drt
     comp.setRetentionIndex(calculateRI(rt))
 ```
+
 Called at the end of every deconvolution (4.6). `getCorrectedRetentionTime()` (used in 5.6) is Inferred to be `RT - correction`.
 
 ### 6.5 RT shift correction: applyRetentionTimeCorrection<int,float>(comps, lib, ref, cutoff) (0x3f9e9e, Observed)
+
 This is the "advanced RT shift correction". One reference library compound is located in the run, and the whole calibration is shifted so that the reference compound lands on its library RI.
+
 ```
 win = 3 * LS_RI_DIFF; best = null; best_score = 0
 for comp in comps:
@@ -602,6 +670,7 @@ elif best.RI == -1: drt = best.RT - ref.RT
 else: drt = calculateRT(best.RI) - calculateRT(ref.RI)      # RICalculator vtbl[1], Inferred = calculateRT
 return drt
 ```
+
 Callers then run `calculateRI(comps)` again:
 - `RICalibrationWizard::RISetter::applyRICorrection` (0x3f5b32) uses its stored ref_comp and cutoff.
 - `CalibrationSetter::applyRICorrection` (0x494f40) uses the reference compound from a combo box and the cutoff from a spin box.
@@ -609,6 +678,7 @@ Callers then run `calculateRI(comps)` again:
 Quirk (Inferred): `calculateRT` adds the OLD `drt`. A second application therefore computes the new drt relative to the old one, and does not accumulate it. The result is exact only when the old drt is 0.
 
 ### 6.6 Building the calibration: CalibrationPage::setDataToChromatogram (0x3eff6e, objdump; Observed)
+
 ```
 ric = RICalculator("not available")
 for row i in table:
@@ -616,9 +686,11 @@ for row i in table:
     if rt >= 0: ric.addCalibrationPair(MainWindow::mapXUnitToTime(rt), ri)   # display unit -> internal time
 scan.setRICalculator(ric); scan.writeIndexFile()
 ```
+
 `mapXUnitToTime` (0x3b5d6e) applies `TimeMapper::mapUnitToTime` only when a TIC plot exists.
 
 ### 6.7 Unknowns (RI)
+
 - How the wizard proposes the alkane RT/RI table rows (CompoundDetector + library matching in RICalibrationWizard, startRICalibration 0x3e93b8). Not read.
 - TimeMapper units, and the internal RT unit (ms is Inferred from the `/1000` fallbacks).
 - RICalculator ctor default of `drt` (Inferred 0). The stream format (fromStream 0x6d315a) was not read.
@@ -627,9 +699,11 @@ scan.setRICalculator(ric); scan.writeIndexFile()
 ## 7. Quantification ion selection (Observed); other quantification NOT ANALYZED
 
 ### 7.1 Compound::autoQuantificationIonAssignment(n) (0x6109b0)
+
 Calls slot 16 with `excl = QUANT_EXCL_IONS`, `min_dist = (float) QUANT_MIN_DIST_IONS` and `quality_cutoff = (float) QUANT_QUALITY_CUTOFF`.
 
 ### 7.2 Compound::autoQuantificationIonAssignment(excl, min_dist, n, quality_cutoff) (0x610442, Ghidra + objdump)
+
 ```
 peaks = getPeakEssentials()                  # the PeakEssential copies stored in 4.6
 if peaks empty: return {}
@@ -645,13 +719,16 @@ if count < n:
     for p in order while count < n: Q.insert(p.ion); count += 1     # restarts at the top, no filters
 return Q
 ```
+
 - Quality is "lower is better", consistent with the `quality <= 10` model-peak rule in 4.6.
 - Fallback quirk (Observed): the fallback restarts from the highest-integral peak. Re-inserting an ion that is already selected still increments `count`, so the result can hold fewer than n ions.
 - Duplicate ions from the duplicated peaks in 4.5 behave the same way.
 - Ties in integral are ordered by list position (list::sort is stable, then reversed).
 
 ### 7.3 QuantIonChecker::detectQuantIons (0x5b70aa)
+
 For every mapped compound `c`:
+
 ```
 cc = c.getCentroidCompound()
 added = cc.autoQuantificationIonAssignment(this.ion_number)
@@ -661,6 +738,7 @@ else: comp2ions[c] = added
 ```
 
 ### 7.4 Unknowns (quantification)
+
 - `LibraryCompound` overrides of the assignment (0x61db1c, 0x61e19a).
 - `getCentroidCompound` (whether it keeps PeakEssentials).
 - `QuantIonChecker::detectCompounds2Process`.
@@ -669,6 +747,7 @@ else: comp2ions[c] = added
 - MID, normalizers, statistics tests and PCA are not analyzed. Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
 
 ## 8. Open gaps (ranked by impact on reproducing results)
+
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
 2. `tools::Filter::matched2ndDerivativeGaussianFilter<double>` kernel. It sets the component boundaries in 4.5 together with the fixed threshold 5.0.
 3. Spectrum binning and centroiding (`getBinnedSpectrum`, `getCentroidCompound`). Library scores depend on them when bin widths differ.
@@ -686,6 +765,7 @@ else: comp2ions[c] = added
 10. MID, normalizers, statistics tests, PCA: not started.
 
 ## 9. Ranked next steps
+
 - Locate `GCMSSettings::fromDisk` callers and any default settings file in the install.
 - Decompile `tools::Filter::matched2ndDerivativeGaussianFilter<double>` and `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
