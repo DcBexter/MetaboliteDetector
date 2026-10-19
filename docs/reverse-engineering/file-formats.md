@@ -106,35 +106,39 @@ and compounds with peak records as not supported.
 Symbols: `GCMSDiskScanWriter<int,float>` (writer), `GCMSDiskScan<int,float>` (reader, wraps a
 `DataProvider<int,float>`), `DataProvider<int,float>::readIndexFile` / `writeIndexFile`.
 
-File naming
-- Index file = data file name + `".idx"` (Observed: `DataProvider::readIndexFile` 0x75bf30 appends ".idx"
-  to `f_name` and opens it `in|binary`; `GCMSDiskScanWriter::writeIndexFile` 0x6e7d00 appends ".idx" to
-  `cache_file` and opens `out|trunc|binary`).
-- Data file = the name passed to `GCMSDiskScanWriter(char const*, DataType)` 0x6e610c, stored as the
-  cache file name. The extension `.bin` is Inferred from the brief, not verified in code.
+Sample files: `docs/reverse-engineering/tools/diskscan/make-cache.sh` runs the old binary's own
+`CdfImporter(cdf).importData(stem)` on the 15 example runs (`LD_PRELOAD` driver). The output is
+deterministic (two runs give byte-identical files). Everything marked "byte-verified" below was checked
+with a parser on all 15 pairs: every index is consumed exactly and every record header matches its
+index entry. The reader is `md_core::diskscan`; the files are never committed.
+
+File naming (Observed)
+- `importData(stem)` writes `<stem>.bin` (data) and `<stem>.idx` (index) (byte-verified).
+- `DataProvider::readIndexFile` 0x75bf30 appends ".idx" to `f_name`; `GCMSDiskScanWriter::writeIndexFile`
+  0x6e7d00 appends ".idx" to `cache_file` and opens `out|trunc|binary`.
+- `CdfImporter::importData` 0x7cc4cc creates the writer with `DataType = 2` (Observed: `mov $0x2,%edx`
+  before the `GCMSDiskScanWriter(char const*, DataType)` call at 0x7cc512).
 
 ### 2.1 Scan record (data file)
 
 Written by `GCMSDiskScanWriter::addScan(uint scan, double time, vector<float>& masses,
-vector<int>& values, streampos pos, double tic)` 0x6e6888 (Observed: the decompiled write sequence below).
+vector<int>& values, streampos pos, double tic)` 0x6e6888 (Observed; byte-verified).
 The vector overload 0x6e7072 calls it with `pos = 0` and `tic = -1.0` (Observed), so that path writes the
 masses. The other overloads (0x6e6fd6, 0x6e65c8) were not decompiled.
 
-Write order (Observed; sizes from the `write` argument types and the `size_all` arithmetic):
-
 | Offset in record | Type | Meaning | Tag |
 |---|---|---|---|
-| 0 | i32 | `size_all`: total record length in bytes including this field. Masses written: 36 + 8n. Masses shared: 36 + 4n | Observed (0x6e6888) |
-| 4 | i64 | `masses_ptr`: absolute file offset of the mass array (record start + 36 + 4n when masses written, else the given pos) | Observed (0x6e6888) |
-| 12 | f64 | `tic`: total ion current; computed by `calculateTIC` when passed -1.0 | Observed (0x6e6888) |
-| 20 | u32 | scan number | Observed (0x6e6888) |
-| 24 | f64 | retention time (`time`) | Observed (0x6e6888) |
-| 32 | u32 | n = number of values (ions) in this scan | Observed (0x6e6888) |
-| 36 | i32[n] | intensities (`s_values`) | Observed (0x6e6888) |
-| 36 + 4n | f32[n] | masses (`s_masses`), present only when masses are written | Observed (0x6e6888) |
+| 0 | i32 | `size_all`: total record length in bytes including this field. Masses written: 36 + 8n. Masses shared: 36 + 4n | Observed, byte-verified |
+| 4 | i64 | `masses_ptr`: absolute file offset of the mass array (record start + 36 + 4n when masses written, else the given pos) | Observed, byte-verified |
+| 12 | f64 | `tic`: total ion current; `CdfImporter` passes the `.cdf`'s `total_intensity`, which is not the sum of the spectrum | Observed, byte-verified |
+| 20 | u32 | scan number (0-based) | Observed, byte-verified |
+| 24 | f64 | retention time in ms. `CdfImporter` stores `(double)(float)seconds * 1000`, so times carry f32 precision | Observed, byte-verified |
+| 32 | u32 | n = number of values (ions) in this scan | Observed, byte-verified |
+| 36 | i32[n] | intensities (`s_values`) | Observed, byte-verified |
+| 36 + 4n | f32[n] | masses (`s_masses`), present only when masses are written | Observed, byte-verified |
 
-Header of the data file: none observed. The first record starts at offset 0 (Inferred: addScan begins
-with `seekp(..., _S_beg)` whose offset operand Ghidra did not recover, so the start position is Unknown).
+Header of the data file: none. The first record starts at offset 0 and records follow each other
+(byte-verified).
 
 Side effects of `addScan` (Observed, 0x6e6888), kept in memory and written to the index:
 - `recptr[scan]` = file offset of the record start (i64)
@@ -152,41 +156,61 @@ Side effects of `addScan` (Observed, 0x6e6888), kept in memory and written to th
   base_dev, true, stat)`, then keeps only the intensities inside detected peaks and the corresponding masses
   (taken from `s_masses[begin + i]`), replacing both vectors. Thresholds come from
   `GCMSDiskScanWriter::setCompressionParameter(double, double, double)` 0x6e7164 (values not recovered).
+  The record layout stays the same, so a reader needs no special case.
 - `CENTROID` type (Observed, 0x6e6888): stores a zeroed BaselineStatistics and writes the data unchanged.
 - Other profile types: data written unchanged (Observed, 0x6e6888: no branch).
+- The CDF import (`DataType = 2`) writes the spectra unchanged with zeroed statistics (byte-verified:
+  the spectra equal the `.cdf`). Whether 2 is CENTROID is Inferred.
 
 ### 2.3 Index file (.idx)
 
-Writer: `GCMSDiskScanWriter::writeIndexFile` 0x6e7d00. Reader: `DataProvider::readIndexFile` 0x75bf30.
-Both decompiles are **truncated** right after opening the file (`c_str` no-return artifact). The field list
-below is **Inferred** from the local variable names in both functions, not from the byte-level writes.
+Reader: `DataProvider::readIndexFile` 0x75bf30 (Observed from the disassembly: the sizes of the
+`istream::read` calls, the checks and the map inserts; Ghidra's decompile is truncated). Byte-verified on
+all 15 sample files. Writer: `GCMSDiskScanWriter::writeIndexFile` 0x6e7d00 (not disassembled; the
+sample files match the reader).
 
-| Item (inferred order) | Inferred type / content | Evidence (local names) |
+| Item | Type | Meaning |
 |---|---|---|
-| magic number | i64 (value not recovered) | `magic_number` (longlong) in both functions |
-| type size markers | u32 values for sizeof(int), sizeof(double), sizeof(long long) | `size_int`, `size_double`, `size_long_long` |
-| TOF calibration polynomial | u32 `poly_size` + f64[poly_size] | `poly_size`; `setTOFCalibrationPolynomial` 0x6e71b6 |
-| all ions (masses) | u32 `size_all_ions` + f32[] | `size_all_ions`, `ions` set |
-| scan count | u32 | `GCMSDiskScan::initialization` 0x6e5ba6 uses `getScanCount` |
-| per-scan entries | scan (u32), rt (f64), tic (f64), record pos (i64), mass pointer (i64), num_val (u32), i_compressed (int) | `scan`, `rt`, `tic`, `pos`, `mass_ptr`, `num_val`, `i_compressed` |
-| baseline statistics per compressed scan | mean, sd, msd, nf (f64 each) | `mean`, `sd`, `msd`, `nf` |
-| features | u32 count + pairs of length-prefixed strings | `f_count`, `s_key`, `s_value`, `key`, `value` |
-| RI calibration | embedded `RICalculator` (see section 4.1) | local `RICalculator ric` in `writeIndexFile` |
+| magic | i64 | `0x4b494104`; any other value throws "Error opening index file!" |
+| size_int, size_double, size_long_long | u32 x3 | must be 4, 8, 8, else throws "Number of used bytes for primitive data types does not match." |
+| scan count | u32 | number of per-scan entries below |
+| mass size | u32 | byte size of one mass (4 = float); also the stride of the ion list |
+| value size | u32 | byte size of one intensity (4 = int) |
+| feature count | u32 | then per feature: u32 length + key bytes, u32 length + value bytes. The CDF import writes the 11 ANDI attributes it looks for (`acq_time`, `experiment_type`, `number_of_scans`, ...); missing ones as " " |
+| TOF polynomial | u32 count + f64[count] | `FilteredDataProvider` applies it to the masses; the CDF import writes count 0 |
+| global baseline statistics | 4 x f64 + i64 | zero in the samples; order follows `BaselineStatistics(double, double, double, double, long long)` |
+| RI calibration | `RICalculator::fromStream` (section 4.1) | samples: 0 entries, drt 0.0, name "not calibrated" |
+| ion count | u32 | then `ion count * mass size` bytes of distinct masses; the reader skips them with `seekg` |
+| per-scan entries | scan count x 84 bytes | see below |
+
+Per-scan entry (84 bytes):
+
+| Offset | Type | Meaning |
+|---|---|---|
+| 0 | u32 | scan number |
+| 4 | i64 | file offset of the record in the `.bin` |
+| 12 | i64 | `masses_ptr` (same as in the record) |
+| 20 | f64 | tic |
+| 28 | f64 | retention time in ms |
+| 36 | u32 | n (values in the scan) |
+| 40 | u32 | DataType, copied into the provider for each entry (2 in the samples) |
+| 44 | 4 x f64 + i64 | BaselineStatistics of the scan (zero in the samples) |
+
+The reader fills `rt2scan`, `scan2rt`, `recptr`, `massptr`, `scan2numval` and `scan2stat` from the
+entries and finally throws "Error reading data." if the stream failed.
 
 ### 2.4 Reading
 
 `GCMSDiskScan::getSpectrum(unsigned int)` 0x6e2638 (truncated): calls `DataProvider::moveToScan`,
-`getTime`, `getIonCount`, `getSignals(0, n-1)`, `getMasses(0, n-1)`. The provider implementation that
-seeks into the data file using the index tables is not decoded (gap).
+`getTime`, `getIonCount`, `getSignals(0, n-1)`, `getMasses(0, n-1)`. With the index above, a reader
+seeks to the record offset for the intensities and to `masses_ptr` for the masses. `md_core::diskscan`
+does that and checks each record header against its index entry.
 
 ### Unknowns (section 2)
-- Byte-level index layout and magic value (writer and reader are truncated; the magic is not recovered).
-- `DataType` enum values (PROFILE, CENTROID, COMPRESSED_PROFILE, ...).
-- `setCompressionParameter` default thresholds and the BaselineStatistics field order.
-- Meaning of the seekp offset in `addScan` (start position of the record).
-- Whether the data file has a header (none observed in the writer).
-- The DataProvider reader (seek logic) and `GCMSDiskScanWriter::close`.
-- File extension `.bin` (not verified in code).
+- `DataType` enum names for the values (2 is what `CdfImporter` writes).
+- `setCompressionParameter` default thresholds and the meaning of the BaselineStatistics fields.
+- Whether `writeIndexFile` can write another magic or other type sizes (only the reader was disassembled).
+- How `FilteredDataProvider` applies the TOF polynomial (`md_core::diskscan` rejects caches that have one).
 
 ---
 
@@ -521,7 +545,7 @@ Unknown; probably the display/export of a compound, not the MSP reader).
 
 ## Unknowns and gaps (summary)
 
-1. .bin/.idx: index byte layout and magic value; DataType enum; compression thresholds; reader seek logic.
+1. .bin/.idx: DataType enum names; compression thresholds; TOF polynomial use (layout decoded, section 2).
 2. .cmp: PeakEssential<float> and Peak<int,float> layouts; reader details.
 3. .calib: rt unit; RICalculator string member; loop structure of toDisk (Inferred).
 4. .mzcalib: reader; precision; encoding.

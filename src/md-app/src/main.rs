@@ -1,6 +1,6 @@
 //! MetaboliteDetector desktop app (egui). Analysis lives in `md-core`; this crate only draws.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
@@ -119,6 +119,14 @@ fn spawn<T: Send + 'static>(
     rx
 }
 
+/// Old MetaboliteDetector caches (`.bin` + `.idx`) by extension, everything else as ANDI-MS NetCDF.
+fn read_chromatogram(p: &Path) -> Result<md_core::Chromatogram, String> {
+    match p.extension().is_some_and(|e| e.eq_ignore_ascii_case("bin")) {
+        true => md_core::diskscan::read(p).map_err(|e| e.to_string()),
+        false => md_core::andi::read(p).map_err(|e| e.to_string()),
+    }
+}
+
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).
 fn color(i: usize) -> egui::Color32 {
     egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.85, 0.5, 1.0).into()
@@ -129,8 +137,7 @@ impl App {
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let p = path.clone();
         let rx = spawn(ctx, move || {
-            md_core::andi::read(&p)
-                .map_err(|e| e.to_string())
+            read_chromatogram(&p)
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
@@ -272,14 +279,27 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open NetCDF (ANDI-MS)…").clicked()
+                    if ui.button("Open chromatograms…").clicked()
                         && let Some(paths) = rfd::FileDialog::new()
-                            .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                            .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
+                            .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
                             .pick_files()
                     {
                         for path in paths {
                             self.open(ui.ctx(), path);
                         }
+                    }
+                    if let Some(r) = self.runs.get(self.active)
+                        && ui.button("Export as NetCDF…").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .add_filter("NetCDF (ANDI-MS)", &["cdf"])
+                            .set_file_name(format!("{}.cdf", r.name))
+                            .save_file()
+                    {
+                        // shortcut: writes on the UI thread (~50 ms per example run); spawn if runs grow.
+                        self.error = md_core::andi::write(&path, &r.data)
+                            .err()
+                            .map(|e| format!("{}: {e}", path.display()));
                     }
                     self.library_menu(ui);
                     if ui.button("Close all").clicked() {
@@ -324,7 +344,7 @@ impl eframe::App for App {
                     self.load_note
                 ));
             } else {
-                ui.label("Open one or more ANDI-MS NetCDF chromatograms via File → Open.");
+                ui.label("Open one or more chromatograms (NetCDF or old .bin) via File → Open.");
             }
         });
 

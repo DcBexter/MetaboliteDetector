@@ -1,9 +1,12 @@
 //! ANDI-MS (ASTM E2078 / AIA) NetCDF-3 import: the vendor-neutral GC/MS export format
 //! that MetaboliteDetector 3.x imported via its "NetCDF import" dialog.
 
+use std::cell::RefCell;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::rc::Rc;
 
-use netcdf3::{DataVector, FileReader};
+use netcdf3::{DataSet, DataVector, FileReader, FileWriter, Version};
 
 use crate::Chromatogram;
 
@@ -11,6 +14,8 @@ use crate::Chromatogram;
 pub enum AndiError {
     #[error("cannot read NetCDF file: {0:?}")]
     Read(netcdf3::ReadError),
+    #[error("cannot write NetCDF file: {0:?}")]
+    Write(netcdf3::WriteError),
     #[error("missing ANDI-MS variable `{0}`")]
     MissingVariable(&'static str),
     #[error("inconsistent ANDI-MS data: {0}")]
@@ -56,6 +61,70 @@ pub fn read(path: impl AsRef<Path>) -> Result<Chromatogram, AndiError> {
     )
 }
 
+/// Writes the variables `read` needs, which is the core of ANDI-MS (raw data group).
+pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> {
+    let invalid = |e| AndiError::Inconsistent(format!("{e:?}"));
+    let i32s = |v: Vec<usize>| -> Result<Vec<i32>, AndiError> {
+        v.into_iter()
+            .map(|x| {
+                i32::try_from(x)
+                    .map_err(|_| AndiError::Inconsistent(format!("{x} points do not fit ANDI-MS")))
+            })
+            .collect()
+    };
+    let scans = c.scan_count();
+    let index = i32s(c.offsets[..scans].to_vec())?;
+    let count = i32s(c.offsets.windows(2).map(|w| w[1] - w[0]).collect())?;
+    let mut ds = DataSet::new();
+    ds.add_fixed_dim("scan_number", scans).map_err(invalid)?;
+    ds.add_fixed_dim("point_number", c.mz.len())
+        .map_err(invalid)?;
+    for name in ["scan_acquisition_time", "total_intensity"] {
+        ds.add_var_f64(name, &["scan_number"]).map_err(invalid)?;
+    }
+    for name in ["scan_index", "point_count"] {
+        ds.add_var_i32(name, &["scan_number"]).map_err(invalid)?;
+    }
+    for name in ["mass_values", "intensity_values"] {
+        ds.add_var_f32(name, &["point_number"]).map_err(invalid)?;
+    }
+    // netcdf3 writes value by value; buffer in memory (FileWriter::close would hide a
+    // BufWriter's final flush error) and write the file once.
+    let buf = SharedBuf::default();
+    let mut w = FileWriter::open_seek_write("", Box::new(buf.clone())).map_err(AndiError::Write)?;
+    // Classic NetCDF-3 caps file offsets at 2 GiB; the 64-bit-offset variant lifts that.
+    w.set_def(&ds, Version::Offset64Bit, 0)
+        .map_err(AndiError::Write)?;
+    w.write_var_f64("scan_acquisition_time", &c.scan_times_s)
+        .and_then(|_| w.write_var_f64("total_intensity", &c.tic()))
+        .and_then(|_| w.write_var_i32("scan_index", &index))
+        .and_then(|_| w.write_var_i32("point_count", &count))
+        .and_then(|_| w.write_var_f32("mass_values", &c.mz))
+        .and_then(|_| w.write_var_f32("intensity_values", &c.intensity))
+        .and_then(|_| w.close())
+        .map_err(AndiError::Write)?;
+    let bytes = buf.0.take().into_inner();
+    std::fs::write(path, bytes).map_err(|e| AndiError::Write(e.into()))
+}
+
+#[derive(Clone, Default)]
+struct SharedBuf(Rc<RefCell<Cursor<Vec<u8>>>>);
+
+impl Write for SharedBuf {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().write(data)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Seek for SharedBuf {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.0.borrow_mut().seek(pos)
+    }
+}
+
 fn first_number(attr: &netcdf3::Attribute) -> Option<f64> {
     attr.get_f64()
         .map(|v| v.first().copied())
@@ -89,7 +158,7 @@ fn to_f32(data: DataVector, scale: f64) -> Vec<f32> {
 }
 
 /// Validates the ANDI arrays (untrusted file input) and converts them to offsets.
-fn build(
+pub(crate) fn build(
     scan_times_s: Vec<f64>,
     scan_index: &[f64],
     point_count: &[f64],
@@ -186,6 +255,23 @@ mod tests {
         assert_eq!(c.offsets, vec![0, 2, 3]);
         assert_eq!(c.tic(), vec![150.0, 80.0]);
         assert_eq!(c.spectrum(1).0, &[73.0]);
+    }
+
+    #[test]
+    fn written_file_reads_back() {
+        let c = build(
+            vec![1.5, 2.0],
+            &[0.0, 2.0],
+            &[2.0, 1.0],
+            vec![73.0, 147.5, 73.0],
+            vec![10.0, 0.5, 20.0],
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("md-core-andi-w-{}.cdf", std::process::id()));
+        write(&path, &c).unwrap();
+        let back = read(&path);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(back.unwrap(), c);
     }
 
     #[test]

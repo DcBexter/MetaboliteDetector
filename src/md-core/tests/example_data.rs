@@ -51,6 +51,37 @@ fn reads_all_example_runs() {
     }
 }
 
+/// The old app's `.bin`/`.idx` cache of each run (made by
+/// docs/reverse-engineering/tools/diskscan/make-cache.sh into `$MD_OLD_CACHE`) holds the same spectra.
+#[test]
+fn old_cache_matches_cdf() {
+    let Some(dir) = std::env::var_os("MD_OLD_CACHE").map(PathBuf::from) else {
+        eprintln!("skipped: MD_OLD_CACHE not set");
+        return;
+    };
+    for path in runs() {
+        let bin = dir.join(path.file_name().unwrap()).with_extension("bin");
+        let old =
+            md_core::diskscan::read(&bin).unwrap_or_else(|e| panic!("{}: {e}", bin.display()));
+        let cdf = md_core::andi::read(&path).unwrap();
+        let n = name(&path);
+        assert_eq!(
+            (&old.offsets, &old.mz, &old.intensity),
+            (&cdf.offsets, &cdf.mz, &cdf.intensity),
+            "{n}"
+        );
+        // The old importer kept times as f32 seconds before scaling them to ms.
+        let mut times = old.scan_times_s.iter().zip(&cdf.scan_times_s);
+        assert!(times.all(|(a, b)| (a - b).abs() <= 1e-7 * b.abs()), "{n}");
+        // Export to NetCDF and read back.
+        let out = std::env::temp_dir().join(format!("md-core-export-{}-{n}", std::process::id()));
+        md_core::andi::write(&out, &old).unwrap();
+        let back = md_core::andi::read(&out);
+        std::fs::remove_file(&out).ok();
+        assert_eq!(back.unwrap(), old, "{n}");
+    }
+}
+
 #[test]
 fn detects_peaks_in_example_runs() {
     for path in runs() {
