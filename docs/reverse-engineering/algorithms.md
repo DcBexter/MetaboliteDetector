@@ -205,6 +205,8 @@ else: warn "Timeshift is greater or equal 1"; no interpolated max
 bounds failure: "Strange peak ... Can not calculate precise maximization time!"
 ```
 
+`polynomialRegression(X, Y, 2)` (0x6c3292) builds the Vandermonde matrix `[1, x, x²]` and calls `gsl_multifit_linear` (GSL 2.x: column balancing, SVD, truncation at `DBL_EPSILON`). The rounding is `(int)(t + 0.5)` (`cvttsd2si` at 0x5f3b0b). With integer intensities the exact vertex often lies on a half step. Which way the old code rounds such a tie then depends on the fit's rounding error in absolute bin coordinates. On the 15 example runs it rounds 217 of 267 ties down, and three equal values (flat top) give an arbitrary vertex near the apex. Observed with the golden driver (issue 46).
+
 ### 3.7 determinePeakQuality (MCP 0x6f3d28; syms 0x5f3d28)
 
 ```
@@ -755,6 +757,10 @@ else: comp2ions[c] = added
 - The source of `ion_number` (Inferred QUANT_ION_NUMBER).
 - The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
 - MID, normalizers, statistics tests and PCA are not analyzed. Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+
+## 7b. Natural isotope calculator (Observed)
+
+`tools::NaturalMIDCalculator` (0x6d92bc) reads a table of `symbol, nominal mass, exact mass, percent` rows (`:/isotopes.csv`, embedded in the binary; extracted copy: `tools/isotopes/old-isotopes.tsv`). `calculateMID(formula, n)` (0x6d941e) returns `n` values: the product of one polynomial per atom, truncated, with index = nominal mass minus the sum of the lightest nominal masses (isotope gaps stay 0). `calculateExactMass` (0x6d9c6a) sums the lightest isotope masses. The formula grammar has no parentheses and no spaces. The table has typos (e.g. Sn 112 mass 111.05), so the rewrite uses IUPAC/NIST values instead (for about 30 common elements; the old table has 79, so rarer ones such as Ni, Cr, Sn, As, Pt still need rows); `src/md-core/src/isotope.rs` is tested against the old output with the old values. Driver: `tools/isotopes/old_mid.cpp` (`LD_PRELOAD`, same idea as `tools/golden/`).
 
 ## 8. Open gaps (ranked by impact on reproducing results)
 

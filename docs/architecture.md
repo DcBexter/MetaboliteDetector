@@ -26,17 +26,22 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
+  src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
+  src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   examples/perf.rs      performance smoke test on synthetic large runs
+  examples/batch.rs     batch quantification timing on real files
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
+  src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
+  src/batch.rs          batch quantification window and result table
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-quantification, MID and statistics.
+normalisation, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -70,6 +75,7 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
 | Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -83,7 +89,9 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. `PeakSettings::default()` holds the old `AN_*` defaults.
+detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
+0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
 old app only uses in the RI calibration dialog (and deconvolution, §4.5).
 
@@ -102,6 +110,11 @@ peaks of the example runs:
   detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
+- **Precise apex ties round down.** The old app fits the parabola with `gsl_multifit_linear` in absolute
+  bin coordinates; at an exact half-step tie its rounding error decides the direction. Here the vertex is
+  exact and ties round down, which the old app does in 217 of 267 ties on the example runs. On a flat top
+  (three equal values) the old fit returns an arbitrary vertex near the apex; here there is no precise apex.
+  This only moves peaks between deconvolution histogram bins (golden test).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -117,7 +130,7 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose; with them, 225 of 246 old components match exactly (golden test below): the first
+The old quirks are kept on purpose; with them, 241 of 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
@@ -144,8 +157,8 @@ Calibration from a run: `marker_peaks` runs the matched detector (§3.3) on the 
 and takes the highest raw scan of each peak. `series_points` gives the n highest peaks, in time order, the
 RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` takes the highest peak in a known
 time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
-(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs, and the
-status bar shows the RI of the scan or selected component.
+(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
+library search, and the status bar shows the RI of the scan or selected component.
 
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
@@ -153,8 +166,17 @@ In `7235eg06` TargetSearch took a peak at 321.1 s as the middle marker, where m/
 the marker peak at 311.1 s, as in all other runs, reaches 221 839. Filter width 40 scans, threshold 100.
 
 RT shift correction (§6.5): `pick_reference` chooses the substance with the best library score for the
-reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI. The scores
-come from `md_core::search`; the app does not offer the correction yet (issue 45).
+reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI.
+`md_core::search::shift_to_reference` combines them with the library search: window `3 · LS_RI_DIFF`, score
+= overall score of the reference among the component's hits. Because that score contains the RI score, a run
+shifted by more than about half a sigma (10 RI) no longer reaches the default cutoff 0.8; the old code
+behaves the same. In the app the calibration window offers a reference substance (library compounds with RI)
+and the cutoff once a calibration and a library are loaded. Each run's identification job then shifts the
+calibration onto the reference, searches with the shifted RIs and keeps the shifted calibration for the
+status bar; the window lists the shift per run, or that the reference was not found (then the run uses the
+unshifted calibration). Reference and cutoff are part of the `run.ident` key. Tests: a synthetic run 10 s
+late (`search.rs`) and the example runs made 4 s late, where Glycine 3TMS lands on its `lib_aa` RI again and
+the shift grows by exactly 4 s (`tests/example_data.rs`).
 
 Conscious deviations:
 
@@ -186,14 +208,22 @@ spectrum, so no fragment pre-filter is needed (table above).
 
 The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
-above 0.7, red otherwise, like the old app) and lists the best hits of the selected component.
+above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
+spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
+loading or clearing the calibration re-identifies every run, because `run.ident` remembers the library and
+calibration (`Arc`s, compared by pointer) it was computed with. `tests/example_data.rs` checks this with
+`lib_aa.lbr` (`MD_LBR_SAMPLE`): the example runs have no alkanes, so their alkane calibration is bridged over
+Valine 2TMS and Threonine 3TMS (FAME RI from TargetSearch's `library.txt` → time in the run); Leucine 2TMS,
+Glycine 3TMS and Serine 3TMS are then assigned with RI scores of 0.94–0.99.
 
 Conscious deviations:
 
-- **No RI yet → spectrum only.** The app does not pass the RI calibration to the search yet (issue 48). When the component or
-  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
-  no hit). The old code then compares retention times / 1000 with the same sigma instead; that is not ported,
-  because times of different runs and instruments only become comparable after calibration.
+- **No RI → spectrum only.** Without a calibration, or when the library entry has no RI, the overall score is
+  the spectrum score alone (with `use_spec` off there is then no hit). The old code then compares retention
+  times / 1000 with the same sigma instead (§5.6), and with `LS_USE_RI` on it drops every entry more than 60 s
+  away. That is not ported: times of different instruments and temperature programs are not comparable. The
+  sample library `lib_aa.lbr` lists Glycine 3TMS at 418 s, the example runs elute it at 313 s, so the old rule
+  would remove the correct hit there.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
   which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
@@ -204,6 +234,29 @@ Conscious deviations:
 - **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
 - `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
   not ported (semantics unknown, §5.9).
+
+## Batch quantification
+
+`md_core::batch` finds the library substances in many runs (old `BatchQuantificator`, F10–F12) in two
+passes. `scan_runs` reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
+a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
+`parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
+well. Progress is an atomic counter, cancelling stops before the next file, unreadable files are listed
+and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
+rescan:
+
+- **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
+  `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
+  cell is the summed integral of the quant ions found in that run.
+- **Replicate groups**: the first capture group (else the whole match) of a regex on the file name.
+- **Filters**: minimum quant ions found per cell, minimum reproducibility (share of runs in a group).
+
+All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
+2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
+(90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
+memory depends on the runs in memory, not on the study size (`examples/batch.rs`). Reading the file
+(~27 ms per run) is the largest share. Not ported yet (#58): the non-targeted mode, the SIC rescan of missing quant
+ions (`ResultSeries::scanIons`, §4.0), the discrepancy index and `QUANT_EXCL_IONS` in the app.
 
 ## Golden test
 
@@ -229,18 +282,16 @@ Tolerances and their reasons:
 |---|---|---|
 | Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
 | Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
-| Component ions and apex scan | exact for 231 of 246 | 15 known differences, issue 46 |
+| Component ions and apex scan | exact for 242 of 246 | 4 known differences, see below |
 | Ion height | ±1 | the old code rounds a few modelled heights the other way |
 | Ion integral | 1e-5 relative | the reference prints 7 significant digits |
 
-Remaining differences, all in deconvolution (issue 46):
+Remaining differences, all in deconvolution: 1 old component is missing, 3 differ by one or more ions,
+and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
+deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
+A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
 
-- 3 old components are missing.
-- 12 components differ by 1–4 ions.
-- 6 components have the same ions, but all heights and integrals differ by about 0.1–5 %. A different
-  model peak is the likely cause.
-
-The test fails when one of these counts grows. The counts are lowered as issue 46 fixes them.
+The test fails when one of these counts grows.
 
 The golden test found three porting errors in peak detection, now fixed:
 
@@ -292,6 +343,7 @@ cargo build --release            # binary: target/release/metabolite-detector(.e
 cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo run --release -p md-core --example perf
+cargo run --release -p md-core --example batch -- 4 library.msl run1.cdf run2.cdf
 cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```

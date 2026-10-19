@@ -87,7 +87,7 @@ fn detects_peaks_in_example_runs() {
     for path in runs() {
         let c = md_core::andi::read(&path).unwrap();
         let t = Instant::now();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let index = t.elapsed();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let total = t.elapsed();
@@ -116,7 +116,7 @@ fn deconvolutes_example_runs() {
     for path in runs() {
         let c = md_core::andi::read(&path).unwrap();
         let t = Instant::now();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let s = DeconvSettings::default();
         let comps = deconvolute(&traces, &peaks, &s);
@@ -204,5 +204,105 @@ fn ri_of_markers_matches_target_search() {
         } else {
             assert!(worst < 0.01, "{}: RI off by {worst}", name(path));
         }
+    }
+}
+
+/// RI search with the sample library `lib_aa.lbr` (alkane RI; `MD_LBR_SAMPLE` as in `lbr_sample.rs`).
+/// The example runs have FAME markers but no alkanes, so their alkane calibration is bridged over two
+/// amino acids: the FAME RI in TargetSearch's `library.txt` gives the time in the run, `lib_aa` the RI.
+/// Amino acids between them must then be assigned with a high RI score. The RT shift correction (§6.5)
+/// on the same runs made 4 s late must put the reference Glycine 3TMS back on its library RI.
+#[test]
+fn amino_acids_get_ri_score_with_lib_aa() {
+    use md_core::ri::{RiCalibration, marker_peaks, window_points};
+    use md_core::search::{
+        PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
+    };
+    let Ok(lbr) = std::env::var("MD_LBR_SAMPLE") else {
+        eprintln!("skipped: MD_LBR_SAMPLE not set");
+        return;
+    };
+    let runs = runs();
+    let Some(dir) = runs.first().and_then(|p| p.parent()) else {
+        return;
+    };
+    let lib = md_core::library::read_lbr(&lbr).unwrap();
+    let lib_ri = |n: &str| lib.iter().find(|c| c.name == n).unwrap().spectrum.ri;
+    let windows: Vec<(f64, f64, f64)> = table(&dir.join("rimLimits.txt"))
+        .iter()
+        .map(|r| {
+            (
+                r[0].parse().unwrap(),
+                r[1].parse().unwrap(),
+                r[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    // (FAME RI in library.txt, name in lib_aa)
+    let bridge = [(271500.0, "Valine 2TMS"), (368800.0, "Threonine 3TMS")];
+    let mut best = [
+        ("Leucine 2TMS", 0.0),
+        ("Glycine 3TMS", 0.0),
+        ("Serine 3TMS", 0.0),
+    ];
+    let s = SearchSettings {
+        cutoff: 0.0,
+        ..Default::default()
+    };
+    let prepared = PreparedLibrary::new(&lib, &s);
+    let gly = lib.iter().position(|c| c.name == "Glycine 3TMS").unwrap();
+    let mut corrected = 0;
+    for path in &runs {
+        let c = md_core::andi::read(path).unwrap();
+        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let fame = RiCalibration::new(window_points(&fame, &windows)).unwrap();
+        let cal = RiCalibration::new(bridge.map(|(f, n)| (fame.rt(f), lib_ri(n)))).unwrap();
+        let traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let ris = cal.component_ris(&c.scan_times_s, &comps);
+        let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+        for h in id.assigned.iter().flatten() {
+            // Only clear spectrum matches count; weak ones are other substances.
+            let (n, ri) = (&lib[h.compound].name, h.ri_sim.unwrap());
+            if h.spec_sim > 0.65
+                && let Some(b) = best.iter_mut().find(|b| b.0 == n)
+            {
+                eprintln!("{}: {n} spectrum {:.3}, RI {ri:.3}", name(path), h.spec_sim);
+                b.1 = f64::max(b.1, ri);
+            }
+        }
+        let late: Vec<f64> = c.scan_times_s.iter().map(|t| t + 4.0).collect();
+        if let Some(shifted) = shift_to_reference(&cal, &late, &comps, &prepared, gly, 0.8, &s) {
+            // The reference found is the component the search assigned to Glycine 3TMS.
+            let k = id
+                .assigned
+                .iter()
+                .position(|h| h.is_some_and(|h| h.compound == gly));
+            let ri = shifted.ri(late[comps[k.unwrap()].apex_scan as usize]);
+            eprintln!(
+                "{}: shift {:.2} s, Glycine 3TMS at RI {ri:.2}",
+                name(path),
+                shifted.shift_s
+            );
+            assert!((ri - lib_ri("Glycine 3TMS")).abs() < 1e-6, "{}", name(path));
+            let on_time =
+                shift_to_reference(&cal, &c.scan_times_s, &comps, &prepared, gly, 0.8, &s);
+            assert!((shifted.shift_s - on_time.unwrap().shift_s - 4.0).abs() < 1e-9);
+            // Searched with the shifted RIs, the reference is assigned with its full RI score.
+            let ris = shifted.component_ris(&late, &comps);
+            let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+            let h = id.assigned[k.unwrap()].unwrap();
+            assert_eq!(
+                (h.compound, h.ri_sim.map(|r| r > 0.999_999)),
+                (gly, Some(true))
+            );
+            corrected += 1;
+        }
+    }
+    if !runs.is_empty() {
+        // Each is found in at least one run, less than 0.46 sigma (9 RI) off its library RI (measured 0.94-0.99).
+        assert!(best.iter().all(|b| b.1 > 0.9), "{best:?}");
+        assert!(corrected > 0);
     }
 }
