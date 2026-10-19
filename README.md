@@ -14,6 +14,8 @@ Example data (15 public GC-MS runs, ~90 MB, not in git): run `example-data/fetch
 cargo run --release -p metabolite-detector -- example-data/TargetSearchData/inst/gc-ms-data/7235eg04.cdf
 ```
 
+Pass several files (or pick several in File → Open) to overlay them; TIC, SIC (m/z ± tolerance) or both.
+
 ---
 
 ## Project template (workflow kit)
