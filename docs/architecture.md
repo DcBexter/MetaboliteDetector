@@ -18,8 +18,9 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 ## Layout
 
 ```
-Cargo.toml              workspace, release profile (LTO, 1 codegen unit)
-src/md-core/            library: data model, import/export, analysis algorithms (no GUI deps)
+Cargo.toml              workspace: members crates/*, shared dependencies and lints, release profile
+rust-toolchain.toml     stable toolchain with clippy and rustfmt
+crates/md-core/         library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
@@ -31,7 +32,8 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   examples/perf.rs      performance smoke test on synthetic large runs
   examples/batch.rs     batch quantification timing on real files
-src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
+  tests/                integration tests (example data, golden test against the old version)
+crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
@@ -39,9 +41,24 @@ src/md-app/             egui desktop app (binary `metabolite-detector`), drawing
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
+Planned additions: `crates/md-cli` (headless batch runs for big studies) and modules in `md-core` for
 normalisation, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
+
+Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
+`benches/` for runnable measurements. A new crate goes under `crates/` and takes its versions, edition,
+dependencies and lints from the workspace (`*.workspace = true`, `[lints] workspace = true`).
+
+The crate boundary is the enforced architecture: `md-core` has no GUI dependency, so analysis code cannot
+reach into the UI. SonarQube Cloud's Architecture view does not support Rust (only Java, JavaScript,
+TypeScript, Python and C#), so it shows no architecture for this project.
+
+### Code analysis
+
+`.github/workflows/sonar.yml` runs SonarQube Cloud on `main` and on pull requests. It measures coverage with
+`cargo llvm-cov` (LCOV), and the scanner runs Clippy itself. `sonar-project.properties` marks each crate's
+`src/` as code and `tests/`, `examples/` and `benches/` as test code. Automatic Analysis cannot analyze Rust,
+so it must be off; the job is skipped until the repository secret `SONAR_TOKEN` exists.
 
 ## Performance rules
 
@@ -259,9 +276,9 @@ ions (`ResultSeries::scanIons`, §4.0), the discrepancy index and `QUANT_EXCL_IO
 
 ## Golden test
 
-`src/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
+`crates/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
 MetaboliteDetector 3.3 (Linux) on the 15 example runs of `example-data/`; it passes without checking
-anything when they are missing. The reference `src/md-core/tests/data/old-md-3.3.tsv` holds the old peaks
+anything when they are missing. The reference `crates/md-core/tests/data/old-md-3.3.tsv` holds the old peaks
 (ion, first, apex and last scan, S/N) of 7235eg04, eg20 and eg32 and the components (apex scan, ions,
 heights, integrals) of all 15 runs.
 
@@ -324,7 +341,7 @@ are not in the old file; loading keeps their current value. `SF_*`, `AN_MAX_BASE
 `LS_USE_SCALED_LIB` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are stored and shown, but
 no step reads them yet. The GUI searches with cutoff 0 (§5.8), so `LS_CUTOFF` has no effect there.
 
-In the app (`src/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
+In the app (`crates/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
 Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
 dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
 New runs open with the applied settings.

@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `src/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `src/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -760,7 +760,7 @@ else: comp2ions[c] = added
 
 ## 7b. Natural isotope calculator (Observed)
 
-`tools::NaturalMIDCalculator` (0x6d92bc) reads a table of `symbol, nominal mass, exact mass, percent` rows (`:/isotopes.csv`, embedded in the binary; extracted copy: `tools/isotopes/old-isotopes.tsv`). `calculateMID(formula, n)` (0x6d941e) returns `n` values: the product of one polynomial per atom, truncated, with index = nominal mass minus the sum of the lightest nominal masses (isotope gaps stay 0). `calculateExactMass` (0x6d9c6a) sums the lightest isotope masses. The formula grammar has no parentheses and no spaces. The table has typos (e.g. Sn 112 mass 111.05), so the rewrite uses IUPAC/NIST values instead (for about 30 common elements; the old table has 79, so rarer ones such as Ni, Cr, Sn, As, Pt still need rows); `src/md-core/src/isotope.rs` is tested against the old output with the old values. Driver: `tools/isotopes/old_mid.cpp` (`LD_PRELOAD`, same idea as `tools/golden/`).
+`tools::NaturalMIDCalculator` (0x6d92bc) reads a table of `symbol, nominal mass, exact mass, percent` rows (`:/isotopes.csv`, embedded in the binary; extracted copy: `tools/isotopes/old-isotopes.tsv`). `calculateMID(formula, n)` (0x6d941e) returns `n` values: the product of one polynomial per atom, truncated, with index = nominal mass minus the sum of the lightest nominal masses (isotope gaps stay 0). `calculateExactMass` (0x6d9c6a) sums the lightest isotope masses. The formula grammar has no parentheses and no spaces. The table has typos (e.g. Sn 112 mass 111.05), so the rewrite uses IUPAC/NIST values instead (for about 30 common elements; the old table has 79, so rarer ones such as Ni, Cr, Sn, As, Pt still need rows); `crates/md-core/src/isotope.rs` is tested against the old output with the old values. Driver: `tools/isotopes/old_mid.cpp` (`LD_PRELOAD`, same idea as `tools/golden/`).
 
 ## 8. Open gaps (ranked by impact on reproducing results)
 

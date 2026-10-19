@@ -1,0 +1,53 @@
+name: Sonar
+on:
+  push:
+    branches: [main]
+    paths: &rust
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'sonar-project.properties'
+      - '.github/workflows/sonar.yml'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *rust
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  sonar:
+    name: SonarQube Cloud
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Steps are skipped until the repo secret exists and Automatic Analysis is off (see CONTRIBUTING.md).
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        if: env.SONAR_TOKEN != ''
+        with:
+          # Full history for blame and new-code detection.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.SONAR_TOKEN != ''
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        if: env.SONAR_TOKEN != ''
+        with:
+          tool: cargo-llvm-cov
+      # Example data is not fetched; its tests skip themselves.
+      - if: env.SONAR_TOKEN != ''
+        run: |
+          rustup component add llvm-tools-preview
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+        if: env.SONAR_TOKEN != ''

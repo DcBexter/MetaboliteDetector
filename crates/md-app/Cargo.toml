@@ -1,11 +1,15 @@
 [package]
 name = "metabolite-detector"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
-eframe = "0.37"
-egui_extras = { version = "0.37", default-features = false }
-egui_plot = "0.38"
-md-core = { path = "../md-core" }
-rfd = "0.17"
+eframe.workspace = true
+egui_extras.workspace = true
+egui_plot.workspace = true
+md-core.workspace = true
+rfd.workspace = true
+
+[lints]
+workspace = true
