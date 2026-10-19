@@ -177,7 +177,7 @@ impl Batch {
             ui.add(
                 egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
             )
-            .on_hover_text("Group = first capture group, else the whole match. Empty: one group.");
+            .on_hover_text("Group = first capture group, else the whole match. A file without a match is a group of its own, so it passes any reproducibility filter. Empty: one group.");
             ui.end_row();
             ui.label("Min. reproducibility in a group");
             ui.add(egui::Slider::new(&mut s.min_reproducibility, 0.0..=1.0));

@@ -47,7 +47,8 @@ pub struct Found {
     pub compound: usize,
     pub score: f64,
     pub rt_s: f64,
-    /// One peak per mass, largest integral first.
+    /// Every ion peak of the component, largest integral first. A peak can sit twice (§4.5); §7.2
+    /// sees both, as in the old program.
     pub ions: Vec<IonPeak>,
 }
 
@@ -80,20 +81,21 @@ pub fn scan_chromatogram(
         .zip(id.assigned)
         .filter_map(|(k, hit)| {
             let hit = hit?;
-            let mut ions: Vec<IonPeak> = Vec::with_capacity(k.peaks.len());
-            for f in &k.peaks {
-                let p = &peaks[f.peak];
-                let mass = traces.masses[p.row as usize];
-                // A peak can sit twice in a component (§4.5); the first one counts.
-                if !ions.iter().any(|i| i.mass == mass) {
-                    ions.push(IonPeak {
-                        mass,
+            let mut ions: Vec<IonPeak> = k
+                .peaks
+                .iter()
+                .map(|f| {
+                    let p = &peaks[f.peak];
+                    IonPeak {
+                        mass: traces.masses[p.row as usize],
                         integral: f.integral,
                         quality: p.quality,
-                    });
-                }
-            }
-            ions.sort_by(|a, b| b.integral.total_cmp(&a.integral));
+                    }
+                })
+                .collect();
+            // The old code sorts ascending and walks backwards, so ties come last-in-list first (§7.2).
+            ions.sort_by(|a, b| a.integral.total_cmp(&b.integral));
+            ions.reverse();
             Some(Found {
                 compound: hit.compound,
                 score: hit.overall,
@@ -124,14 +126,20 @@ pub fn scan_runs(
                     while !cancel.load(Relaxed) {
                         let i = next.fetch_add(1, Relaxed);
                         let Some(path) = paths.get(i) else { break };
-                        let r = crate::andi::read(path)
-                            .map_err(|e| e.to_string())
-                            .and_then(|c| scan_chromatogram(c, lib, s).map_err(|e| e.to_string()))
-                            .map(|found| RunResult {
-                                path: path.clone(),
-                                found,
-                            })
-                            .map_err(|e| format!("{}: {e}", path.display()));
+                        // A panic in one file becomes its error, so the other files are kept.
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::andi::read(path)
+                                .map_err(|e| e.to_string())
+                                .and_then(|c| {
+                                    scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
+                                })
+                        }))
+                        .unwrap_or_else(|_| Err("analysis crashed".into()))
+                        .map(|found| RunResult {
+                            path: path.clone(),
+                            found,
+                        })
+                        .map_err(|e| format!("{}: {e}", path.display()));
                         mine.push((i, r));
                         done.fetch_add(1, Relaxed);
                     }
@@ -320,10 +328,10 @@ pub fn table(
                 .iter()
                 .map(|f| {
                     let f = (*f)?;
-                    let hit: Vec<f64> = f
-                        .ions
+                    // The largest peak of each quant ion; a duplicate peak (§4.5) counts once.
+                    let hit: Vec<f64> = ions
                         .iter()
-                        .filter(|p| ions.contains(&p.mass))
+                        .filter_map(|m| f.ions.iter().find(|p| p.mass == *m))
                         .map(|p| p.integral)
                         .collect();
                     (hit.len() >= need).then(|| hit.iter().sum())
@@ -390,6 +398,14 @@ mod tests {
             quant_ions(&[ion(300, 70.0, 0.1), ion(73, 60.0, 0.1)], &two),
             vec![300]
         );
+        // A duplicated peak (§4.5) uses up a fallback step, as in the old program.
+        let dup = [
+            ion(100, 9.0, 5.0),
+            ion(100, 9.0, 5.0),
+            ion(200, 8.0, 5.0),
+            ion(300, 7.0, 5.0),
+        ];
+        assert_eq!(quant_ions(&dup, &QuantSettings::default()), vec![100, 200]);
     }
 
     fn found(compound: usize, rt_s: f64, ions: &[(u32, f64)]) -> Found {
@@ -417,7 +433,11 @@ mod tests {
         let runs = [
             run(
                 "ctrl_1.cdf",
-                vec![found(0, 10.0, &[(100, 1.0), (200, 2.0), (300, 4.0)])],
+                vec![found(
+                    0,
+                    10.0,
+                    &[(300, 4.0), (200, 2.0), (100, 1.0), (100, 1.0)],
+                )],
             ),
             run("mut_1.cdf", vec![found(1, 20.0, &[(50, 5.0)])]),
             run(
