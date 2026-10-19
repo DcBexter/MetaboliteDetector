@@ -10,7 +10,7 @@ repo=$(cd "$here/../../../.." && pwd)
 app=${MD_APP:-/usr/bin/metabolitedetector_app}
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-[ $# -gt 0 ] || set -- "$repo"/example-data/TargetSearchData/inst/gc-ms-data/*.cdf
+[[ $# -gt 0 ]] || set -- "$repo"/example-data/TargetSearchData/inst/gc-ms-data/*.cdf
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
