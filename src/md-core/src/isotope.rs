@@ -272,8 +272,12 @@ const STANDARD: &[(&str, u32, f64, f64)] = &[
     ("Ag", 107, 106.9050916, 51.839),
     ("Ag", 109, 108.9047553, 48.161),
     ("Hg", 196, 195.9658326, 0.15),
-    ("Hg", 198, 197.9667686, 10.04),
-    ("Hg", 199, 198.9682806, 16.94),
+    ("Hg", 198, 197.9667686, 9.97),
+    ("Hg", 199, 198.9682806, 16.87),
+    ("Hg", 200, 199.968326, 23.10),
+    ("Hg", 201, 200.9703028, 13.18),
+    ("Hg", 202, 201.9706434, 29.86),
+    ("Hg", 204, 203.973494, 6.87),
 ];
 
 #[cfg(test)]
@@ -421,7 +425,19 @@ mod tests {
         let (p, q) = (0.0107, 0.9893_f64);
         assert!((a[0] - q.powi(1000)).abs() < 1e-12);
         assert!((a[1] - 1000.0 * p * q.powi(999)).abs() < 1e-12);
-        let _ = pattern(&table, "C4000000000H4000000000", 30);
+        let huge = pattern(&table, "C4000000000H4000000000", 30).abundance;
+        assert!(huge.iter().all(|v| v.is_finite() && *v >= 0.0));
+    }
+
+    #[test]
+    fn standard_table_sums_to_100_percent() {
+        let mut sums: HashMap<&str, f64> = HashMap::new();
+        for (symbol, _, _, percent) in STANDARD {
+            *sums.entry(symbol).or_default() += percent;
+        }
+        for (symbol, sum) in sums {
+            assert!((sum - 100.0).abs() < 0.05, "{symbol}: {sum}");
+        }
     }
 
     #[test]

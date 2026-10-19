@@ -59,7 +59,10 @@ impl Isotopes {
                             ui.label(format!("M+{i}"));
                             ui.label(format!("{}", p.nominal_mass + i as u64));
                             ui.label(format!("{:.4}", 100.0 * a));
-                            ui.label(format!("{:.2}", 100.0 * a / max));
+                            ui.label(format!(
+                                "{:.2}",
+                                if max > 0.0 { 100.0 * a / max } else { 0.0 }
+                            ));
                             ui.end_row();
                         }
                     });
