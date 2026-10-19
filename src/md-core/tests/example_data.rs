@@ -113,3 +113,65 @@ fn deconvolutes_example_runs() {
         }
     }
 }
+
+/// Tab-separated rows of a TargetSearchData text file, header skipped.
+const DENSITY: usize = 40;
+const THRESHOLD: i32 = 100;
+
+fn table(path: &Path) -> Vec<Vec<String>> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|l| l.split('\t').map(str::to_owned).collect())
+        .collect()
+}
+
+#[test]
+fn ri_of_markers_matches_target_search() {
+    let runs = runs();
+    let Some(dir) = runs.first().and_then(|p| p.parent()) else {
+        return;
+    };
+    // FAME markers: time window (s) and RI; TargetSearch finds them on m/z 87. The RI files list
+    // TargetSearch's RI for each scan, so the comparison covers interpolation and extrapolation.
+    let windows: Vec<(f64, f64, f64)> = table(&dir.join("rimLimits.txt"))
+        .iter()
+        .map(|r| {
+            (
+                r[0].parse().unwrap(),
+                r[1].parse().unwrap(),
+                r[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    for path in &runs {
+        let c = md_core::andi::read(path).unwrap();
+        let peaks = md_core::ri::marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let points = md_core::ri::window_points(&peaks, &windows);
+        assert_eq!(points.len(), windows.len(), "{}: {peaks:?}", name(path));
+        let cal = md_core::ri::RiCalibration::new(points.iter().copied()).unwrap();
+        let reference = table(&dir.join(format!(
+            "RI_{}.txt",
+            path.file_stem().unwrap().to_string_lossy()
+        )));
+        let worst = reference
+            .iter()
+            .map(|r| {
+                let (rt, ri): (f64, f64) = (r[0].parse().unwrap(), r[2].parse().unwrap());
+                (cal.ri(rt) - ri).abs()
+            })
+            .fold(0.0, f64::max);
+        eprintln!(
+            "{}: markers {points:?}, worst RI difference {worst:.1}",
+            name(path)
+        );
+        // TargetSearch put the middle marker of 7235eg06 at 321.1 s, where m/z 87 reaches 36 512;
+        // the marker peak at 311.1 s (as in every other run) reaches 221 839.
+        if name(path) == "7235eg06.cdf" {
+            assert!((points[1].0 - 311.109).abs() < 1e-6, "{points:?}");
+        } else {
+            assert!(worst < 0.01, "{}: RI off by {worst}", name(path));
+        }
+    }
+}
