@@ -134,3 +134,11 @@ mod tests {
         assert_eq!(decimate(&xs, &ys, 10.0, 12.0, 100).len(), 5);
     }
 }
+
+#[cfg(test)]
+mod ci_red_proof {
+    #[test]
+    fn deliberately_failing() {
+        assert_eq!(1, 2);
+    }
+}
