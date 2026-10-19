@@ -5,12 +5,13 @@ use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Line, Plot, Points, VLine};
+use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
 use md_core::deconv::{Component, DeconvSettings, deconvolute};
 use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::{Chromatogram, decimate};
 
 mod calibration;
+mod identify;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -24,8 +25,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let mut app = App::default();
-            for path in std::env::args_os().skip(1) {
-                app.open(&cc.egui_ctx, path.into());
+            for path in std::env::args_os().skip(1).map(PathBuf::from) {
+                if identify::is_library(&path) {
+                    app.open_library(&cc.egui_ctx, path);
+                } else {
+                    app.open(&cc.egui_ctx, path);
+                }
             }
             Ok(Box::new(app))
         }),
@@ -51,6 +56,8 @@ struct App {
     mz: f32,
     tolerance: f32,
     ri: calibration::Calibration,
+    library: Option<Arc<identify::Library>>,
+    library_job: Option<identify::LibraryJob>,
 }
 
 impl Default for App {
@@ -67,6 +74,8 @@ impl Default for App {
             mz: 147.0,
             tolerance: 0.5,
             ri: calibration::Calibration::default(),
+            library: None,
+            library_job: None,
         }
     }
 }
@@ -91,6 +100,9 @@ struct Run {
     /// Selected component; its deconvoluted spectrum replaces the raw one.
     component: Option<usize>,
     visible: bool,
+    /// Library hits of `components` once a library is open.
+    ident: Option<identify::Identified>,
+    ident_job: Option<identify::IdentJob>,
 }
 
 /// Runs `job` on its own thread and wakes the UI when it is done, so the window never freezes.
@@ -140,6 +152,8 @@ impl App {
                             scan: 0,
                             component: None,
                             visible: true,
+                            ident: None,
+                            ident_job: None,
                         })
                     }
                 })
@@ -211,6 +225,7 @@ fn trace_plot(
     cursor_min: f64,
     trace: fn(&Run) -> &[f64],
     marks: &[[f64; 2]],
+    labels: &[identify::Label],
 ) -> Option<f64> {
     let link = egui::Id::unique("chromatograms");
     let plot = Plot::new(id)
@@ -240,6 +255,10 @@ fn trace_plot(
             if !marks.is_empty() {
                 p.points(Points::new("components", marks.to_vec()).radius(3.0));
             }
+            for (at, name, color) in labels {
+                let text = egui::RichText::new(name).color(*color);
+                p.text(Text::new("hits", (*at).into(), text).anchor(egui::Align2::LEFT_BOTTOM));
+            }
             p.vline(VLine::new("", cursor_min));
             p.pointer_coordinate()
         });
@@ -249,6 +268,7 @@ fn trace_plot(
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_loading();
+        self.update_identification(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -261,6 +281,7 @@ impl eframe::App for App {
                             self.open(ui.ctx(), path);
                         }
                     }
+                    self.library_menu(ui);
                     if ui.button("Close all").clicked() {
                         (self.runs, self.active) = (Vec::new(), 0);
                     }
@@ -336,6 +357,10 @@ impl eframe::App for App {
             });
         }
 
+        if let Some(run) = self.runs.get(self.active) {
+            identify::hits_panel(ui, run);
+        }
+
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
@@ -390,6 +415,7 @@ impl eframe::App for App {
                         ]
                     })
                     .collect();
+                let labels = identify::labels(run);
                 clicked = trace_plot(
                     ui,
                     "tic",
@@ -399,6 +425,7 @@ impl eframe::App for App {
                     cursor,
                     |r| &r.tic,
                     &marks,
+                    &labels,
                 );
             }
             if self.trace != Trace::Tic {
@@ -411,6 +438,7 @@ impl eframe::App for App {
                     &self.runs,
                     cursor,
                     |r| &r.sic,
+                    &[],
                     &[],
                 );
                 clicked = clicked.or(sic);

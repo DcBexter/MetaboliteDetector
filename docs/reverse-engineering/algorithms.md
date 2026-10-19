@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `src/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `src/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `src/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -24,7 +24,7 @@ Conventions
   7. QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF
   8. QUANT_EXCL_IONS (std::set<pair<float,float>>; written as size then pairs)
 - Keys also seen in code but not in toStream: AN_MIN_HEIGHT_BP, AN_MODELED_VALUES_FOR_INTEGRATION, SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS, SQL_MAX_NUMBER_FRAGMENTS, LS_CUTOFF, LS_MASS_FILTER, LS_IDENTIFICATION_ALGORITHM. Their persistence is Unknown.
-- Default values (Unknown): no default assignments were found in the GCMSSettings ctor (syms 0x3dfb98 / MCP 0x4dfb98 is empty) or in the static initializers. `GCMSSettingsObject` ctor (0x3f79de) only sets constructors for LS_MASS_FILTER and QUANT_EXCL_IONS. The values most likely come from a settings file on disk and/or GUI defaults. The settings storage is in static members (`_ZN4gcms12GCMSSettings<KEY>E`, syms 0xcc20a8..0xcc2170, plus 0xcc20e0 etc.), which are not initialized in the code I read. Next step: find `fromDisk` callers and any shipped default settings file.
+- Default values (Observed): the static members are initialised in `.data`. The values are AN_PEAK_THRESHOLD_BEGIN 10, AN_PEAK_THRESHOLD_END -5, AN_MAX_BASE_DEV 20, AN_MIN_PEAK_HEIGHT 20, AN_NUMBER_BINS 10, AN_DECONVOLUTION_WIDTH 1.0, AN_MIN_PEAK_NUMBER 10 and AN_MODELED_VALUES_FOR_INTEGRATION true. AN_MIN_HEIGHT_BP is in `.bss` (0). A fresh `~/.config/TU-Braunschweig/MetaboliteDetector.conf` holds the same values. The GCMSSettings ctor (syms 0x3dfb98) is empty.
 
 Settings used by the analysis (name, storage address, where read):
 - AN_PEAK_THRESHOLD_BEGIN (0xcc20e0), AN_PEAK_THRESHOLD_END (0xcc20e8): slope thresholds in analyzeBaseline and DefaultPeakDetector.
@@ -68,13 +68,15 @@ calculateBaseline(p):
   v[i] = EIC intensities, i = 0..n-1, scan index relative to firstScan
   minL = min over [0, maxScan-firstScan)   -> index minScanL
   minR = min over [maxScan-firstScan, lastScan-firstScan] -> index minScanR
-  line through (minScanL, minL) and (minScanR, minR); abs = the lower of the two points
+      (both start at the apex value and index; strict <, so the first minimum wins)
+  line through (minScanL, minL) and (minScanR, minR): slope = (minR-minL)/(minScanR-minScanL), icpt = minL - minScanL*slope
+  abs = minScanL if minL < minR else minScanR (a tie takes the right point)
   repeat:
       for any i with (i*slope + icpt) - v[i] > 0.1: re-anchor the line through (abs, v[abs]) and (i, v[i])
   until no point violates
   residual r_i = v[i] - (slope*i + icpt) for all points, map<residual, index>
       (std::map insert: duplicate keys keep the first entry)
-  take the first floor(N/2)+1 entries in ascending residual order
+  take the first floor(map.size()/2)+1 entries in ascending residual order (size after duplicates collapse)
   linear fit gsl_fit_linear(x = index, y = v[index]) -> intercept, slope
   nu = sqrt(maxValue) * this->nf
   if nu == 0: warn "can not calculate noise units for s/n ratio. Rejecting this peak."; reject
@@ -90,7 +92,7 @@ calculateBaseline(p):
 
 - AbstractPeakDetector ctor (MCP 0x6ed4f0): vptr set, nf = 1.0. Observed.
 - Peaks created by MatchedPeakDetector get nf = 0.5 (Observed, Section 3.3).
-- Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). detectPeaks does NOT write analyzeBaseline's `nf` into this->nf: it has no setNoiseFactor call and no store to this+0x8 (Observed). The only setNoiseFactor caller is the GCMSAnalyzer<int,float> ctor (syms 0x5e88fc, call at 0x5e89bf); it passes a double from analyzer+0x70, filled by an indirect call at 0x5e8995 whose target is Unknown.
+- Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). detectPeaks does NOT write analyzeBaseline's `nf` into this->nf: it has no setNoiseFactor call and no store to this+0x8 (Observed). The only setNoiseFactor caller is the GCMSAnalyzer<int,float> ctor (syms 0x5e88fc, call at 0x5e89bf); it passes a double from analyzer+0x70, filled by an indirect call at 0x5e8995: scan vtbl+0x50, `getNoiseFactor` → `DataProvider::getGlobalNoiseFactor` (Observed). On all 15 example runs it logs "Error determining nf. Using nf=1", so nf = 1 (Observed with the golden driver, `tools/golden/`).
 
 ## 3. Peak detection
 
@@ -148,7 +150,7 @@ while i < N - 2:
 ```
 
 Notes:
-- The exact handling of `i` after the tail branch (i = i-1 at one path) was recovered from assembly and may be off by one. Verify with a test case.
+- After an accepted peak the loop does `i -= 1` (0x5ef73d) before the final `i += 1`, so the next search starts at the scan where the falling flank ended; a tailing peak starts at the previous last scan + 1. Observed and confirmed by the golden test.
 - Behavior when `i` equals the break index is Inferred.
 
 ### 3.2 DefaultPeakDetector<int,float>::createPeak (MCP 0x6efa1c; syms 0x5efa1c)
@@ -158,7 +160,7 @@ createPeak(ion, begin, end, max, values, D, extend, stat):
   if extend:
       while begin-1 valid and v[begin-1] < v[begin] (monotone toward baseline) and |v[begin] - stat.mean| >= 3*stat.sd: begin -= 1
       while end+1 valid  and v[end+1]  < v[end]   and |v[end]   - stat.mean| >= 3*stat.sd: end += 1
-  apex = argmax over [begin, end] (first maximum wins, strict >)
+  apex = max; for k in begin..=end: if v[k] > v[apex]: apex = k   (strict >, starting from the flank search's max, so a tie keeps that scan; Observed, objdump 0x5efa1c)
   return Peak(ion, begin, end, apex, values[begin..end], nf = getNoiseFactor())
 ```
 
@@ -239,7 +241,7 @@ All addresses below are syms addresses (MCP = +0x100000). Ghidra cuts most of th
 - GUI path: `metabolitedetector::ComponentDetector::detectComponents()` (0x4b3a0c) calls `GCMSAnalyzer::detectAllPeaks(reorder=true, scan_dist=10.0f, ion_dist=0.05f)` (call at 0x4b3a87; floats at rodata 0xa81010 = 10.0 and 0xa8100c = 0.05). Then it calls `deconvoluteChromatogram()` (0x5e907e).
 - RI calibration wizard: `RICalibrationWizard::CompoundDetector::detect()` calls `detectAllPeaks(reorder=false, ...)` (0x3f4710), then `deconvoluteChromatogram()`.
 - Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window.
-- `MIN_PEAK_NUMBER` is field +0x0 of GCMSAnalyzer. The settings dialog sets it from `AN_MIN_PEAK_NUMBER` (call at 0x3c1177). The ctor default is Unknown.
+- `MIN_PEAK_NUMBER` is field +0x0 of GCMSAnalyzer. The settings dialog sets it from `AN_MIN_PEAK_NUMBER` (call at 0x3c1177). The GCMSAnalyzer ctor sets it to `AN_MIN_PEAK_NUMBER` (Observed).
 - `deconvoluteChromatogram()` (0x5e907e) = `deconvoluteChromatogram(this->peaks, scan->vtbl[3]() /*scan count*/, 0, AN_DECONVOLUTION_WIDTH)`. Observed.
 
 ### 4.1 detectAllPeaks(reorder, scan_dist, ion_dist) (0x5e8ac0)
@@ -398,7 +400,7 @@ scan->getRICalculator().calculateRI(compounds)          # Section 6
 ```
 
 - The QUANT_EXCL_IONS test is inclusive on both ends (`lo <= ion <= hi`). Observed.
-- AN_MIN_HEIGHT_BP is a fraction of the base peak of the deconvoluted spectrum. Its default value is Unknown.
+- AN_MIN_HEIGHT_BP is a fraction of the base peak of the deconvoluted spectrum. Its default value is 0 (`.bss`, Section 1).
 - The compound spectrum is the set of modelled apex heights `c2 * max(model)`, rounded toward zero. It is NOT the raw apex intensities. Observed.
 
 ### 4.7 ModelPeak(vector<Peak*> m) (0x647ce4, Observed)
@@ -452,7 +454,6 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 ### 4.11 Unknowns (deconvolution)
 
 - `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling (kernel: Section 3.3). This is needed to reproduce the threshold T = 5.0 exactly.
-- Default values of AN_DECONVOLUTION_WIDTH, AN_NUMBER_BINS, AN_MIN_PEAK_NUMBER, AN_MIN_HEIGHT_BP and the GCMSAnalyzer ctor default of MIN_PEAK_NUMBER.
 - Meaning of `getDataType() == 2`, and how `Compound(rt, ints, ions, res)` uses `res`.
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
 - Whether the duplicated bin peaks from 4.5 are intended. A port should reproduce them first to match golden output.

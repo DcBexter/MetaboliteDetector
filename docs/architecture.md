@@ -26,14 +26,16 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
+  src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
+  src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-library search, quantification, MID and statistics.
+quantification, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -65,6 +67,8 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Ion traces (index, 500 traces) | 26 ms |
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
+| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -84,14 +88,17 @@ old app only uses in the RI calibration dialog (and deconvolution, §4.5).
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 
-Conscious deviations from the old app, each to be checked against old output in the golden-test issue:
+Conscious deviations from the old app; the golden test (below) shows that none of them changes the
+peaks of the example runs:
 
 - **Traces per nominal mass.** m/z is rounded and points of one nominal mass in a scan are summed. The
   old app's trace construction for ANDI data is unknown; the example runs are unit-resolution, so this
   matches them. High-resolution data needs exact-mass traces and `reorderPeaks` (§4.2).
-- **Noise factor 1.0.** The old detector keeps its constructor value 1.0; `GCMSAnalyzer` overwrites it
-  from a source not found yet (§2.3). The noise factor and MAD of `analyzeBaseline` are not computed
-  because the detector never reads them.
+- **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
+  `DataProvider::getGlobalNoiseFactor` (§2.3). On all 15 example runs the old app logs
+  "Error determining nf. Using nf=1", so 1.0 is what it uses there. Data where the old app finds another
+  noise factor would differ. The noise factor and MAD of `analyzeBaseline` are not computed because the
+  detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
@@ -109,7 +116,7 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose until the golden test (issue 17) has compared both versions: the first
+The old quirks are kept on purpose; with them, 225 of 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
@@ -146,7 +153,7 @@ the marker peak at 311.1 s, as in all other runs, reaches 221 839. Filter width 
 
 RT shift correction (§6.5): `pick_reference` chooses the substance with the best library score for the
 reference near its RI, `shifted_to` shifts the calibration so it lands on the library RI. The scores
-come from library search (issue 19); the app does not offer the correction yet.
+come from `md_core::search`; the app does not offer the correction yet (issue 45).
 
 Conscious deviations:
 
@@ -161,6 +168,86 @@ Conscious deviations:
   is inferred, file-formats.md §4.1) and written with full precision instead of 6 significant digits.
   Reading is a trust boundary: at most 1 MiB, UTF-8, two finite numbers per line, errors name the line.
 - **Marker apex** is the highest raw scan of the matched-filter peak; the old dialog's choice is unknown (§6.7).
+
+## Library search
+
+`md_core::search` ports the old `LibrarySearch` ([algorithms.md](reverse-engineering/algorithms.md) §5).
+`PreparedLibrary::new` bins, mass-filters and scales every library spectrum once (mass² · intensity^0.6 with the
+default `LS_SCALE_FACTOR_*`), like the old pre-scaled cache. `library_hits` scores one spectrum against every
+entry: the pure score is a cosine over all peaks of both spectra, the impure score over the library peaks only
+(peaks without a partner are weighted with `LS_SCALE_FACTOR_NO_MATCH`), the spectrum score is
+`0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
+Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
+components in parallel and then assigns library compounds greedily by best overall score, each library compound
+and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
+With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
+spectrum, so no fragment pre-filter is needed (table above).
+
+The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
+open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
+above 0.7, red otherwise, like the old app) and lists the best hits of the selected component.
+
+Conscious deviations:
+
+- **No RI yet → spectrum only.** The app does not pass the RI calibration to the search yet (issue 48). When the component or
+  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
+  no hit). The old code then compares retention times / 1000 with the same sigma instead; that is not ported,
+  because times of different runs and instruments only become comparable after calibration.
+- **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
+  the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
+  which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
+  and masses below 0.5 are dropped.
+- **Hits need a score above zero.** The old search keeps pairs with score 0 and may even assign them; here they are
+  no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
+  yields the same assignments above it, because the greedy assignment takes pairs in descending score.
+- **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
+- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
+  not ported (semantics unknown, §5.9).
+
+## Golden test
+
+`src/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
+MetaboliteDetector 3.3 (Linux) on the 15 example runs of `example-data/`; it passes without checking
+anything when they are missing. The reference `src/md-core/tests/data/old-md-3.3.tsv` holds the old peaks
+(ion, first, apex and last scan, S/N) of 7235eg04, eg20 and eg32 and the components (apex scan, ions,
+heights, integrals) of all 15 runs.
+
+How the reference is made: `docs/reverse-engineering/tools/golden/make-reference.sh` (Linux or WSL, old
+`.deb` installed) loads a small driver into the old binary with `LD_PRELOAD`. The driver replaces `main`
+and calls the binary's own functions in the order of the GUI's "Detect components": `CdfImporter`,
+`GCMSDiskScan`, `GCMSAnalyzer::detectAllPeaks(true, 10, 0.05)`, `deconvoluteChromatogram`. It uses the
+static `AN_*` defaults compiled into the binary, which are also the values of a fresh config file. This
+is the old code itself, not a re-implementation. The GUI export and `.cmp` files were not used because
+they need clicks per run and `.cmp` holds no peak bounds. The script checks the binary's SHA-256, so
+another build cannot silently produce a different reference. Neither the binary nor the example data are
+committed.
+
+Tolerances and their reasons:
+
+| Compared | Tolerance | Reason |
+|---|---|---|
+| Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
+| Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
+| Component ions and apex scan | exact for 231 of 246 | 15 known differences, issue 46 |
+| Ion height | ±1 | the old code rounds a few modelled heights the other way |
+| Ion integral | 1e-5 relative | the reference prints 7 significant digits |
+
+Remaining differences, all in deconvolution (issue 46):
+
+- 3 old components are missing.
+- 12 components differ by 1–4 ions.
+- 6 components have the same ions, but all heights and integrals differ by about 0.1–5 %. A different
+  model peak is the likely cause.
+
+The test fails when one of these counts grows. The counts are lowered as issue 46 fixes them.
+
+The golden test found three porting errors in peak detection, now fixed:
+
+- After an accepted peak the old loop steps back one scan, so a tailing peak starts right after the
+  previous one.
+- The apex search starts at the last rising scan, so a tie keeps the later scan.
+- The baseline fit takes half of the distinct residuals (`std::map` keys), not half of all points, and
+  the pivot tie goes to the right.
 
 ## Libraries
 

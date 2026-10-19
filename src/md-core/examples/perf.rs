@@ -6,7 +6,9 @@
 use std::time::Instant;
 
 use md_core::deconv::{DeconvSettings, deconvolute};
+use md_core::library::{LibraryCompound, parse_msl};
 use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 use md_core::{Chromatogram, decimate};
 
 fn main() {
@@ -88,4 +90,42 @@ fn main() {
         t.elapsed()
     );
     assert_eq!(sic.len(), scans);
+
+    // 1 000 of these components against 10 000 library entries: their own spectra plus 9 000 entries of
+    // 50 ions each.
+    let comps = &comps[..comps.len().min(1000)];
+    let msl: String = (0..10_000)
+        .map(|k| {
+            let peaks: Vec<(usize, usize)> = match comps.get(k) {
+                Some(c) => c
+                    .spectrum
+                    .iter()
+                    .map(|p| (p.0 as usize, p.1 as usize))
+                    .collect(),
+                None => (0..50)
+                    .map(|j| (50 + (k * 7 + j * 13) % 500, 1 + (k * j) % 999))
+                    .collect(),
+            };
+            let pairs: String = peaks.iter().map(|(m, v)| format!("({m} {v}) ")).collect();
+            format!("NAME: c{k}\nNUM PEAKS: {}\n{pairs}\n\n", peaks.len())
+        })
+        .collect();
+    let lib: Vec<LibraryCompound> = parse_msl(&msl).expect("synthetic MSL");
+    for cutoff in [SearchSettings::default().cutoff, 0.0] {
+        let s = SearchSettings {
+            cutoff,
+            ..Default::default()
+        };
+        let t = Instant::now();
+        let prepared = PreparedLibrary::new(&lib, &s);
+        let id = map_compounds_to_library(comps, None, &prepared, &s);
+        println!(
+            "library search, {} components x {} entries, cutoff {cutoff} ({} hits, {} assigned): {:?}",
+            comps.len(),
+            prepared.len(),
+            id.hits.iter().map(Vec::len).sum::<usize>(),
+            id.assigned.iter().flatten().count(),
+            t.elapsed()
+        );
+    }
 }
