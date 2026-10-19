@@ -21,23 +21,27 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 Cargo.toml              workspace, release profile (LTO, 1 codegen unit)
 src/md-core/            library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
-  src/andi.rs           ANDI-MS NetCDF import with input validation
+  src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
+  src/diskscan.rs       old raw-data cache (.bin + .idx) reader
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
+  src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   examples/perf.rs      performance smoke test on synthetic large runs
+  examples/batch.rs     batch quantification timing on real files
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
+  src/batch.rs          batch quantification window and result table
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-quantification, MID and statistics.
+normalisation, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -71,6 +75,7 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
 | Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -230,6 +235,29 @@ Conscious deviations:
 - `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
   not ported (semantics unknown, §5.9).
 
+## Batch quantification
+
+`md_core::batch` finds the library substances in many runs (old `BatchQuantificator`, F10–F12) in two
+passes. `scan_runs` reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
+a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
+`parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
+well. Progress is an atomic counter, cancelling stops before the next file, unreadable files are listed
+and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
+rescan:
+
+- **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
+  `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
+  cell is the summed integral of the quant ions found in that run.
+- **Replicate groups**: the first capture group (else the whole match) of a regex on the file name.
+- **Filters**: minimum quant ions found per cell, minimum reproducibility (share of runs in a group).
+
+All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
+2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
+(90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
+memory depends on the runs in memory, not on the study size (`examples/batch.rs`). Reading the file
+(~27 ms per run) is the largest share. Not ported yet (#58): the non-targeted mode, the SIC rescan of missing quant
+ions (`ResultSeries::scanIons`, §4.0), the discrepancy index and `QUANT_EXCL_IONS` in the app.
+
 ## Golden test
 
 `src/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
@@ -285,6 +313,46 @@ as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kep
 `tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
 `MD_LBR_SAMPLE` points to it; the file is never committed.
 
+## Old raw-data cache (.bin + .idx)
+
+The old app converted every imported NetCDF into `<run>.bin` (scan records) and `<run>.idx` (index);
+some users only kept these. `md_core::diskscan::read` reads the pair into the same `Chromatogram` as
+`andi::read` (layout in [file-formats.md](reverse-engineering/file-formats.md) §2). Reading is a trust
+boundary like the libraries: every offset and count is checked against the file size before anything
+is allocated, each `.bin` record header must match its index entry, and errors are returned instead of
+panics. Caches with a TOF calibration polynomial are rejected (the old app applied it to the masses;
+`CdfImporter` writes none).
+
+`andi::write` exports a `Chromatogram` as ANDI-MS NetCDF (64-bit-offset NetCDF-3): the raw-data
+variables `scan_acquisition_time`, `scan_index`, `point_count`, `mass_values`, `intensity_values` and
+`total_intensity` (the sum of each spectrum). `md_core::read_run` picks the reader by extension, so the
+app's File menu and the batch view open `.bin` files; File → Export as NetCDF writes the active run.
+
+Proof: `docs/reverse-engineering/tools/diskscan/make-cache.sh` converts the 15 example runs with the
+old binary's own `CdfImporter` (`LD_PRELOAD` driver, like the golden test). The test
+`old_cache_matches_cdf` in `tests/example_data.rs` (runs when `MD_OLD_CACHE` points to that output)
+checks that every cache has the same spectra as the original `.cdf`, and that its NetCDF export reads
+back unchanged. Times match to f32 precision: the old importer kept times as f32 seconds. The old binary
+also re-imports the exported NetCDF files with identical spectra and times; only the stored TIC differs,
+because the example `.cdf` files carry the instrument's `total_intensity`, not the sum of the spectrum.
+
+## Settings
+
+`md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
+converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. It reads and writes the old settings
+file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because algorithms.md §1 reports
+one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
+every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
+(not decoded). `LS_CUTOFF`, `AN_MIN_HEIGHT_BP`, `AN_MODELED_VALUES_FOR_INTEGRATION` and `LS_MASS_FILTER`
+are not in the old file; loading keeps their current value. `SF_*`, `AN_MAX_BASE_DEV`, `LS_RESOLUTION`,
+`LS_USE_SCALED_LIB` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are stored and shown, but
+no step reads them yet. The GUI searches with cutoff 0 (§5.8), so `LS_CUTOFF` has no effect there.
+
+In the app (`src/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
+Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
+dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
+New runs open with the applied settings.
+
 ## Build and test
 
 ```sh
@@ -292,9 +360,15 @@ cargo build --release            # binary: target/release/metabolite-detector(.e
 cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo run --release -p md-core --example perf
+cargo run --release -p md-core --example batch -- 4 library.msl run1.cdf run2.cdf
 cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
+
+`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy ... -D warnings` and
+`cargo test --workspace` on Ubuntu and Windows for every non-draft PR and every push to `main` that
+touches `src/`, `Cargo.toml`, `Cargo.lock` or the workflow. It does not fetch the example data, so
+those tests skip themselves; run them locally. Only `main` saves the cargo cache; PRs restore it.
 
 ## Compatibility goals
 

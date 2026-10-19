@@ -5,6 +5,7 @@
 
 use std::time::Instant;
 
+use md_core::batch::{ScanSettings, scan_chromatogram};
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::library::{LibraryCompound, parse_msl};
 use md_core::peaks::{IonTraces, PeakSettings};
@@ -128,4 +129,15 @@ fn main() {
             t.elapsed()
         );
     }
+
+    // Batch: one run end to end (ion traces, peaks, deconvolution, search of all components).
+    let s = ScanSettings::default();
+    let prepared = PreparedLibrary::new(&lib, &s.search);
+    let t = Instant::now();
+    let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
+    println!(
+        "batch, one run end to end ({} substances found): {:?}",
+        found.len(),
+        t.elapsed()
+    );
 }

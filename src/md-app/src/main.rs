@@ -6,13 +6,14 @@ use std::time::Instant;
 
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
-use md_core::deconv::{Component, DeconvSettings, deconvolute};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::deconv::Component;
 use md_core::{Chromatogram, decimate};
 
+mod batch;
 mod calibration;
 mod identify;
 mod isotopes;
+mod settings;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -57,9 +58,11 @@ struct App {
     mz: f32,
     tolerance: f32,
     ri: calibration::Calibration,
+    settings: settings::Settings,
     isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
+    batch: batch::Batch,
 }
 
 impl Default for App {
@@ -76,9 +79,11 @@ impl Default for App {
             mz: 147.0,
             tolerance: 0.5,
             ri: calibration::Calibration::default(),
+            settings: settings::Settings::default(),
             isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
+            batch: batch::Batch::default(),
         }
     }
 }
@@ -97,8 +102,9 @@ struct Run {
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
-    /// Deconvoluted substances with the old default settings, ordered by retention time.
+    /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
+    analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
     component: Option<usize>,
@@ -131,17 +137,13 @@ impl App {
     /// Every file loads on its own thread, so many runs load in parallel.
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let p = path.clone();
+        let key = self.settings.key();
         let rx = spawn(ctx, move || {
-            md_core::andi::read(&p)
-                .map_err(|e| e.to_string())
+            md_core::read_run(&p)
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let traces = IonTraces::new(&data).map_err(|e| e.to_string())?;
-                        let peaks = traces.detect_peaks(&PeakSettings::default());
-                        let mut components =
-                            deconvolute(&traces, &peaks, &DeconvSettings::default());
-                        components.sort_by_key(|k| k.apex_scan);
+                        let components = settings::analyze(&data, &key)?;
                         Ok(Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
@@ -152,6 +154,7 @@ impl App {
                             sic_for: None,
                             sic_job: None,
                             components,
+                            analysis: settings::Analysis::new(key),
                             scan: 0,
                             component: None,
                             visible: true,
@@ -271,18 +274,34 @@ fn trace_plot(
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_loading();
+        if let Some(e) = self.settings.update_runs(ui.ctx(), &mut self.runs) {
+            self.error = Some(e);
+        }
         self.update_identification(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Open NetCDF (ANDI-MS)…").clicked()
+                    if ui.button("Open chromatograms…").clicked()
                         && let Some(paths) = rfd::FileDialog::new()
-                            .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                            .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
+                            .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
                             .pick_files()
                     {
                         for path in paths {
                             self.open(ui.ctx(), path);
                         }
+                    }
+                    if let Some(r) = self.runs.get(self.active)
+                        && ui.button("Export as NetCDF…").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .add_filter("NetCDF (ANDI-MS)", &["cdf"])
+                            .set_file_name(format!("{}.cdf", r.name))
+                            .save_file()
+                    {
+                        // shortcut: writes on the UI thread (~50 ms per example run); spawn if runs grow.
+                        self.error = md_core::andi::write(&path, &r.data)
+                            .err()
+                            .map(|e| format!("{}: {e}", path.display()));
                     }
                     self.library_menu(ui);
                     if ui.button("Close all").clicked() {
@@ -293,6 +312,12 @@ impl eframe::App for App {
                     if ui.button("RI calibration…").clicked() {
                         self.ri.open = true;
                     }
+                    if ui.button("Settings…").clicked() {
+                        self.settings.open = true;
+                    }
+                    if ui.button("Batch quantification…").clicked() {
+                        self.batch.open = true;
+                    }
                     if ui.button("Natural isotopes…").clicked() {
                         self.isotopes.open = true;
                     }
@@ -302,6 +327,10 @@ impl eframe::App for App {
 
         self.ri
             .window(ui.ctx(), &self.runs, self.active, self.library.as_deref());
+        self.settings.window(ui.ctx());
+        self.batch.analysis = self.settings.key();
+        self.batch
+            .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
         self.isotopes.window(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -309,6 +338,11 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(format!("Loading {} file(s)…", self.loading.len()));
+                });
+            } else if self.runs.iter().any(|r| r.analysis.busy()) {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Re-analysing with the new settings…");
                 });
             } else if let Some(e) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
@@ -332,7 +366,7 @@ impl eframe::App for App {
                     self.load_note
                 ));
             } else {
-                ui.label("Open one or more ANDI-MS NetCDF chromatograms via File → Open.");
+                ui.label("Open one or more chromatograms (NetCDF or old .bin) via File → Open.");
             }
         });
 
