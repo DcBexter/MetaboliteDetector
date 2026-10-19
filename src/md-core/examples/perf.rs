@@ -57,6 +57,21 @@ fn main() {
     );
     println!("decimate TIC to {} points: {:?}", d.len(), t.elapsed());
 
+    // What the app draws per frame for an overlay of 15 runs showing TIC and SIC.
+    let t = Instant::now();
+    for _ in 0..15 {
+        for ys in [&tic, &sic] {
+            std::hint::black_box(decimate(
+                &c.scan_times_s,
+                ys,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                2000,
+            ));
+        }
+    }
+    println!("overlay frame, 15 runs x TIC+SIC: {:?}", t.elapsed());
+
     let t = Instant::now();
     let traces = IonTraces::new(&c);
     println!("ion traces ({}): {:?}", traces.len(), t.elapsed());
