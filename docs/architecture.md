@@ -57,7 +57,7 @@ TypeScript, Python and C#), so it shows no architecture for this project.
 ### Code analysis
 
 `.github/workflows/sonar.yml` runs SonarQube Cloud on `main` and on pull requests. It measures coverage with
-`cargo llvm-cov` (LCOV), and the scanner runs Clippy itself. `sonar-project.properties` marks each crate's
+`cargo llvm-cov` (LCOV) and hands Sonar a Clippy JSON report; Sonar does not run Clippy itself. `sonar-project.properties` marks each crate's
 `src/` as code and `tests/`, `examples/` and `benches/` as test code. Automatic Analysis cannot analyze Rust,
 so it must be off; the job is skipped until the repository secret `SONAR_TOKEN` exists.
 
