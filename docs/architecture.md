@@ -57,14 +57,38 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | TIC | 2.0 ms |
 | SIC (one m/z) | 1.0 ms |
 | Decimate TIC for drawing | 0.05 ms |
-| Ion traces (index, 500 traces) | 24 ms |
-| Peaks in all 500 traces (300 000 peaks) | 19 ms |
+| Ion traces (index, 500 traces) | 26 ms |
+| Peaks in all 500 traces (300 000 peaks) | 20 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
-file; all 15 runs in 0.27 s; ion traces + peak detection 6–10 ms per file, 440–660 peaks in 236 traces
+file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces
 (`cargo test --release -p md-core --test example_data -- --nocapture`).
 The whole file is read into memory first because `netcdf3` seeks per record (1.8 s per file on a
 plain `File`).
+
+## Peak detection
+
+`md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
+§2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
+detector on every trace in parallel. `PeakSettings::default()` holds the old `AN_*` defaults.
+`detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
+old app only uses in the RI calibration dialog (and deconvolution, §4.5).
+
+![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
+
+Conscious deviations from the old app, each to be checked against old output in the golden-test issue:
+
+- **Traces per nominal mass.** m/z is rounded and points of one nominal mass in a scan are summed. The
+  old app's trace construction for ANDI data is unknown; the example runs are unit-resolution, so this
+  matches them. High-resolution data needs exact-mass traces and `reorderPeaks` (§4.2).
+- **Noise factor 1.0.** The old detector keeps its constructor value 1.0; `GCMSAnalyzer` overwrites it
+  from a source not found yet (§2.3). The noise factor and MAD of `analyzeBaseline` are not computed
+  because the detector never reads them.
+- **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
+  to integers like the old int filters. S/N is not rounded to 8 significant digits.
+- **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
+- **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
+  so the extension code is not ported.
 
 ## Build and test
 

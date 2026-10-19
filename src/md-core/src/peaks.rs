@@ -31,7 +31,7 @@ impl Default for PeakSettings {
 }
 
 /// A peak in one ion trace. Scan numbers are indices into the run; the intensities are
-/// `IonTraces::trace(row)[first_scan..=last_scan]`.
+/// `IonTraces::trace(row)[first_scan..=last_scan]` (for `detect_peaks_matched`: the filtered trace).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Peak {
     /// Row in `IonTraces` (`IonTraces::masses[row]` is the nominal mass).
@@ -41,7 +41,7 @@ pub struct Peak {
     pub apex_scan: u32,
     pub last_scan: u32,
     /// Apex of a parabola through `apex_scan ± 1`, in steps of `1 / number_bins` scan.
-    /// `None` where the old code refused it (shift of a whole scan or more, apex at the trace edge).
+    /// `None` where the old code refused it (shift of a whole scan or more, apex at the peak edge).
     pub precise_apex: Option<f32>,
     /// Height above the robust baseline divided by the noise units `sqrt(apex) * noise_factor`.
     pub signal_to_noise: f32,
@@ -156,45 +156,34 @@ impl IonTraces {
     }
 }
 
-/// Savitzky-Golay, window 5, quadratic: smoothed values and first derivative per scan.
-/// The two values at each end keep the input (smoothing) or 0 (slope).
+/// Savitzky-Golay, window 5, quadratic (old `SavitzkyGolayFilter<int>` and `…FirstDerivative`):
+/// smoothed values truncated to integers like the old int filter, and the slope per scan.
+/// The two values at each end copy their inner neighbour (smoothing) or are 0 (slope).
 fn savitzky_golay(v: &[f32], smooth: &mut Vec<f32>, slope: &mut Vec<f32>) {
+    let n = v.len();
     smooth.clear();
-    smooth.extend_from_slice(v);
+    smooth.resize(n, 0.0);
     slope.clear();
-    slope.resize(v.len(), 0.0);
+    slope.resize(n, 0.0);
     for (k, w) in v.windows(5).enumerate() {
-        let [a, b, c, d, e] = [w[0], w[1], w[2], w[3], w[4]];
-        smooth[k + 2] = (-3.0 * a + 12.0 * b + 17.0 * c + 12.0 * d - 3.0 * e) / 35.0;
-        slope[k + 2] = (-2.0 * a - b + d + 2.0 * e) / 10.0;
+        let [a, b, c, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
+        smooth[k + 2] = ((-3.0 * (a + e) + 12.0 * (b + d) + 17.0 * c) / 35.0).trunc() as f32;
+        slope[k + 2] = ((-2.0 * a - b + d + 2.0 * e) / 10.0) as f32;
     }
+    (smooth[0], smooth[1]) = (smooth[2], smooth[2]);
+    (smooth[n - 2], smooth[n - 1]) = (smooth[n - 3], smooth[n - 3]);
 }
 
 struct Baseline {
     mean: f64,
     sd: f64,
-    /// Median over flat segments of `MAD / sqrt(mean)`; NaN when there is none.
-    noise_factor: f64,
 }
 
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_unstable_by(f64::total_cmp);
-    let h = v.len() / 2;
-    if v.len() % 2 == 1 {
-        v[h]
-    } else {
-        (v[h - 1] + v[h]) / 2.0
-    }
-}
-
-/// Old `analyzeBaseline` (§2.1): statistics of the non-overlapping segments of `len` scans
-/// whose slopes all stay inside the peak thresholds.
+/// Old `analyzeBaseline` (§2.1): pooled mean and standard deviation of the non-overlapping
+/// segments of `len` scans whose slopes all stay inside the peak thresholds. The old function
+/// also returns a noise factor and MAD, which the detector never reads, so they are not computed.
 fn analyze_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings) -> Baseline {
     let (mut count, mut mean, mut m2) = (0.0f64, 0.0f64, 0.0f64);
-    let mut factors = Vec::new();
     let mut start = 0;
     while start + len < smooth.len() {
         let r = start..start + len;
@@ -207,11 +196,7 @@ fn analyze_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings)
         }
         let seg = &smooth[r];
         let m = seg.iter().map(|v| *v as f64).sum::<f64>() / len as f64;
-        let mut dev: Vec<f64> = seg.iter().map(|v| (*v as f64 - m).abs()).collect();
-        let seg_m2: f64 = dev.iter().map(|d| d * d).sum();
-        if m > 0.0 {
-            factors.push(median(&mut dev) / m.sqrt());
-        }
+        let seg_m2: f64 = seg.iter().map(|v| (*v as f64 - m).powi(2)).sum();
         // Chan's pooled mean and variance of all accepted points.
         let (n, delta) = (len as f64, m - mean);
         let total = count + n;
@@ -226,7 +211,6 @@ fn analyze_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings)
         } else {
             0.0
         },
-        noise_factor: median(&mut factors),
     }
 }
 
@@ -245,18 +229,12 @@ pub fn detect_peaks(
     savitzky_golay(v, smooth, slope);
     let (sm, d) = (&smooth[..], &slope[..]);
     let base = analyze_baseline(sm, d, 15, s);
-    // The old detector starts with noise factor 1.0; a flat or noise-free trace gives no usable one.
-    let nf = if base.noise_factor > 0.0 {
-        base.noise_factor
-    } else {
-        1.0
-    };
 
     let mut tailing = false;
     let mut i = 2;
     while i < n - 2 {
         if let Some((beg, en)) = candidate(&mut i, d, sm, &base, s, tailing) {
-            match check_peak(v, beg, en, &base, nf, s) {
+            match check_peak(v, beg, en, s) {
                 Some(p) => {
                     let last = v[p.last_scan as usize] as f64 - base.mean;
                     tailing = last > 0.2 * (v[p.apex_scan as usize] as f64 - base.mean);
@@ -317,26 +295,21 @@ fn candidate(
     None
 }
 
-/// Old `createPeak` (§3.2) and `calculateBaseline` (§2.2): widen the borders down the flanks,
-/// fit a robust baseline and keep the peak if it stands `min_peak_height` noise units above it.
-fn check_peak(
-    v: &[f32],
-    mut first: usize,
-    mut last: usize,
-    base: &Baseline,
-    nf: f64,
-    s: &PeakSettings,
-) -> Option<Peak> {
-    let far = |x: f32| (x as f64 - base.mean).abs() >= 3.0 * base.sd;
-    while first > 0 && v[first - 1] < v[first] && far(v[first]) {
-        first -= 1;
-    }
-    while last + 1 < v.len() && v[last + 1] < v[last] && far(v[last]) {
-        last += 1;
-    }
+/// Noise factor of the old detector: `AbstractPeakDetector` starts with 1.0 and `detectPeaks` never
+/// changes it. The old `GCMSAnalyzer` may overwrite it from a source not found yet (algorithms.md §2.3).
+const NOISE_FACTOR: f64 = 1.0;
+
+/// First index of the highest value (strict `>`, like the old code).
+fn argmax(w: &[f32]) -> usize {
+    (0..w.len()).fold(0, |m, k| if w[k] > w[m] { k } else { m })
+}
+
+/// Old `createPeak` (§3.2, border extension off as in the old default) and `calculateBaseline`
+/// (§2.2): fit a robust baseline and keep the peak if it stands `min_peak_height` noise units above it.
+fn check_peak(v: &[f32], first: usize, last: usize, s: &PeakSettings) -> Option<Peak> {
     let w = &v[first..=last];
     let argmin = |r: std::ops::Range<usize>| r.min_by(|a, b| w[*a].total_cmp(&w[*b])).unwrap();
-    let apex = (0..w.len()).fold(0, |m, k| if w[k] > w[m] { k } else { m });
+    let apex = argmax(w);
     let max = w[apex] as f64;
 
     // Line through the lowest points left and right of the apex, then pivot it around the
@@ -371,22 +344,82 @@ fn check_peak(
     res.truncate(w.len() / 2 + 1);
     let (icpt, fit_slope) = fit_line(res.iter().map(|(_, k)| (*k as f64, at(*k))));
 
-    let nu = max.sqrt() * nf;
+    let nu = max.sqrt() * NOISE_FACTOR;
     let height = max - (icpt + fit_slope * apex as f64);
     if !(nu > 0.0 && height >= s.min_peak_height as f64 * nu) {
         return None;
     }
-    let apex_scan = first + apex;
-    Some(Peak {
+    Some(peak(
+        w,
+        first,
+        NOISE_FACTOR,
+        (height / nu) as f32,
+        s.number_bins,
+    ))
+}
+
+/// Old `Peak` constructor (§3.5): a peak over `w = trace[first..first + w.len()]` with its metrics.
+fn peak(w: &[f32], first: usize, nf: f64, signal_to_noise: f32, bins: u32) -> Peak {
+    let apex = argmax(w);
+    Peak {
         row: 0,
         first_scan: first as u32,
-        apex_scan: apex_scan as u32,
-        last_scan: last as u32,
-        precise_apex: precise_apex(v, apex_scan, s.number_bins),
-        signal_to_noise: (height / nu) as f32,
+        apex_scan: (first + apex) as u32,
+        last_scan: (first + w.len() - 1) as u32,
+        precise_apex: precise_apex(w, apex, bins).map(|t| t + first as f32),
+        signal_to_noise,
         quality: quality(w, apex),
-        sharpness: sharpness(w, apex, nu),
-    })
+        sharpness: sharpness(w, apex, (w[apex] as f64).sqrt() * nf),
+    }
+}
+
+/// Old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): correlation with a negative
+/// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace.
+/// It responds most to Gaussian peaks with sigma ≈ `density / 4` scans.
+pub fn matched_filter(v: &[f32], density: usize) -> Vec<f64> {
+    let d = density.max(1) as isize;
+    let kernel: Vec<f64> = (-d..=d)
+        .map(|x| {
+            let u = 4.0 * x as f64 / d as f64;
+            1.73 / (d as f64).sqrt() * (1.0 - u * u) * (-0.5 * u * u).exp()
+        })
+        .collect();
+    (0..v.len() as isize)
+        .map(|i| {
+            (-d..=d)
+                .filter_map(|x| v.get(usize::try_from(i + x).ok()?).map(|y| (x, *y as f64)))
+                .map(|(x, y)| kernel[(x + d) as usize] * y)
+                .sum()
+        })
+        .collect()
+}
+
+/// Old `MatchedPeakDetector<int,float>::detectPeaks` (§3.3–3.4): regions where the filtered trace
+/// (truncated to integers like the old int filter) rises above `threshold`, more than 2 scans long.
+/// As in the old code, the peak metrics use the filtered values with noise factor 0.5, there is
+/// no baseline check, and `signal_to_noise` stays 0. The old app takes `density` and `threshold`
+/// from the RI calibration dialog; it has no defaults.
+pub fn detect_peaks_matched(v: &[f32], density: usize, threshold: i32, bins: u32) -> Vec<Peak> {
+    let f: Vec<f32> = matched_filter(v, density)
+        .iter()
+        .map(|x| x.trunc() as f32)
+        .collect();
+    let thr = threshold as f32;
+    let mut peaks = Vec::new();
+    let mut i = 1;
+    while i < f.len() {
+        if f[i - 1] < thr && thr < f[i] {
+            let Some(end) = (i + 1..f.len()).find(|j| f[*j] <= thr) else {
+                break;
+            };
+            if end - i > 2 {
+                peaks.push(peak(&f[i..=end], i, 0.5, 0.0, bins));
+            }
+            i = end;
+        }
+        i += 1;
+    }
+    peaks
 }
 
 /// Ordinary least squares `y = icpt + slope * x`; a single point gives a flat line.
@@ -402,7 +435,8 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
     (my - slope * mx, slope)
 }
 
-/// §3.6: vertex of the parabola through apex − 1, apex, apex + 1, rounded to `1 / bins` scan.
+/// §3.6: vertex of the parabola through apex − 1, apex, apex + 1 of the peak values, rounded to
+/// `1 / bins` scan, relative to the peak start; `None` at the peak edge or for a shift of ≥ 1 scan.
 fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
@@ -434,15 +468,20 @@ fn quality(w: &[f32], apex: usize) -> f32 {
 }
 
 /// §3.8: steepest drop from the apex per scan and noise unit, averaged over both sides.
+/// Each side starts at -1 like the old code, so a peak without one side scores lower.
 fn sharpness(w: &[f32], apex: usize, nu: f64) -> f32 {
     let max = w[apex] as f64;
     let side = |ks: &mut dyn Iterator<Item = usize>| {
         ks.filter(|k| w[*k] >= 0.0)
             .map(|k| (max - w[k] as f64) / (k.abs_diff(apex) as f64 * nu))
-            .fold(0.0, f64::max)
+            .fold(-1.0, f64::max)
     };
     let s = (side(&mut (0..apex)) + side(&mut (apex + 1..w.len()))) / 2.0;
-    s.max(0.0) as f32
+    if s.is_finite() {
+        s.max(0.0) as f32
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -524,6 +563,24 @@ mod tests {
                 assert!((p.last_scan as usize) < v.len());
             }
         }
+    }
+
+    #[test]
+    fn matched_filter_finds_peaks_of_its_width() {
+        let mut impulse = [0.0; 9];
+        impulse[4] = 1.0;
+        let k = matched_filter(&impulse, 8);
+        assert!(
+            k[4] > 0.0 && k[0] < 0.0 && (k[0] - k[8]).abs() < 1e-12,
+            "{k:?}"
+        );
+        let mut v = noisy(300);
+        gauss(&mut v, 80.0, 2.0, 5_000.0);
+        gauss(&mut v, 200.0, 2.0, 5_000.0);
+        let p = detect_peaks_matched(&v, 8, 2_000, 10);
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert_eq!((p[0].apex_scan, p[1].apex_scan), (80, 200));
+        assert!(detect_peaks_matched(&[], 8, 10, 10).is_empty());
     }
 
     #[test]

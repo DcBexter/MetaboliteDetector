@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection, peak metrics, deconvolution (Section 4), library scoring (Section 5), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `src/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -90,7 +90,7 @@ calculateBaseline(p):
 
 - AbstractPeakDetector ctor (MCP 0x6ed4f0): vptr set, nf = 1.0. Observed.
 - Peaks created by MatchedPeakDetector get nf = 0.5 (Observed, Section 3.3).
-- Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). The value used in the detector is set from analyzeBaseline's result `nf`. That linkage (whether detectPeaks writes stat.nf into this->nf) is Unknown.
+- Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). detectPeaks does NOT write analyzeBaseline's `nf` into this->nf: it has no setNoiseFactor call and no store to this+0x8 (Observed). The only setNoiseFactor caller is the GCMSAnalyzer<int,float> ctor (syms 0x5e88fc, call at 0x5e89bf); it passes a double from analyzer+0x70, filled by an indirect call at 0x5e8995 whose target is Unknown.
 
 ## 3. Peak detection
 
@@ -101,10 +101,16 @@ Setup (Observed):
 ```
 if N < 5: return empty
 BEGIN = AN_PEAK_THRESHOLD_BEGIN ; END = AN_PEAK_THRESHOLD_END
-D  = SavitzkyGolayFilterFirstDerivative<float>(float(values))   # window 5 Inferred from size<5 check
-S  = SavitzkyGolayFilter<int>(values)                         # window 5 Inferred
+D  = SavitzkyGolayFilterFirstDerivative<float>(float(values))   # syms 0x64ab49, see below
+S  = SavitzkyGolayFilter<int>(values)                         # syms 0x645577, see below
 stat = analyzeBaseline(S, D, 15)                              # Section 2.1
 ```
+
+Filters (Observed, 5 points each):
+
+- `S[i] = (int) trunc((-3*(v[i-2]+v[i+2]) + 12*(v[i-1]+v[i+1]) + 17*v[i]) / 35.0)`; S[0], S[1] copy S[2] and S[N-2], S[N-1] copy S[N-3].
+- `D[i] = (-2*v[i-2] - v[i-1] + v[i+1] + 2*v[i+2]) / 10.0f`; the first two and last two values are 0.
+- `border_extension` is member this+0x18, set to false by the ctor (0x5eef5a); `setPeakBorderExtensionEnabled` (0x5ef9fc) has no direct caller (Observed).
 
 Loop (reconstructed from objdump, syms 0x5ef1a7..0x5ef773; Observed control flow, names Inferred):
 
@@ -163,12 +169,15 @@ createPeak(ion, begin, end, max, values, D, extend, stat):
 
 ```
 W = peak_width (ctor arg); thr = ctor threshold (int)
-f = tools::Filter::matched2ndDerivativeGaussianFilter<int>(values, 4*W)   # Observed call
+f = tools::Filter::matched2ndDerivativeGaussianFilter<int>(values, density)   # Observed call; density = 4*W is NOT confirmed
 regions: begin at i where f[i-1] < thr < f[i]; end at first j > i with f[j] <= thr
 accept region if (end - begin) > 2
 createPeak(ion, begin, end, f[begin..end])
 ```
 
+- Filter (syms 0x64a5fd int, 0x64966d double; Observed): for x in [-d, d], u = 4x/d, kernel k(x) = (1.73/sqrt(d)) * (1 - u^2) * exp(-u^2/2), a negative 2nd-derivative Gaussian with sigma = d/4. Taps outside the signal count as 0; the int variant truncates the result (cvttsd2si). Edge behaviour beyond that: Unknown.
+- Ctor (0x5ee926) takes (size_t peak_width, int threshold) without defaults. Its only caller is CalibrationSetter::threadFinished (0x4947f4), with both values from spin boxes of the RI calibration dialog (Observed; pairing Inferred).
+- The region rules above are Inferred.
 - Whether createPeak gets the raw or the filtered vector is ambiguous. The decompile passes the filtered vector (Observed), so the peak area is taken from the filtered data (Inferred interpretation).
 
 ### 3.4 MatchedPeakDetector<int,float>::createPeak (MCP 0x6eed8e; syms 0x5eed8e)
@@ -219,7 +228,7 @@ sharpR = max over i > apex with v[i] >= 0 of (maxValue - v[i]) / ((i - apex) * n
 sharpness = max(0, (sharpL + sharpR) / 2), rounded roundSig 8
 ```
 
-- Observed (summary of decompile); the right-side condition should be verified with the decompile before porting.
+- Observed, both sides with the same `v[i] >= 0` test. Quirk (Observed): sharpL and sharpR start at -1.0, so a side without candidates adds -1 before the clamp; NaN/inf results are an error path.
 
 ## 4. Deconvolution / component detection
 
@@ -314,7 +323,7 @@ So the field called `overall_sharpness` is the SUM OF RAW APEX INTENSITIES in th
 components.clear()
 W = (size_t)(AN_NUMBER_BINS * width)                       # width = AN_DECONVOLUTION_WIDTH (scans)
 v[i] = bins[i].overall_sharpness
-f = tools::Filter::matched2ndDerivativeGaussianFilter<double>(v, W)   # filter internals: Section 8 gap 2
+f = tools::Filter::matched2ndDerivativeGaussianFilter<double>(v, W)   # kernel: Section 3.3
 T = 5.0                                                     # rodata 0xa96c60
 prev = (int) f[0]; i = 0
 while i < f.size:
@@ -442,7 +451,7 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 
 ### 4.11 Unknowns (deconvolution)
 
-- `tools::Filter::matched2ndDerivativeGaussianFilter<double>` kernel (sigma vs. W, kernel length, normalisation, edge handling). This is needed to reproduce the threshold T = 5.0 exactly.
+- `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling (kernel: Section 3.3). This is needed to reproduce the threshold T = 5.0 exactly.
 - Default values of AN_DECONVOLUTION_WIDTH, AN_NUMBER_BINS, AN_MIN_PEAK_NUMBER, AN_MIN_HEIGHT_BP and the GCMSAnalyzer ctor default of MIN_PEAK_NUMBER.
 - Meaning of `getDataType() == 2`, and how `Compound(rt, ints, ions, res)` uses `res`.
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
@@ -749,25 +758,22 @@ else: comp2ions[c] = added
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
-2. `tools::Filter::matched2ndDerivativeGaussianFilter<double>` kernel. It sets the component boundaries in 4.5 together with the fixed threshold 5.0.
+2. `tools::Filter::matched2ndDerivativeGaussianFilter` edge behaviour (kernel known, Section 3.3). It sets the component boundaries in 4.5 together with the fixed threshold 5.0.
 3. Spectrum binning and centroiding (`getBinnedSpectrum`, `getCentroidCompound`). Library scores depend on them when bin widths differ.
 4. DefaultPeakDetector details:
-   - the exact SG filter coefficients and window (only 5 is inferred)
-   - the derivative definition
    - the C=0.2 tail rule (value read from rodata, not verified against output)
    - the `i` update after a rejected peak (possible off-by-one)
    - the identity of vtbl[4]/[5]
-5. Whether MatchedPeakDetector should use raw or filtered values in createPeak.
+5. MatchedPeakDetector: the density it passes to the filter, its region rules, and raw or filtered values in createPeak.
 6. The RI wizard's automatic alkane assignment (6.7).
-7. Pooled statistics formulas (collectedMean/collectedVariance) and the meaning of the `n` field in BaselineStatistics.
-8. Whether DefaultPeakDetector writes stat.nf into the noise factor used by Peak (Section 2.3).
-9. Peak sharpness right-side condition (Section 3.8).
-10. MID, normalizers, statistics tests, PCA: not started.
+7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
+8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
+9. MID, normalizers, statistics tests, PCA: not started.
 
 ## 9. Ranked next steps
 
 - Locate `GCMSSettings::fromDisk` callers and any default settings file in the install.
-- Decompile `tools::Filter::matched2ndDerivativeGaussianFilter<double>` and `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
+- Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
 Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6; wizard auto-assignment open). Quantification ion selection complete (Section 7.1-7.3). Remaining quantification/statistics not analyzed.
