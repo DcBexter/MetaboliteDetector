@@ -179,11 +179,14 @@ fn ri_of_markers_matches_target_search() {
 /// RI search with the sample library `lib_aa.lbr` (alkane RI; `MD_LBR_SAMPLE` as in `lbr_sample.rs`).
 /// The example runs have FAME markers but no alkanes, so their alkane calibration is bridged over two
 /// amino acids: the FAME RI in TargetSearch's `library.txt` gives the time in the run, `lib_aa` the RI.
-/// Amino acids between them must then be assigned with a high RI score.
+/// Amino acids between them must then be assigned with a high RI score. The RT shift correction (§6.5)
+/// on the same runs made 4 s late must put the reference Glycine 3TMS back on its library RI.
 #[test]
 fn amino_acids_get_ri_score_with_lib_aa() {
     use md_core::ri::{RiCalibration, marker_peaks, window_points};
-    use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+    use md_core::search::{
+        PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
+    };
     let Ok(lbr) = std::env::var("MD_LBR_SAMPLE") else {
         eprintln!("skipped: MD_LBR_SAMPLE not set");
         return;
@@ -216,6 +219,8 @@ fn amino_acids_get_ri_score_with_lib_aa() {
         ..Default::default()
     };
     let prepared = PreparedLibrary::new(&lib, &s);
+    let gly = lib.iter().position(|c| c.name == "Glycine 3TMS").unwrap();
+    let mut corrected = 0;
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
         let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
@@ -236,9 +241,29 @@ fn amino_acids_get_ri_score_with_lib_aa() {
                 b.1 = f64::max(b.1, ri);
             }
         }
+        let late: Vec<f64> = c.scan_times_s.iter().map(|t| t + 4.0).collect();
+        if let Some(shifted) = shift_to_reference(&cal, &late, &comps, &prepared, gly, 0.8, &s) {
+            // The reference found is the component the search assigned to Glycine 3TMS.
+            let k = id
+                .assigned
+                .iter()
+                .position(|h| h.is_some_and(|h| h.compound == gly));
+            let ri = shifted.ri(late[comps[k.unwrap()].apex_scan as usize]);
+            eprintln!(
+                "{}: shift {:.2} s, Glycine 3TMS at RI {ri:.2}",
+                name(path),
+                shifted.shift_s
+            );
+            assert!((ri - lib_ri("Glycine 3TMS")).abs() < 1e-6, "{}", name(path));
+            let on_time =
+                shift_to_reference(&cal, &c.scan_times_s, &comps, &prepared, gly, 0.8, &s);
+            assert!((shifted.shift_s - on_time.unwrap().shift_s - 4.0).abs() < 1e-9);
+            corrected += 1;
+        }
     }
     if !runs.is_empty() {
         // Each is found in at least one run, less than 0.46 sigma (9 RI) off its library RI (measured 0.94-0.99).
         assert!(best.iter().all(|b| b.1 > 0.9), "{best:?}");
+        assert!(corrected > 0);
     }
 }

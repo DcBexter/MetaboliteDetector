@@ -294,7 +294,8 @@ impl eframe::App for App {
             });
         });
 
-        self.ri.window(ui.ctx(), self.runs.get(self.active));
+        self.ri
+            .window(ui.ctx(), &self.runs, self.active, self.library.as_deref());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {
