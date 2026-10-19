@@ -64,8 +64,9 @@ pub struct IonTraces {
 // high-resolution runs need exact-mass traces plus the old `reorderPeaks` merge (algorithms.md §4.2).
 const MASS_LIMIT: usize = 1 << 16;
 
+/// Nominal mass `k` for m/z in `[k - 0.5, k + 0.5)`, the same intervals `IonTraces::new` scans.
 fn nominal(mz: f32) -> Option<usize> {
-    let m = mz.round();
+    let m = (mz + 0.5).floor();
     (m >= 0.0 && m < MASS_LIMIT as f32).then_some(m as usize)
 }
 
@@ -581,6 +582,19 @@ mod tests {
         assert_eq!(p.len(), 2, "{p:?}");
         assert_eq!((p[0].apex_scan, p[1].apex_scan), (80, 200));
         assert!(detect_peaks_matched(&[], 8, 10, 10).is_empty());
+    }
+
+    #[test]
+    fn ion_traces_take_odd_mz_from_broken_files() {
+        let c = Chromatogram {
+            scan_times_s: vec![0.0],
+            offsets: vec![0, 4],
+            mz: vec![-0.5, -0.4, 0.5, f32::INFINITY],
+            intensity: vec![1.0, 2.0, 4.0, 8.0],
+        };
+        let t = IonTraces::new(&c);
+        assert_eq!(t.masses, vec![0, 1]);
+        assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
     }
 
     #[test]
