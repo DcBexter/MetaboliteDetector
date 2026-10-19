@@ -143,8 +143,8 @@ Calibration from a run: `marker_peaks` runs the matched detector (§3.3) on the 
 and takes the highest raw scan of each peak. `series_points` gives the n highest peaks, in time order, the
 RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` takes the highest peak in a known
 time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
-(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs, and the
-status bar shows the RI of the scan or selected component.
+(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
+library search, and the status bar shows the RI of the scan or selected component.
 
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
@@ -185,14 +185,22 @@ spectrum, so no fragment pre-filter is needed (table above).
 
 The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
-above 0.7, red otherwise, like the old app) and lists the best hits of the selected component.
+above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
+spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
+loading or clearing the calibration re-identifies every run, because `run.ident` remembers the library and
+calibration (`Arc`s, compared by pointer) it was computed with. `tests/example_data.rs` checks this with
+`lib_aa.lbr` (`MD_LBR_SAMPLE`): the example runs have no alkanes, so their alkane calibration is bridged over
+Valine 2TMS and Threonine 3TMS (FAME RI from TargetSearch's `library.txt` → time in the run); Leucine 2TMS,
+Glycine 3TMS and Serine 3TMS are then assigned with RI scores of 0.94–0.99.
 
 Conscious deviations:
 
-- **No RI yet → spectrum only.** The app does not pass the RI calibration to the search yet (issue 48). When the component or
-  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
-  no hit). The old code then compares retention times / 1000 with the same sigma instead; that is not ported,
-  because times of different runs and instruments only become comparable after calibration.
+- **No RI → spectrum only.** Without a calibration, or when the library entry has no RI, the overall score is
+  the spectrum score alone (with `use_spec` off there is then no hit). The old code then compares retention
+  times / 1000 with the same sigma instead (§5.6), and with `LS_USE_RI` on it drops every entry more than 60 s
+  away. That is not ported: times of different instruments and temperature programs are not comparable. The
+  sample library `lib_aa.lbr` lists Glycine 3TMS at 418 s, the example runs elute it at 313 s, so the old rule
+  would remove the correct hit there.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
   which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
