@@ -202,7 +202,9 @@ impl GcmsSettings {
             ("QUANT_EXCL_IONS", &self.quant_excl_ions),
             ("LS_MASS_FILTER", &self.ls_mass_filter),
         ] {
-            if ranges.iter().any(|(a, b)| !a.is_finite() || !b.is_finite()) {
+            // Same limits as the dialog, so it never changes a loaded value.
+            let ok = |v: &f32| (0.0..=100_000.0).contains(v);
+            if ranges.iter().any(|(a, b)| !ok(a) || !ok(b)) {
                 return Err(format!("{name}: value out of range"));
             }
         }
@@ -266,17 +268,22 @@ impl GcmsSettings {
     /// Rejects wrong sizes, a wrong checksum and values the analysis cannot use.
     pub fn from_bytes(&self, bytes: &[u8]) -> Result<Self, String> {
         let mut unpacked = Vec::new();
-        let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+        // A raw file can start with these bytes by chance (they are the low bytes of the first
+        // value), so a failed gzip read of a file of raw size falls back to the raw layout.
+        let gz = bytes.starts_with(&[0x1f, 0x8b, 0x08]);
+        let bytes = match gz.then(|| {
             GzDecoder::new(bytes)
                 .take(MAX_LEN + 1)
                 .read_to_end(&mut unpacked)
-                .map_err(|e| format!("not a readable gzip file: {e}"))?;
-            if unpacked.len() as u64 > MAX_LEN {
+        }) {
+            Some(Ok(_)) if unpacked.len() as u64 > MAX_LEN => {
                 return Err("settings file too large".into());
             }
-            &unpacked[..]
-        } else {
-            bytes
+            Some(Ok(_)) => &unpacked[..],
+            Some(Err(e)) if bytes.len() < FIXED_LEN => {
+                return Err(format!("not a readable gzip file: {e}"));
+            }
+            _ => bytes,
         };
         if bytes.len() < FIXED_LEN {
             return Err(format!("settings file too short ({} bytes)", bytes.len()));
@@ -482,12 +489,32 @@ mod tests {
             |s: &mut GcmsSettings| s.an_min_peak_number = -1,
             |s: &mut GcmsSettings| s.ls_ri_diff = 0.0,
             |s: &mut GcmsSettings| s.quant_excl_ions = vec![(f32::NAN, 1.0)],
+            |s: &mut GcmsSettings| s.quant_excl_ions = vec![(-1.0, 73.0)],
         ] {
             let mut s = GcmsSettings::default();
             edit(&mut s);
             assert!(d.from_bytes(&s.to_bytes()).is_err(), "{s:?}");
         }
-        // Truncated or oversized gzip.
+        // Truncated and oversized gzip.
         assert!(d.from_bytes(&[0x1f, 0x8b, 8, 0]).is_err());
+        let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut z, &vec![0u8; MAX_LEN as usize + 1]).unwrap();
+        assert!(
+            d.from_bytes(&z.finish().unwrap())
+                .unwrap_err()
+                .contains("too large")
+        );
+    }
+
+    /// A raw file whose first value starts with the gzip magic bytes still loads.
+    #[test]
+    fn raw_file_starting_with_gzip_magic_loads() {
+        let s = GcmsSettings {
+            sf_peak_threshold_begin: f64::from_le_bytes([0x1f, 0x8b, 0x08, 0, 0, 0, 0x24, 0x40]),
+            ..Default::default()
+        };
+        let b = s.to_bytes();
+        assert_eq!(b[..3], [0x1f, 0x8b, 0x08]);
+        assert_eq!(GcmsSettings::default().from_bytes(&b).unwrap(), s);
     }
 }

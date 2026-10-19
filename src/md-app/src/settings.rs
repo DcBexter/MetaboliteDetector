@@ -85,10 +85,18 @@ impl Settings {
                         a.job = None;
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => a.job = None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // Panicked: keep the old components and do not retry these settings.
+                        error = Some(format!("{}: analysis crashed", run.name));
+                        a.key = Some(key.clone());
+                        a.job = None;
+                    }
                 }
             }
-            if a.key.as_ref() != Some(&wanted) && a.job.as_ref().map(|j| &j.0) != Some(&wanted) {
+            if a.key.as_ref() == Some(&wanted) {
+                // Settings changed back while a job for other ones ran: its result is not wanted.
+                a.job = None;
+            } else if a.job.as_ref().map(|j| &j.0) != Some(&wanted) {
                 let (data, key) = (run.data.clone(), wanted.clone());
                 a.job = Some((wanted.clone(), spawn(ctx, move || analyze(&data, &key))));
             }
