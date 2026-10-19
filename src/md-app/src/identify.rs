@@ -155,6 +155,13 @@ pub fn hits_panel(ui: &mut egui::Ui, run: &Run) {
     };
     egui::Panel::right("hits").show(ui, |ui| {
         ui.strong(format!("Library hits ({})", lib.name));
+        // A new search runs after a library or calibration change; until then these scores are old.
+        if run.ident_job.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Searching again…");
+            });
+        }
         let assigned = id.assigned[k].map(|h| h.compound);
         egui::Grid::new("hit table").striped(true).show(ui, |ui| {
             ui.label("Score");
