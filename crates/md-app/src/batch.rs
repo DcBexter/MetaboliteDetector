@@ -149,6 +149,7 @@ impl Batch {
             if ui.button("Add runs…").clicked()
                 && let Some(p) = rfd::FileDialog::new()
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
                     .pick_files()
             {
                 self.paths.extend(p);
