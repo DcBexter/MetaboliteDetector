@@ -21,7 +21,8 @@ pub struct DeconvSettings {
     pub min_height_bp: f64,
     /// `AN_MODELED_VALUES_FOR_INTEGRATION`: integrate the fitted model instead of the raw trace.
     pub modeled_integration: bool,
-    /// `QUANT_EXCL_IONS`: inclusive mass ranges never used to build the model peak.
+    /// `QUANT_EXCL_IONS`: inclusive mass ranges excluded from the normal model-peak selection.
+    /// If no model peak remains, the old sharpness fallback may still use an excluded mass.
     pub excluded_model_ions: Vec<(f32, f32)>,
 }
 

@@ -23,13 +23,14 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
+  src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-deconvolution, library search, RI calibration, quantification, MID and statistics.
+library search, RI calibration, quantification, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
