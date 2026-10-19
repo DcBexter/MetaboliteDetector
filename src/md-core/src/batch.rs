@@ -128,11 +128,9 @@ pub fn scan_runs(
                         let Some(path) = paths.get(i) else { break };
                         // A panic in one file becomes its error, so the other files are kept.
                         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::andi::read(path)
-                                .map_err(|e| e.to_string())
-                                .and_then(|c| {
-                                    scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
-                                })
+                            crate::read_run(path).and_then(|c| {
+                                scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
+                            })
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
                         .map(|found| RunResult {

@@ -21,7 +21,8 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 Cargo.toml              workspace, release profile (LTO, 1 codegen unit)
 src/md-core/            library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
-  src/andi.rs           ANDI-MS NetCDF import with input validation
+  src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
+  src/diskscan.rs       old raw-data cache (.bin + .idx) reader
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
@@ -311,6 +312,29 @@ with peak records are rejected as not supported until a sample file shows their 
 as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kept verbatim.
 `tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
 `MD_LBR_SAMPLE` points to it; the file is never committed.
+
+## Old raw-data cache (.bin + .idx)
+
+The old app converted every imported NetCDF into `<run>.bin` (scan records) and `<run>.idx` (index);
+some users only kept these. `md_core::diskscan::read` reads the pair into the same `Chromatogram` as
+`andi::read` (layout in [file-formats.md](reverse-engineering/file-formats.md) §2). Reading is a trust
+boundary like the libraries: every offset and count is checked against the file size before anything
+is allocated, each `.bin` record header must match its index entry, and errors are returned instead of
+panics. Caches with a TOF calibration polynomial are rejected (the old app applied it to the masses;
+`CdfImporter` writes none).
+
+`andi::write` exports a `Chromatogram` as ANDI-MS NetCDF (64-bit-offset NetCDF-3): the raw-data
+variables `scan_acquisition_time`, `scan_index`, `point_count`, `mass_values`, `intensity_values` and
+`total_intensity` (the sum of each spectrum). `md_core::read_run` picks the reader by extension, so the
+app's File menu and the batch view open `.bin` files; File → Export as NetCDF writes the active run.
+
+Proof: `docs/reverse-engineering/tools/diskscan/make-cache.sh` converts the 15 example runs with the
+old binary's own `CdfImporter` (`LD_PRELOAD` driver, like the golden test). The test
+`old_cache_matches_cdf` in `tests/example_data.rs` (runs when `MD_OLD_CACHE` points to that output)
+checks that every cache has the same spectra as the original `.cdf`, and that its NetCDF export reads
+back unchanged. Times match to f32 precision: the old importer kept times as f32 seconds. The old binary
+also re-imports the exported NetCDF files with identical spectra and times; only the stored TIC differs,
+because the example `.cdf` files carry the instrument's `total_intensity`, not the sum of the spectrum.
 
 ## Settings
 
