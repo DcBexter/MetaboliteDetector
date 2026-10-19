@@ -137,7 +137,7 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let traces = IonTraces::new(&data);
+                        let traces = IonTraces::new(&data).map_err(|e| e.to_string())?;
                         let peaks = traces.detect_peaks(&PeakSettings::default());
                         let mut components =
                             deconvolute(&traces, &peaks, &DeconvSettings::default());

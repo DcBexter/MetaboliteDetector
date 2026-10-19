@@ -84,7 +84,9 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. `PeakSettings::default()` holds the old `AN_*` defaults.
+detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
+0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
 old app only uses in the RI calibration dialog (and deconvolution, §4.5).
 
