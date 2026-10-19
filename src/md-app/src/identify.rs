@@ -1,5 +1,6 @@
 //! Library search in the app: load a library, identify the components of every run on worker threads
-//! (with RI once calibrated), label hits on the TIC and list the hits of the selected component.
+//! (with RI once calibrated, shifted per run onto a reference substance if one is chosen), label hits on
+//! the TIC and list the hits of the selected component.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -7,21 +8,29 @@ use std::sync::{Arc, mpsc};
 use eframe::egui;
 use md_core::library::{LibraryCompound, import_msl, read_lbr};
 use md_core::ri::RiCalibration;
-use md_core::search::{Identification, PreparedLibrary, SearchSettings, map_compounds_to_library};
+use md_core::search::{
+    Identification, PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
+};
 
 use crate::{App, Run, spawn};
 
 pub struct Library {
     pub name: String,
-    compounds: Vec<LibraryCompound>,
+    pub compounds: Vec<LibraryCompound>,
     prepared: PreparedLibrary,
 }
 
-/// Library and RI calibration an identification was computed with.
-pub type Key = (Arc<Library>, Option<Arc<RiCalibration>>);
+/// Library, RI calibration and RT shift reference (library index, cutoff) an identification was
+/// computed with.
+pub type Key = (
+    Arc<Library>,
+    Option<Arc<RiCalibration>>,
+    Option<(usize, f64)>,
+);
 
-/// Identification of one run and what it was computed with.
-pub type Identified = (Key, Identification);
+/// Identification of one run, what it was computed with, and the calibration shifted onto the
+/// reference when it was found.
+pub type Identified = (Key, Identification, Option<RiCalibration>);
 
 /// A text on the TIC: position, name, colour.
 pub type Label = ([f64; 2], String, egui::Color32);
@@ -86,7 +95,7 @@ impl App {
     }
 
     /// Takes a loaded library and (re)identifies every run that was not searched with the current
-    /// library and RI calibration.
+    /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
             && let Ok(result) = rx.try_recv()
@@ -101,26 +110,37 @@ impl App {
             return;
         };
         let cal = &self.ri.cal;
+        let reference = (self.ri.reference.as_ref())
+            .filter(|_| cal.is_some())
+            // The window offers only compounds with RI; a namesake without RI must not shadow them.
+            .and_then(|n| (lib.compounds.iter()).position(|c| &c.name == n && c.spectrum.ri >= 0.0))
+            .map(|k| (k, self.ri.ref_cutoff));
         let current = |k: &Key| {
-            Arc::ptr_eq(&k.0, lib) && k.1.as_ref().map(Arc::as_ptr) == cal.as_ref().map(Arc::as_ptr)
+            Arc::ptr_eq(&k.0, lib)
+                && k.1.as_ref().map(Arc::as_ptr) == cal.as_ref().map(Arc::as_ptr)
+                && k.2 == reference
         };
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.ident_job
-                && let Ok(id) = rx.try_recv()
+                && let Ok((id, shifted)) = rx.try_recv()
             {
-                run.ident = Some((k.clone(), id));
+                run.ident = Some((k.clone(), id, shifted));
                 run.ident_job = None;
             }
             if !run.ident.as_ref().is_some_and(|i| current(&i.0))
                 && !run.ident_job.as_ref().is_some_and(|j| current(&j.0))
             {
-                let key: Key = (lib.clone(), cal.clone());
+                let key: Key = (lib.clone(), cal.clone(), reference);
                 let (k, comps, times) = (key.clone(), run.components.clone(), run.data.clone());
                 let rx = spawn(ctx, move || {
-                    let ris =
-                        k.1.as_ref()
-                            .map(|c| c.component_ris(&times.scan_times_s, &comps));
-                    map_compounds_to_library(&comps, ris.as_deref(), &k.0.prepared, &settings())
+                    let (lib, times, s) = (&k.0.prepared, &times.scan_times_s, settings());
+                    let shifted = k.1.as_ref().zip(k.2).and_then(|(c, (r, cutoff))| {
+                        shift_to_reference(c, times, &comps, lib, r, cutoff, &s)
+                    });
+                    let cal = shifted.as_ref().or(k.1.as_deref());
+                    let ris = cal.map(|c| c.component_ris(times, &comps));
+                    let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s);
+                    (id, shifted)
                 });
                 run.ident_job = Some((key, rx));
             }
@@ -130,7 +150,7 @@ impl App {
 
 /// Names of the assigned library compounds at the component apexes on the TIC.
 pub fn labels(run: &Run) -> Vec<Label> {
-    let Some(((lib, _), id)) = &run.ident else {
+    let Some(((lib, ..), id, _)) = &run.ident else {
         return Vec::new();
     };
     run.components
@@ -150,7 +170,7 @@ pub fn labels(run: &Run) -> Vec<Label> {
 
 /// Best hits of the selected component, the assigned one marked.
 pub fn hits_panel(ui: &mut egui::Ui, run: &Run) {
-    let (Some(((lib, _), id)), Some(k)) = (&run.ident, run.component) else {
+    let (Some(((lib, ..), id, _)), Some(k)) = (&run.ident, run.component) else {
         return;
     };
     egui::Panel::right("hits").show(ui, |ui| {
@@ -190,4 +210,4 @@ pub fn hits_panel(ui: &mut egui::Ui, run: &Run) {
 }
 
 pub type LibraryJob = mpsc::Receiver<Result<Arc<Library>, String>>;
-pub type IdentJob = (Key, mpsc::Receiver<Identification>);
+pub type IdentJob = (Key, mpsc::Receiver<(Identification, Option<RiCalibration>)>);
