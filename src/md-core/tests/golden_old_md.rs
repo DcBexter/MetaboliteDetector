@@ -91,7 +91,7 @@ fn matches_old_version() {
     let (mut peak_runs, mut total) = (0, Count::default());
     for r in &runs {
         let c = md_core::andi::read(dir.join(&r.name)).unwrap();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
         let mass = |row: u32| traces.masses[row as usize];

@@ -70,8 +70,19 @@ fn nominal(mz: f32) -> Option<usize> {
     (m >= 0.0 && m < MASS_LIMIT as f32).then_some(m as usize)
 }
 
+/// Upper bound for the ion-major index (masses × scans × 4 bytes). Real runs need well under 1 GiB;
+/// a corrupt file with huge scan or mass counts must fail instead of exhausting memory.
+pub const MAX_TRACE_BYTES: usize = 8 << 30;
+
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+#[error("ion index of {masses} masses x {scans} scans needs more than {} GiB", MAX_TRACE_BYTES >> 30)]
+pub struct TooLarge {
+    pub masses: usize,
+    pub scans: usize,
+}
+
 impl IonTraces {
-    pub fn new(c: &Chromatogram) -> Self {
+    pub fn new(c: &Chromatogram) -> Result<Self, TooLarge> {
         let scans = c.scan_count();
         let present =
             c.mz.par_chunks(1 << 20)
@@ -98,7 +109,15 @@ impl IonTraces {
             .iter()
             .enumerate()
             .for_each(|(r, m)| row_of[*m as usize] = r);
-        let mut values = vec![0.0f32; masses.len() * scans];
+        let too_large = TooLarge {
+            masses: masses.len(),
+            scans,
+        };
+        let cells = masses.len().checked_mul(scans).ok_or(too_large)?;
+        if cells > MAX_TRACE_BYTES / size_of::<f32>() {
+            return Err(too_large);
+        }
+        let mut values = vec![0.0f32; cells];
         // Each task owns a block of rows and walks the matching m/z range of every scan once.
         const BLOCK: usize = 8;
         if scans > 0 {
@@ -119,11 +138,11 @@ impl IonTraces {
                     }
                 });
         }
-        Self {
+        Ok(Self {
             masses,
             scans,
             values,
-        }
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -613,7 +632,7 @@ mod tests {
             mz: vec![-0.5, -0.4, 0.5, f32::INFINITY],
             intensity: vec![1.0, 2.0, 4.0, 8.0],
         };
-        let t = IonTraces::new(&c);
+        let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
         assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
     }
@@ -629,7 +648,7 @@ mod tests {
             mz: (0..scans).flat_map(|_| [72.9f32, 73.2, 147.0]).collect(),
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
         };
-        let t = IonTraces::new(&c);
+        let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
         assert_eq!(t.trace(0), &big[..]);
         assert_eq!(t.trace(1), &vec![5.0; scans][..]);
@@ -644,8 +663,30 @@ mod tests {
         };
         assert!(
             IonTraces::new(&empty)
+                .unwrap()
                 .detect_peaks(&PeakSettings::default())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn ion_traces_refuse_absurd_sizes() {
+        // 65 536 masses in the first scan, 40 000 scans: 10 GB of f32 if it were allocated.
+        let scans = 40_000;
+        let mut offsets = vec![0, 65_536];
+        offsets.resize(scans + 1, 65_536);
+        let c = Chromatogram {
+            scan_times_s: vec![0.0; scans],
+            offsets,
+            mz: (0..65_536).map(|m| m as f32).collect(),
+            intensity: vec![1.0; 65_536],
+        };
+        assert_eq!(
+            IonTraces::new(&c),
+            Err(TooLarge {
+                masses: 65_536,
+                scans
+            })
         );
     }
 }
