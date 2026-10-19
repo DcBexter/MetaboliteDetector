@@ -6,6 +6,7 @@ use rayon::prelude::*;
 pub mod andi;
 pub mod batch;
 pub mod deconv;
+pub mod isotope;
 pub mod library;
 pub mod peaks;
 pub mod ri;

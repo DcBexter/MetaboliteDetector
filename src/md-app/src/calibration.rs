@@ -1,6 +1,6 @@
 //! RI calibration window: alkanes found in one run, or a `.calib` file; applies to every open run.
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use eframe::egui;
 use md_core::ri::{RiCalibration, marker_peaks, series_points};
@@ -8,7 +8,8 @@ use md_core::ri::{RiCalibration, marker_peaks, series_points};
 use crate::{Run, spawn};
 
 pub struct Calibration {
-    pub cal: Option<RiCalibration>,
+    /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
+    pub cal: Option<Arc<RiCalibration>>,
     /// Where `cal` came from, shown in the window.
     source: String,
     pub open: bool,
@@ -54,7 +55,7 @@ impl Calibration {
 
     /// Also drops a running alkane search, so its late result cannot replace this calibration.
     fn set(&mut self, cal: RiCalibration, source: String) {
-        (self.cal, self.source, self.error, self.job) = (Some(cal), source, None, None);
+        (self.cal, self.source, self.error, self.job) = (Some(Arc::new(cal)), source, None, None);
     }
 
     pub fn window(&mut self, ctx: &egui::Context, run: Option<&Run>) {
@@ -133,7 +134,9 @@ impl Calibration {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         let Some(cal) = &self.cal else {
-            ui.label("Not calibrated: components have no RI.");
+            ui.label(
+                "Not calibrated: components have no RI, the library search uses the spectrum only.",
+            );
             return;
         };
         ui.label(format!(

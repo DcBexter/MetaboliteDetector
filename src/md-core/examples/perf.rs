@@ -76,7 +76,7 @@ fn main() {
     println!("overlay frame, 15 runs x TIC+SIC: {:?}", t.elapsed());
 
     let t = Instant::now();
-    let traces = IonTraces::new(&c);
+    let traces = IonTraces::new(&c).unwrap();
     println!("ion traces ({}): {:?}", traces.len(), t.elapsed());
 
     let t = Instant::now();
@@ -134,7 +134,7 @@ fn main() {
     let s = ScanSettings::default();
     let prepared = PreparedLibrary::new(&lib, &s.search);
     let t = Instant::now();
-    let found = scan_chromatogram(c.clone(), &prepared, &s);
+    let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
     println!(
         "batch, one run end to end ({} substances found): {:?}",
         found.len(),

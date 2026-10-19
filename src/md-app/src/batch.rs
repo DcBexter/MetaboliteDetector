@@ -50,7 +50,7 @@ impl Default for Batch {
         Self {
             open: false,
             paths: Vec::new(),
-            // 15 example runs: 470 ms with 1, 115 ms with 4 (92 MiB), 70 ms with 15 (210 MiB).
+            // 15 example runs: 1.1 s with 1, 0.17 s with 4 (90 MiB), 0.10 s with 15 (189 MiB).
             parallel: 4,
             settings: TableSettings::default(),
             job: None,

@@ -70,8 +70,19 @@ fn nominal(mz: f32) -> Option<usize> {
     (m >= 0.0 && m < MASS_LIMIT as f32).then_some(m as usize)
 }
 
+/// Upper bound for the ion-major index (masses × scans × 4 bytes). Real runs need well under 1 GiB;
+/// a corrupt file with huge scan or mass counts must fail instead of exhausting memory.
+pub const MAX_TRACE_BYTES: usize = 8 << 30;
+
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+#[error("ion index of {masses} masses x {scans} scans needs more than {} GiB", MAX_TRACE_BYTES >> 30)]
+pub struct TooLarge {
+    pub masses: usize,
+    pub scans: usize,
+}
+
 impl IonTraces {
-    pub fn new(c: &Chromatogram) -> Self {
+    pub fn new(c: &Chromatogram) -> Result<Self, TooLarge> {
         let scans = c.scan_count();
         let present =
             c.mz.par_chunks(1 << 20)
@@ -98,7 +109,15 @@ impl IonTraces {
             .iter()
             .enumerate()
             .for_each(|(r, m)| row_of[*m as usize] = r);
-        let mut values = vec![0.0f32; masses.len() * scans];
+        let too_large = TooLarge {
+            masses: masses.len(),
+            scans,
+        };
+        let cells = masses.len().checked_mul(scans).ok_or(too_large)?;
+        if cells > MAX_TRACE_BYTES / size_of::<f32>() {
+            return Err(too_large);
+        }
+        let mut values = vec![0.0f32; cells];
         // Each task owns a block of rows and walks the matching m/z range of every scan once.
         const BLOCK: usize = 8;
         if scans > 0 {
@@ -119,11 +138,11 @@ impl IonTraces {
                     }
                 });
         }
-        Self {
+        Ok(Self {
             masses,
             scans,
             values,
-        }
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -456,7 +475,9 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
 }
 
 /// §3.6: vertex of the parabola through apex − 1, apex, apex + 1 of the peak values, rounded to
-/// `1 / bins` scan, relative to the peak start; `None` at the peak edge or for a shift of ≥ 1 scan.
+/// `1 / bins` scan, relative to the peak start; `None` at the peak edge, on a flat top or for a shift of
+/// ≥ 1 scan. Exact half-step ties round down: the old SVD fit in absolute bins lands just below the tie in
+/// 217 of 267 ties of the example runs (docs/architecture.md, "Golden test").
 fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
@@ -464,7 +485,7 @@ fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
     let (a, b, c) = (v[apex - 1] as f64, v[apex] as f64, v[apex + 1] as f64);
     let shift = 0.5 * (a - c) / (a - 2.0 * b + c);
     let bins = bins as f64;
-    let t = ((apex as f64 + shift) * bins + 0.5).floor() / bins;
+    let t = ((apex as f64 + shift) * bins - 0.5).ceil() / bins;
     ((t - apex as f64).abs() < 1.0).then_some(t as f32)
 }
 
@@ -507,6 +528,14 @@ fn sharpness(w: &[f32], apex: usize, nu: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precise_apex_rounds_ties_down() {
+        // Vertex at 1.25 scans = 12.5 bins: the old fit mostly lands just below the tie.
+        assert_eq!(precise_apex(&[1.0, 4.0, 3.0], 1, 10), Some(1.2));
+        assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 1, 10), Some(0.7));
+        assert_eq!(precise_apex(&[5.0, 5.0, 5.0], 1, 10), None);
+    }
 
     /// Baseline of 1000 with deterministic noise of about ±20 (sd ≈ 12).
     fn noisy(n: usize) -> Vec<f32> {
@@ -613,7 +642,7 @@ mod tests {
             mz: vec![-0.5, -0.4, 0.5, f32::INFINITY],
             intensity: vec![1.0, 2.0, 4.0, 8.0],
         };
-        let t = IonTraces::new(&c);
+        let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
         assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
     }
@@ -629,7 +658,7 @@ mod tests {
             mz: (0..scans).flat_map(|_| [72.9f32, 73.2, 147.0]).collect(),
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
         };
-        let t = IonTraces::new(&c);
+        let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
         assert_eq!(t.trace(0), &big[..]);
         assert_eq!(t.trace(1), &vec![5.0; scans][..]);
@@ -644,8 +673,30 @@ mod tests {
         };
         assert!(
             IonTraces::new(&empty)
+                .unwrap()
                 .detect_peaks(&PeakSettings::default())
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn ion_traces_refuse_absurd_sizes() {
+        // 65 536 masses in the first scan, 40 000 scans: 10 GB of f32 if it were allocated.
+        let scans = 40_000;
+        let mut offsets = vec![0, 65_536];
+        offsets.resize(scans + 1, 65_536);
+        let c = Chromatogram {
+            scan_times_s: vec![0.0; scans],
+            offsets,
+            mz: (0..65_536).map(|m| m as f32).collect(),
+            intensity: vec![1.0; 65_536],
+        };
+        assert_eq!(
+            IonTraces::new(&c),
+            Err(TooLarge {
+                masses: 65_536,
+                scans
+            })
         );
     }
 }

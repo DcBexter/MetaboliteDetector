@@ -13,6 +13,7 @@ use md_core::{Chromatogram, decimate};
 mod batch;
 mod calibration;
 mod identify;
+mod isotopes;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -57,6 +58,7 @@ struct App {
     mz: f32,
     tolerance: f32,
     ri: calibration::Calibration,
+    isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
     batch: batch::Batch,
@@ -76,6 +78,7 @@ impl Default for App {
             mz: 147.0,
             tolerance: 0.5,
             ri: calibration::Calibration::default(),
+            isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
             batch: batch::Batch::default(),
@@ -137,7 +140,7 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let traces = IonTraces::new(&data);
+                        let traces = IonTraces::new(&data).map_err(|e| e.to_string())?;
                         let peaks = traces.detect_peaks(&PeakSettings::default());
                         let mut components =
                             deconvolute(&traces, &peaks, &DeconvSettings::default());
@@ -296,13 +299,17 @@ impl eframe::App for App {
                     if ui.button("Batch quantification…").clicked() {
                         self.batch.open = true;
                     }
+                    if ui.button("Natural isotopes…").clicked() {
+                        self.isotopes.open = true;
+                    }
                 });
             });
         });
 
         self.ri.window(ui.ctx(), self.runs.get(self.active));
         self.batch
-            .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_ref());
+            .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
+        self.isotopes.window(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {

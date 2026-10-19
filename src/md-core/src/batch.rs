@@ -16,7 +16,7 @@ use regex::Regex;
 use crate::Chromatogram;
 use crate::deconv::{DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, PeakSettings};
+use crate::peaks::{IonTraces, PeakSettings, TooLarge};
 use crate::ri::RiCalibration;
 use crate::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
@@ -58,8 +58,12 @@ pub struct RunResult {
 }
 
 /// Deconvolutes one run and returns the library substances assigned to its components.
-pub fn scan_chromatogram(c: Chromatogram, lib: &PreparedLibrary, s: &ScanSettings) -> Vec<Found> {
-    let traces = IonTraces::new(&c);
+pub fn scan_chromatogram(
+    c: Chromatogram,
+    lib: &PreparedLibrary,
+    s: &ScanSettings,
+) -> Result<Vec<Found>, TooLarge> {
+    let traces = IonTraces::new(&c)?;
     // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
     // peak memory per run.
     let times = c.scan_times_s.clone();
@@ -71,7 +75,7 @@ pub fn scan_chromatogram(c: Chromatogram, lib: &PreparedLibrary, s: &ScanSetting
         .as_ref()
         .map(|cal| cal.component_ris(&times, &comps));
     let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s.search);
-    comps
+    Ok(comps
         .iter()
         .zip(id.assigned)
         .filter_map(|(k, hit)| {
@@ -97,7 +101,7 @@ pub fn scan_chromatogram(c: Chromatogram, lib: &PreparedLibrary, s: &ScanSetting
                 ions,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
@@ -121,9 +125,11 @@ pub fn scan_runs(
                         let i = next.fetch_add(1, Relaxed);
                         let Some(path) = paths.get(i) else { break };
                         let r = crate::andi::read(path)
-                            .map(|c| RunResult {
+                            .map_err(|e| e.to_string())
+                            .and_then(|c| scan_chromatogram(c, lib, s).map_err(|e| e.to_string()))
+                            .map(|found| RunResult {
                                 path: path.clone(),
-                                found: scan_chromatogram(c, lib, s),
+                                found,
                             })
                             .map_err(|e| format!("{}: {e}", path.display()));
                         mine.push((i, r));
@@ -494,7 +500,7 @@ mod tests {
         );
         let lib = parse_msl(&msl).unwrap();
         let s = ScanSettings::default();
-        let found = scan_chromatogram(c, &PreparedLibrary::new(&lib, &s.search), &s);
+        let found = scan_chromatogram(c, &PreparedLibrary::new(&lib, &s.search), &s).unwrap();
         assert_eq!(found.len(), 2, "{found:?}");
         let early = found.iter().find(|f| f.compound == 1).unwrap();
         assert!((early.rt_s - 30.0).abs() <= 0.5, "{}", early.rt_s);
