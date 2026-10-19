@@ -22,13 +22,14 @@ Cargo.toml              workspace, release profile (LTO, 1 codegen unit)
 src/md-core/            library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation
+  src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
 Planned additions: `src/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-peak detection, deconvolution, library search, RI calibration, quantification, MID and statistics.
+deconvolution, library search, RI calibration, quantification, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 ## Performance rules
@@ -56,9 +57,12 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | TIC | 2.0 ms |
 | SIC (one m/z) | 1.0 ms |
 | Decimate TIC for drawing | 0.05 ms |
+| Ion traces (index, 500 traces) | 24 ms |
+| Peaks in all 500 traces (300 000 peaks) | 19 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
-file; all 15 runs in 0.27 s (`cargo test --release -p md-core --test example_data -- --nocapture`).
+file; all 15 runs in 0.27 s; ion traces + peak detection 6–10 ms per file, 440–660 peaks in 236 traces
+(`cargo test --release -p md-core --test example_data -- --nocapture`).
 The whole file is read into memory first because `netcdf3` seeks per record (1.8 s per file on a
 plain `File`).
 
