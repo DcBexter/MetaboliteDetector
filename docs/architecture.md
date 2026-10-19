@@ -22,6 +22,7 @@ Cargo.toml              workspace, release profile (LTO, 1 codegen unit)
 src/md-core/            library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation
+  src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   examples/perf.rs      performance smoke test on synthetic large runs
@@ -119,6 +120,18 @@ Conscious deviations:
   re-implemented (round to 8 significant digits).
 - **No `reorderPeaks`** (unit-mass data only, see peak detection) and **no RI** yet (issue 20).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
+
+## Libraries
+
+`md_core::library` reads the old binary `.lbr` libraries (gzip or raw, version 2, layout in
+[file-formats.md](reverse-engineering/file-formats.md) §1) and imports and exports AMDIS MSL (§6).
+Library files come from users, so reading is a trust boundary: every length is checked against the
+remaining bytes before anything is allocated, check values are verified, gzip output is capped at 1 GiB,
+and errors are returned instead of panics. Version 5 (the old writer's current version) and compounds
+with peak records are rejected as not supported until a sample file shows their layout. Strings are read
+as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kept verbatim.
+`tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
+`MD_LBR_SAMPLE` points to it; the file is never committed.
 
 ## Build and test
 

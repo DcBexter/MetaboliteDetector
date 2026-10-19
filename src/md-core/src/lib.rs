@@ -5,6 +5,7 @@ use rayon::prelude::*;
 
 pub mod andi;
 pub mod deconv;
+pub mod library;
 pub mod peaks;
 
 /// A GC/MS run: one mass spectrum per scan, stored as flat arrays (ANDI-MS layout).
