@@ -50,4 +50,4 @@ nm "$app" | awk '
 
 g++ -std=c++17 -O1 -shared -fPIC -I"$work" -o "$work/old_md_dump.so" "$here/old_md_dump.cpp" -ldl
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
-python3 "$here/golden.py" "$work/raw.tsv" > "$repo/src/md-core/tests/data/old-md-3.3.tsv"
+python3 "$here/golden.py" < "$work/raw.tsv" > "$repo/src/md-core/tests/data/old-md-3.3.tsv"
