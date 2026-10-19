@@ -226,7 +226,7 @@ fn amino_acids_get_ri_score_with_lib_aa() {
         let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
         let fame = RiCalibration::new(window_points(&fame, &windows)).unwrap();
         let cal = RiCalibration::new(bridge.map(|(f, n)| (fame.rt(f), lib_ri(n)))).unwrap();
-        let traces = IonTraces::new(&c);
+        let traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
         let ris = cal.component_ris(&c.scan_times_s, &comps);
