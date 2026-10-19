@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: de-DE
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!**/.vendor/**"
+    - "!.github/skills/**"
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Follow AGENTS.md and contribution rules. Preserve security, attribution and
+        acceptance. Prefer the smallest complete root-cause fix. Distinguish verified
+        behavior from mocks and configuration. Report consequential defects.

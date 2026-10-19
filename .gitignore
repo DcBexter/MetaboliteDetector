@@ -1,0 +1,8 @@
+
+/.workflow-kit/
+/.impeccable/vendor/
+/.impeccable/setup-*/
+.claude/settings.local.json
+**/.impeccable/config.local.json
+**/skills/impeccable/scripts/bin/
+/.scratch/

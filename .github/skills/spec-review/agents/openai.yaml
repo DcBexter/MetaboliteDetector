@@ -1,0 +1,5 @@
+interface:
+  display_name: "Spec Review"
+  short_description: "Check a spec issue against the code; open work becomes sub-issues."
+policy:
+  allow_implicit_invocation: false

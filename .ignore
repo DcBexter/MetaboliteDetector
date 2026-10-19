@@ -1,0 +1,10 @@
+# Search tools (ripgrep) skip these paths; Git doesn't read this file; commit it.
+# Generated provider copies of the skills: .agents/skills stays searchable.
+# A project-owned skill stays visible with a line like: !/.claude/skills/my-skill/
+/.agent/skills/*
+/.claude/skills/*
+/.github/skills/*
+/.opencode/skills/*
+/.pi/skills/*
+# Vendored sources: search them by naming the path.
+/.vendor/

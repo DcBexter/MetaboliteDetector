@@ -1,0 +1,22 @@
+name: Task
+description: Bounded work with acceptance and proof
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome and scope
+      description: Problem, expected behavior, affected contracts and non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and verification
+      description: Observable result, required checks and limits of evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and recovery
+      description: Real blockers, authorization and condition for resuming.
