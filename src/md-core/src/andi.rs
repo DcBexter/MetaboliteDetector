@@ -73,6 +73,10 @@ pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> 
             .collect()
     };
     let scans = c.scan_count();
+    // NetCDF-3 forbids fixed dimensions of size 0.
+    if scans == 0 || c.mz.is_empty() {
+        return Err(AndiError::Inconsistent("the run has no data points".into()));
+    }
     let index = i32s(c.offsets[..scans].to_vec())?;
     let count = i32s(c.offsets.windows(2).map(|w| w[1] - w[0]).collect())?;
     let mut ds = DataSet::new();
@@ -103,8 +107,16 @@ pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> 
         .and_then(|_| w.write_var_f32("intensity_values", &c.intensity))
         .and_then(|_| w.close())
         .map_err(AndiError::Write)?;
-    let bytes = buf.0.take().into_inner();
-    std::fs::write(path, bytes).map_err(|e| AndiError::Write(e.into()))
+    // Temp file + rename: a failed write never leaves the target (maybe the source .cdf) truncated.
+    let path = path.as_ref();
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let result =
+        std::fs::write(&tmp, buf.0.take().into_inner()).and_then(|_| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        std::fs::remove_file(&tmp).ok();
+    }
+    result.map_err(|e| AndiError::Write(e.into()))
 }
 
 #[derive(Clone, Default)]
@@ -272,6 +284,19 @@ mod tests {
         let back = read(&path);
         std::fs::remove_file(&path).ok();
         assert_eq!(back.unwrap(), c);
+    }
+
+    #[test]
+    fn write_refuses_empty_run_and_keeps_target() {
+        let path = std::env::temp_dir().join(format!("md-core-andi-e-{}.cdf", std::process::id()));
+        std::fs::write(&path, b"keep").unwrap();
+        let empty = build(vec![1.0], &[0.0], &[0.0], vec![], vec![]).unwrap();
+        assert!(matches!(
+            write(&path, &empty),
+            Err(AndiError::Inconsistent(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
