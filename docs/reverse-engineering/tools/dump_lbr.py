@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Dumps every field of a .lbr like md-core's tests/lbr_sample.rs (floats as f64 bit patterns).
 
-Usage: python3 -I dump_lbr.py parse_lbr.py library.lbr > py.txt
+Usage: python3 -I dump_lbr.py < library.lbr > py.txt
        MD_LBR_SAMPLE=library.lbr cargo test -p md-core --test lbr_sample -- --nocapture | grep "|" > rs.txt
        diff py.txt rs.txt   (strip CR on Windows)
 """
-import sys, gzip, struct, importlib.util
-spec = importlib.util.spec_from_file_location('p', sys.argv[1]); p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
-v, cs = p.parse_library(gzip.decompress(open(sys.argv[2], 'rb').read()))
+import gzip, importlib.util, pathlib, struct, sys
+
+# -I drops the script directory from sys.path, so load the sibling parser explicitly.
+spec = importlib.util.spec_from_file_location('parse_lbr', pathlib.Path(__file__).with_name('parse_lbr.py'))
+p = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(p)
+# The library comes on stdin, so the tool never opens a path from its arguments.
+data = sys.stdin.buffer.read()
+v, cs = p.parse_library(gzip.decompress(data) if data[:2] == p.GZIP_MAGIC else data)
 bits = lambda x: '%016x' % struct.unpack('<Q', struct.pack('<d', x))[0]
 lst = lambda xs: ','.join(bits(x) for x in xs)
 opt = lambda xs: 'null' if xs is None else lst(xs)
