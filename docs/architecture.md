@@ -25,11 +25,13 @@ src/md-core/            library: data model, import/export, analysis algorithms 
   src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
+  src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   examples/perf.rs      performance smoke test on synthetic large runs
 src/md-app/             egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
+  src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
@@ -82,7 +84,9 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. `PeakSettings::default()` holds the old `AN_*` defaults.
+detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
+0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
 old app only uses in the RI calibration dialog (and deconvolution, §4.5).
 
@@ -101,6 +105,11 @@ peaks of the example runs:
   detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
+- **Precise apex ties round down.** The old app fits the parabola with `gsl_multifit_linear` in absolute
+  bin coordinates; at an exact half-step tie its rounding error decides the direction. Here the vertex is
+  exact and ties round down, which the old app does in 217 of 267 ties on the example runs. On a flat top
+  (three equal values) the old fit returns an arbitrary vertex near the apex; here there is no precise apex.
+  This only moves peaks between deconvolution histogram bins (golden test).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -116,7 +125,7 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose; with them, 225 of 246 old components match exactly (golden test below): the first
+The old quirks are kept on purpose; with them, 241 of 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
@@ -143,8 +152,8 @@ Calibration from a run: `marker_peaks` runs the matched detector (§3.3) on the 
 and takes the highest raw scan of each peak. `series_points` gives the n highest peaks, in time order, the
 RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` takes the highest peak in a known
 time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
-(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs, and the
-status bar shows the RI of the scan or selected component.
+(m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
+library search, and the status bar shows the RI of the scan or selected component.
 
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
@@ -185,14 +194,22 @@ spectrum, so no fragment pre-filter is needed (table above).
 
 The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
-above 0.7, red otherwise, like the old app) and lists the best hits of the selected component.
+above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
+spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
+loading or clearing the calibration re-identifies every run, because `run.ident` remembers the library and
+calibration (`Arc`s, compared by pointer) it was computed with. `tests/example_data.rs` checks this with
+`lib_aa.lbr` (`MD_LBR_SAMPLE`): the example runs have no alkanes, so their alkane calibration is bridged over
+Valine 2TMS and Threonine 3TMS (FAME RI from TargetSearch's `library.txt` → time in the run); Leucine 2TMS,
+Glycine 3TMS and Serine 3TMS are then assigned with RI scores of 0.94–0.99.
 
 Conscious deviations:
 
-- **No RI yet → spectrum only.** The app does not pass the RI calibration to the search yet (issue 48). When the component or
-  the library entry has no RI, the overall score is the spectrum score alone (with `use_spec` off there is then
-  no hit). The old code then compares retention times / 1000 with the same sigma instead; that is not ported,
-  because times of different runs and instruments only become comparable after calibration.
+- **No RI → spectrum only.** Without a calibration, or when the library entry has no RI, the overall score is
+  the spectrum score alone (with `use_spec` off there is then no hit). The old code then compares retention
+  times / 1000 with the same sigma instead (§5.6), and with `LS_USE_RI` on it drops every entry more than 60 s
+  away. That is not ported: times of different instruments and temperature programs are not comparable. The
+  sample library `lib_aa.lbr` lists Glycine 3TMS at 418 s, the example runs elute it at 313 s, so the old rule
+  would remove the correct hit there.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
   which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
@@ -228,18 +245,16 @@ Tolerances and their reasons:
 |---|---|---|
 | Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
 | Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
-| Component ions and apex scan | exact for 231 of 246 | 15 known differences, issue 46 |
+| Component ions and apex scan | exact for 242 of 246 | 4 known differences, see below |
 | Ion height | ±1 | the old code rounds a few modelled heights the other way |
 | Ion integral | 1e-5 relative | the reference prints 7 significant digits |
 
-Remaining differences, all in deconvolution (issue 46):
+Remaining differences, all in deconvolution: 1 old component is missing, 3 differ by one or more ions,
+and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
+deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
+A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
 
-- 3 old components are missing.
-- 12 components differ by 1–4 ions.
-- 6 components have the same ions, but all heights and integrals differ by about 0.1–5 %. A different
-  model peak is the likely cause.
-
-The test fails when one of these counts grows. The counts are lowered as issue 46 fixes them.
+The test fails when one of these counts grows.
 
 The golden test found three porting errors in peak detection, now fixed:
 

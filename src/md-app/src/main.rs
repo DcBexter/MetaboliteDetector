@@ -11,6 +11,7 @@ use md_core::{Chromatogram, decimate};
 
 mod calibration;
 mod identify;
+mod isotopes;
 mod settings;
 
 fn main() -> eframe::Result {
@@ -57,6 +58,7 @@ struct App {
     tolerance: f32,
     ri: calibration::Calibration,
     settings: settings::Settings,
+    isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
 }
@@ -76,6 +78,7 @@ impl Default for App {
             tolerance: 0.5,
             ri: calibration::Calibration::default(),
             settings: settings::Settings::default(),
+            isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
         }
@@ -138,7 +141,7 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let components = settings::analyze(&data, &key);
+                        let components = settings::analyze(&data, &key)?;
                         Ok(Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
@@ -269,7 +272,9 @@ fn trace_plot(
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_loading();
-        self.settings.update_runs(ui.ctx(), &mut self.runs);
+        if let Some(e) = self.settings.update_runs(ui.ctx(), &mut self.runs) {
+            self.error = Some(e);
+        }
         self.update_identification(ui.ctx());
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -295,12 +300,16 @@ impl eframe::App for App {
                     if ui.button("Settings…").clicked() {
                         self.settings.open = true;
                     }
+                    if ui.button("Natural isotopes…").clicked() {
+                        self.isotopes.open = true;
+                    }
                 });
             });
         });
 
         self.ri.window(ui.ctx(), self.runs.get(self.active));
         self.settings.window(ui.ctx());
+        self.isotopes.window(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {

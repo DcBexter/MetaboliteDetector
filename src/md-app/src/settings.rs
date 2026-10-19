@@ -26,12 +26,14 @@ pub struct Settings {
     note: Option<Result<String, String>>,
 }
 
+type Analyzed = Result<Vec<Component>, String>;
+
 /// Re-analysis state of one run.
 #[derive(Default)]
 pub struct Analysis {
     /// Settings behind `Run::components`.
     pub key: Option<Key>,
-    job: Option<(Key, mpsc::Receiver<Vec<Component>>)>,
+    job: Option<(Key, mpsc::Receiver<Analyzed>)>,
 }
 
 impl Analysis {
@@ -48,12 +50,12 @@ impl Analysis {
 }
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
-pub fn analyze(data: &Chromatogram, key: &Key) -> Vec<Component> {
-    let traces = IonTraces::new(data);
+pub fn analyze(data: &Chromatogram, key: &Key) -> Result<Vec<Component>, String> {
+    let traces = IonTraces::new(data).map_err(|e| e.to_string())?;
     let peaks = traces.detect_peaks(&key.0);
     let mut components = deconvolute(&traces, &peaks, &key.1);
     components.sort_by_key(|k| k.apex_scan);
-    components
+    Ok(components)
 }
 
 impl Settings {
@@ -62,16 +64,23 @@ impl Settings {
     }
 
     /// Collects finished analyses and starts one for every run whose components are stale.
-    pub fn update_runs(&self, ctx: &egui::Context, runs: &mut [Run]) {
+    /// Returns the error of an analysis that failed (the run keeps its old components).
+    pub fn update_runs(&self, ctx: &egui::Context, runs: &mut [Run]) -> Option<String> {
         let wanted = self.key();
+        let mut error = None;
         for run in runs {
             let a = &mut run.analysis;
             if let Some((key, rx)) = &a.job {
                 match rx.try_recv() {
-                    Ok(components) => {
-                        run.components = components;
-                        // Selection and library hits belong to the old components.
-                        (run.component, run.ident, run.ident_job) = (None, None, None);
+                    Ok(result) => {
+                        match result {
+                            Ok(components) => {
+                                run.components = components;
+                                // Selection and library hits belong to the old components.
+                                (run.component, run.ident, run.ident_job) = (None, None, None);
+                            }
+                            Err(e) => error = Some(format!("{}: {e}", run.name)),
+                        }
                         a.key = Some(key.clone());
                         a.job = None;
                     }
@@ -84,6 +93,7 @@ impl Settings {
                 a.job = Some((wanted.clone(), spawn(ctx, move || analyze(&data, &key))));
             }
         }
+        error
     }
 
     pub fn window(&mut self, ctx: &egui::Context) {
