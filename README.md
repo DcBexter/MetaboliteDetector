@@ -1,4 +1,22 @@
-# Project template
+# MetaboliteDetector
+
+Rust rewrite of MetaboliteDetector, a tool for deconvolution, identification and quantification
+of GC/MS metabolomics data. Runs natively on Windows, Linux and macOS without R or Qt installs.
+
+- Architecture, performance rules, build and test commands: [docs/architecture.md](docs/architecture.md)
+- Milestones: [docs/roadmap.md](docs/roadmap.md)
+- What the old 3.3 version did (reverse-engineered): [docs/reverse-engineering/](docs/reverse-engineering/)
+
+Example data (15 public GC-MS runs, ~90 MB, not in git): run `example-data/fetch.sh`, or
+`.\example-data\fetch.ps1` on Windows. Then:
+
+```sh
+cargo run --release -p metabolite-detector -- example-data/TargetSearchData/inst/gc-ms-data/7235eg04.cdf
+```
+
+---
+
+## Project template (workflow kit)
 
 Use **Use this template** on GitHub to start a project with the shared
 [Workflow Kit](https://github.com/snagg-app/workflow-kit). The kit and its Ponytail /
