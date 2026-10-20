@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use regex::Regex;
 
 use crate::Chromatogram;
-use crate::deconv::{DeconvSettings, deconvolute};
+use crate::deconv::{Component, DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, PeakSettings, TooLarge};
+use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
 use crate::ri::RiCalibration;
 use crate::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
@@ -58,6 +58,26 @@ pub struct RunResult {
     pub found: Vec<Found>,
 }
 
+/// The ion peaks of a component, largest integral first (§7.2).
+pub fn ion_peaks(k: &Component, peaks: &[Peak], traces: &IonTraces) -> Vec<IonPeak> {
+    let mut ions: Vec<IonPeak> = k
+        .peaks
+        .iter()
+        .map(|f| {
+            let p = &peaks[f.peak];
+            IonPeak {
+                mass: traces.masses[p.row as usize],
+                integral: f.integral,
+                quality: p.quality,
+            }
+        })
+        .collect();
+    // The old code sorts ascending and walks backwards, so ties come last-in-list first (§7.2).
+    ions.sort_by(|a, b| a.integral.total_cmp(&b.integral));
+    ions.reverse();
+    ions
+}
+
 /// Deconvolutes one run and returns the library substances assigned to its components.
 pub fn scan_chromatogram(
     c: Chromatogram,
@@ -81,21 +101,7 @@ pub fn scan_chromatogram(
         .zip(id.assigned)
         .filter_map(|(k, hit)| {
             let hit = hit?;
-            let mut ions: Vec<IonPeak> = k
-                .peaks
-                .iter()
-                .map(|f| {
-                    let p = &peaks[f.peak];
-                    IonPeak {
-                        mass: traces.masses[p.row as usize],
-                        integral: f.integral,
-                        quality: p.quality,
-                    }
-                })
-                .collect();
-            // The old code sorts ascending and walks backwards, so ties come last-in-list first (§7.2).
-            ions.sort_by(|a, b| a.integral.total_cmp(&b.integral));
-            ions.reverse();
+            let ions = ion_peaks(k, &peaks, &traces);
             Some(Found {
                 compound: hit.compound,
                 score: hit.overall,

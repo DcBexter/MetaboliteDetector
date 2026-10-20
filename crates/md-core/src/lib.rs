@@ -10,6 +10,7 @@ pub mod deconv;
 pub mod diskscan;
 pub mod isotope;
 pub mod library;
+pub mod library_add;
 pub mod normalize;
 pub mod peaks;
 pub mod ri;

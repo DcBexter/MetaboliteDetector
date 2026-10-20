@@ -288,7 +288,7 @@ fn round_sig(x: f64, digits: i32) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::Chromatogram;
     use crate::peaks::PeakSettings;
@@ -322,7 +322,7 @@ mod tests {
     type Substance = (f64, Vec<(u32, f64)>);
 
     /// Two substances 6 scans apart, each with its own 12 masses, over a noisy baseline.
-    fn two_substances() -> (Chromatogram, [Substance; 2]) {
+    pub(crate) fn two_substances() -> (Chromatogram, [Substance; 2]) {
         let subst = |apex: f64, masses: std::ops::Range<u32>| {
             let ions: Vec<(u32, f64)> = masses
                 .map(|m| (m, 3_000.0 + 4_000.0 * (m % 7) as f64))
