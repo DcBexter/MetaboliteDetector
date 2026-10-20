@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use eframe::egui;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable, by};
+use egui_kittest::kittest::{Queryable, by};
 use md_core::library::LibraryCompound;
 use md_core::search::PreparedLibrary;
 
@@ -149,6 +149,8 @@ fn open(h: &mut Harness<'_, App>, paths: &[PathBuf]) {
 #[ignore = "needs example data and a GPU; writes target/ui-snapshots"]
 fn screenshots() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ui-snapshots");
+    // Images of a renamed or dropped screen would otherwise sit next to the new ones.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let shots = Shots { dir };
     let paths = runs();
@@ -247,6 +249,11 @@ fn screenshots() {
     // A batch of made-up quantities over the open runs, in groups of ten by file name, so the
     // table and the statistics have something to show without a real batch run.
     let lib = h.state().library.clone().unwrap();
+    // The library is the first run's components, so compound k sits where component k does.
+    let run = &h.state().runs[0];
+    let rts: Vec<f64> = (run.components.iter())
+        .map(|k| run.data.scan_times_s[k.apex_scan as usize])
+        .collect();
     let found: Vec<_> = (paths.iter().enumerate())
         .map(|(i, p)| md_core::batch::RunResult {
             path: p.clone(),
@@ -254,7 +261,7 @@ fn screenshots() {
                 .map(|k| md_core::batch::Found {
                     compound: k,
                     score: 0.9,
-                    rt_s: 300.0 + 30.0 * k as f64,
+                    rt_s: rts[k],
                     ions: [(73, 1.0), (147, 0.4)]
                         .map(|(mass, share)| md_core::batch::IonPeak {
                             mass,
@@ -279,34 +286,19 @@ fn screenshots() {
     h.state_mut().batch.open = false;
     h.state_mut().statistics.open = true;
     h.run_steps(3);
-    // Group 0 (runs 04 to 09) against group 2 (runs 20 to 26): the side check boxes have no name,
-    // so take them in reading order, two per replicate group.
-    for pick in [0, 5] {
-        let win = h.get_by_label("Biomarker statistics").rect();
-        let mut sides: Vec<_> = (h.get_all(by().role(egui::accesskit::Role::CheckBox)))
-            .filter(|n| win.contains_rect(n.rect()) && n.accesskit_node().label().is_none())
-            .collect();
-        sides.sort_by(|a, b| {
-            let (a, b) = (a.rect().min, b.rect().min);
-            (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap()
-        });
-        assert!(
-            sides.len() > pick,
-            "statistics shows {} side check boxes",
-            sides.len()
-        );
-        sides[pick].click();
-        h.run_steps(2);
-    }
+    // Group 0 (runs 04 to 09) against group 2 (runs 20 to 26).
+    h.state_mut().statistics.compare("0", "2");
     h.run_steps(3);
     shots.save(&mut h, "17-statistics");
 }
 
-/// A quantity that differs by substance, a little by run and more by the run's group (the tens
-/// digit of its file name, as the replicate regex above takes it).
+/// A quantity that differs by substance, a little by run and, for most substances, by the run's
+/// group (the tens digit of its file name, as the replicate regex above takes it), so p-values
+/// differ between rows.
 fn fake_integral(path: &Path, run: usize, compound: usize) -> f64 {
     let name = path.file_stem().unwrap().to_string_lossy();
     let group = f64::from(name.as_bytes()[name.len() - 2] - b'0');
     let noise = ((run * 7 + compound * 3) % 5) as f64;
-    1000.0 * (compound + 1) as f64 * (1.0 + 0.4 * group + 0.05 * noise)
+    let effect = 0.1 * (compound % 5) as f64;
+    1000.0 * (compound + 1) as f64 * (1.0 + effect * group + 0.05 * noise)
 }
