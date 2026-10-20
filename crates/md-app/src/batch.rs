@@ -848,9 +848,9 @@ fn remove_stale(path: &Path) -> std::io::Result<Option<PathBuf>> {
 }
 
 /// Files are written in the standard format first; the German spreadsheet variant is a rewrite.
-fn german(path: &Path, ex: &Export) -> std::io::Result<()> {
+fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
     if ex.excel_de {
-        md_core::csv::excel_de_file(path)?;
+        md_core::csv::excel_de_file(path, text_cols)?;
     }
     Ok(())
 }
@@ -860,7 +860,7 @@ fn german(path: &Path, ex: &Export) -> std::io::Result<()> {
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
-    german(p, ex)?;
+    german(p, 3, ex)?;
     let sp = settings_path(p);
     let group_stats = if ex.group_stats {
         t.write_group_stats_file(p, Some(ex.blank))
@@ -892,7 +892,11 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let mut saved = vec![p.display().to_string()];
     let mut failed = Vec::new();
     for (what, r) in results {
-        let r = r.map(|r| r.and_then(|f| german(&f, ex).map(|()| f)));
+        let r = r.map(|r| {
+            r.and_then(|f| {
+                german(&f, if what == "group statistics" { 3 } else { 2 }, ex).map(|()| f)
+            })
+        });
         match r {
             Some(Ok(path)) => saved.push(path.display().to_string()),
             Some(Err(e)) => failed.push(format!("{what}: {e}")),
