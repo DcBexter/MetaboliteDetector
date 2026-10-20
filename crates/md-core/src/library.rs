@@ -911,10 +911,15 @@ fn group_end(masses: &[f32], values: &[i32], start: usize) -> (usize, f64) {
     (j, max)
 }
 
-/// Mass, intensity and FWHM of the points at or above `least`; the old code drops a peak without weight.
-fn weighted_peak(ms: &[f32], vs: &[i32], least: f64) -> Option<(f32, i32, f64)> {
+/// Mass, intensity and FWHM of the points at or above the intensity `threshold`; the old code drops
+/// a peak without weight.
+fn weighted_peak(ms: &[f32], vs: &[i32], threshold: f64) -> Option<(f32, i32, f64)> {
     let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
-    for (&m, &v) in ms.iter().zip(vs).filter(|&(_, &v)| f64::from(v) >= least) {
+    for (&m, &v) in ms
+        .iter()
+        .zip(vs)
+        .filter(|&(_, &v)| f64::from(v) >= threshold)
+    {
         weighted += f64::from(m * v as f32);
         sum += f64::from(v);
         width += 1.0;

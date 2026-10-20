@@ -541,7 +541,7 @@ impl Settings {
                 "Centroid: FWHM share",
                 "SF_FWHM",
                 "Points at or above this share of a peak's maximum make up its centroid mass, \
-                 in every centroiding (high-resolution import, centroid export, MSL export, TOF calibration).",
+                 in every centroiding (high-resolution CDF import, centroid export, MSL export, TOF calibration).",
                 num(&mut d.sf_fwhm, 0.0..=1.0).speed(0.01),
             );
         });

@@ -180,10 +180,10 @@ fn peak(
 ) {
     let w = &v[first..=last];
     let max = (first..=last).fold(top, |m, k| if v[k] > v[m] { k } else { m });
-    let least = fwhm * f64::from(v[max]);
+    let threshold = fwhm * f64::from(v[max]);
     let (mut weighted, mut total, mut count) = (0.0f64, 0.0f64, 0.0);
     for (k, y) in w.iter().enumerate() {
-        if f64::from(*y) >= least {
+        if f64::from(*y) >= threshold {
             weighted += f64::from(mz[first + k] * *y as f32);
             total += f64::from(*y);
             count += 1.0;
