@@ -90,6 +90,68 @@ impl Chromatogram {
     }
 }
 
+/// Old `SavitzkyGolayFilterFirstDerivative<double>` (window 5, quadratic) as plotted by the old
+/// `ChromatogramPlot::setPlotDerivative`: slope per scan, first and last two values 0; runs of
+/// fewer than 5 scans come back unchanged, as in the old code.
+pub fn first_derivative(v: &[f64]) -> Vec<f64> {
+    if v.len() < 5 {
+        return v.to_vec();
+    }
+    let mut out = vec![0.0; v.len()];
+    for (k, w) in v.windows(5).enumerate() {
+        out[k + 2] = (-2.0 * w[0] - w[1] + w[3] + 2.0 * w[4]) / 10.0;
+    }
+    out
+}
+
+/// Time axis unit of the old "Time scale" setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeUnit {
+    Milliseconds,
+    Seconds,
+    #[default]
+    Minutes,
+}
+
+impl TimeUnit {
+    pub const ALL: [TimeUnit; 3] = [Self::Milliseconds, Self::Seconds, Self::Minutes];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Milliseconds => "ms",
+            Self::Seconds => "s",
+            Self::Minutes => "min",
+        }
+    }
+
+    /// Converts seconds (the run's native unit) into this unit.
+    pub fn from_seconds(self, s: f64) -> f64 {
+        match self {
+            Self::Milliseconds => s * 1000.0,
+            Self::Seconds => s,
+            Self::Minutes => s / 60.0,
+        }
+    }
+
+    pub fn to_seconds(self, t: f64) -> f64 {
+        match self {
+            Self::Milliseconds => t / 1000.0,
+            Self::Seconds => t,
+            Self::Minutes => t * 60.0,
+        }
+    }
+}
+
+/// Min and max of `ys` over the scans whose `xs` lie in `[x_min, x_max]` (x-sorted), for Y auto-scaling.
+pub fn y_range(xs: &[f64], ys: &[f64], x_min: f64, x_max: f64) -> Option<(f64, f64)> {
+    let lo = xs.partition_point(|x| *x < x_min);
+    let hi = xs.partition_point(|x| *x <= x_max);
+    ys.get(lo..hi)?.iter().fold(None, |r, y| match r {
+        None => Some((*y, *y)),
+        Some((a, b)) => Some((a.min(*y), b.max(*y))),
+    })
+}
+
 /// Min/max decimation of an x-sorted series to at most `2 * buckets` points within `[x_min, x_max]`.
 /// Keeps every peak visible while plotting cost stays proportional to screen width, not data size.
 pub fn decimate(xs: &[f64], ys: &[f64], x_min: f64, x_max: f64, buckets: usize) -> Vec<[f64; 2]> {
@@ -120,6 +182,31 @@ pub fn decimate(xs: &[f64], ys: &[f64], x_min: f64, x_max: f64, buckets: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derivative_of_a_ramp_is_its_slope_with_zero_ends() {
+        let v: Vec<f64> = (0..8).map(|i| 3.0 * i as f64).collect();
+        assert_eq!(
+            first_derivative(&v),
+            [0.0, 0.0, 3.0, 3.0, 3.0, 3.0, 0.0, 0.0]
+        );
+        assert_eq!(first_derivative(&[1.0, 2.0, 4.0]), [1.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn time_units_round_trip() {
+        for u in TimeUnit::ALL {
+            assert!((u.to_seconds(u.from_seconds(90.0)) - 90.0).abs() < 1e-9);
+        }
+        assert_eq!(TimeUnit::Minutes.from_seconds(90.0), 1.5);
+    }
+
+    #[test]
+    fn y_range_covers_only_visible_scans() {
+        let (xs, ys) = ([0.0, 1.0, 2.0, 3.0], [5.0, 1.0, 9.0, 7.0]);
+        assert_eq!(y_range(&xs, &ys, 1.0, 2.0), Some((1.0, 9.0)));
+        assert_eq!(y_range(&xs, &ys, 4.0, 5.0), None);
+    }
 
     #[test]
     fn tic_sic_and_scan_lookup() {
