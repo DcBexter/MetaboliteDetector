@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
-    RunResult, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs, settings_path,
-    table,
+    RunResult, ShiftReference, TableSettings, complete_scan, group_stats_path, groups_path,
+    ions_path, scan_runs, settings_path, table,
 };
 use md_core::library;
 use md_core::ri::RiCalibration;
@@ -44,6 +44,8 @@ Options:
       --min-sn F              an ion counts only with at least this signal-to-noise ratio
       --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
       --ion-integrals         also write the integral of every quant ion to FILE.ions.csv (needs -o)
+      --excel-de              write the CSV files for a spreadsheet with German locale: `;` and decimal
+                              commas (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
       --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
@@ -67,6 +69,7 @@ struct Args {
     min_sn: Option<f32>,
     max_discrepancy: Option<f32>,
     ion_integrals: bool,
+    excel_de: bool,
     untargeted: bool,
     rescan: bool,
     save_cmp: Option<PathBuf>,
@@ -113,6 +116,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         min_sn: None,
         max_discrepancy: None,
         ion_integrals: false,
+        excel_de: false,
         untargeted: false,
         rescan: false,
         save_cmp: None,
@@ -159,6 +163,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--min-sn" => a.min_sn = Some(num(0.0, 1e6)? as f32),
             "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
             "--ion-integrals" => a.ion_integrals = true,
+            "--excel-de" => a.excel_de = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
             "--save-cmp" => a.save_cmp = Some(value()?.into()),
@@ -173,6 +178,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
     }
     if a.ion_integrals && a.output.is_none() {
         return Err("--ion-integrals needs -o".into());
+    }
+    if a.excel_de && a.output.is_none() {
+        return Err("--excel-de needs -o".into());
     }
     Ok(Some(a))
 }
@@ -295,6 +303,15 @@ fn run(a: Args) -> Result<bool, String> {
             let by_column: Vec<&RunResult> = table.sources.iter().map(|i| &runs[*i]).collect();
             let f = create(&ions_path(p)).map_err(io)?;
             table.write_ions_csv(&by_column, &ts, f).map_err(io)?;
+        }
+        if a.excel_de {
+            // The files are written in the standard format first; the German variant is a rewrite.
+            let next_to = [groups_path, group_stats_path, settings_path, ions_path].map(|f| f(p));
+            for f in std::iter::once(p.clone()).chain(next_to) {
+                if f.exists() {
+                    md_core::csv::excel_de_file(&f).map_err(io)?;
+                }
+            }
         }
     }
     eprintln!(
@@ -436,6 +453,25 @@ mod tests {
         // A later export without the flag removes the ions file, which no longer matches.
         assert!(run(args(&line).unwrap().unwrap()).unwrap());
         assert!(!dir.join("out.ions.csv").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn excel_de_rewrites_the_whole_export_and_the_default_stays() {
+        let dir = std::env::temp_dir().join(format!("md-cli-de-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&format!("--excel-de {line}")).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(
+            csv.starts_with("\u{feff}Substance;RT_s;Quant_ions;ctrl_1.cdf\n"),
+            "{csv}"
+        );
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run;Group\nctrl_1.cdf;ctrl\n");
+        assert!(args("-l lib.msl --excel-de a.cdf").is_err());
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(csv.starts_with("\u{feff}Substance,RT_s,"), "{csv}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

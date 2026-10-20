@@ -416,6 +416,10 @@ which takes them from `Table::group_stats`; the app writes it not for z-scores, 
 view had the p-value column too, #222); `-o FILE` always
 writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
+The default CSV format (`,` and decimal points) never changes, so scripts keep working; a spreadsheet with German
+locale reads `.` as thousands mark (`293.808` becomes 293808, #249). `--excel-de` (the app: "Excel (German)")
+rewrites every file of the export with `csv::to_excel_de`: `;` separators and decimal commas, header line and
+quoting as before. `load_results.R` reads both. A group name like `01` is still read as a number by a spreadsheet.
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 
