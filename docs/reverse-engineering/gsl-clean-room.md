@@ -65,12 +65,19 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
 6. **`SV_decomp_mod`** (`svdm` against `svd`): a QR decomposition first, then the SVD of `R`, and
    `U = Q U_R`.
 7. **The SVD of the bidiagonal:** Golub-Kahan iteration (G&VL §8.6). Deflation where
-   `|e_i| <= eps (|d_i| + |d_{i+1}|)`. A Wilkinson shift from the trailing 2×2 of `BᵀB`. A
-   bulge chase with the Givens rotation of G&VL Algorithm 5.1.3. A 2×2 block is solved in closed
+   `|e_i| <= eps (|d_i| + |d_{i+1}|)`. A Wilkinson shift from the trailing 2×2 `T` of `BᵀB`
+   (see step 9). A bulge chase with the Givens rotation of G&VL Algorithm 5.1.3. A 2×2 block is solved in closed
    form: the Jacobi angle on `BᵀB`, then `U` from the larger column (2 926 of 2 926 random 2×2
    cases). At the end, signs are made non-negative and a selection sort orders the values
    descending.
 8. **The solve:** `t = Uᵀy`, then `c_i = (Σ_j V_ij (1 / S_j) t_j) / D_i` for `S_j > eps S_0`.
+9. **The shift (issue 290):** the eigenvalue of `T` nearest `T_22`. The larger eigenvalue is
+   `tr/2 + hypot(Δ/2, T_12)`; the smaller one is `det(T)` over the larger, with `det(T)` as the
+   sum of the squared 2×2 minors of the columns behind `T`, each as `(x·x)(y·y)`. Found by
+   feeding 3×3 bidiagonals to `svd` (the reflections are then identities) and searching, per
+   case, which shifts reproduce the output: the old shift was within 3 ulp of the exact
+   eigenvalue, which ruled out the textbook `T_22 - T_12² / (Δ/2 ± h)` and `tr/2 - h`. This
+   matched 20 000 of 20 000 random 3×3 bidiagonals (before: 56 %).
 
 ## Verification
 
@@ -81,6 +88,9 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
   - 300 269 cases, among them the 269 real precise-apex ties of the 15 example runs (217 half-step
     ties rounded down, 50 rounded up, 2 flat tops).
   - With 10 bins and `x² < 2^53`, every case matches.
+  - After step 9 (issue 290): every bin count 1 to 100 × scans 1 to 999 (99 900 fits), 10 bins ×
+    scans 1 to 1 000 000 plus 300 000 random (bins 1 to 100, `x² < 2^53`), and 400 000 cases of
+    `make-cases.py`: every case with `x² < 2^53` matches.
   - The 269 ties give the old apex.
 - Golden test:
   - 246 of 246 components (default detector).
@@ -88,14 +98,11 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
   - Checked against a matched-filter dump of the old peaks (golden driver with `MD_MATCHED`) for
     eg07, eg08, eg09, eg15 and eg25.
 
-## Known limits (issue 290)
+## Known limit
 
-- **Other bin counts:** about 1 in 10 000 design matrices differs by 1–2 ulp (11 of 99 900 for 1
-  to 100 bins and scans 1 to 999). It differs inside the QR sweeps; the path and the deflation
-  decisions are the same. Random 3×3 bidiagonals match only about 70 % of the time, so a rounding
-  detail of the sweep is still unknown. It matters only together with a half-bin tie.
 - **Very large x:** `x * x` stands in for glibc `pow(x, 2)`. The two are equal while `x² < 2^53`,
-  i.e. while bins × scan stays below 9.4e7.
+  i.e. while bins × scan stays below 9.4e7 (14 of 400 000 `make-cases.py` cases lie beyond and
+  differ). Real runs stay far below; porting glibc's `pow` is not worth it.
 
 ## Reproduce
 

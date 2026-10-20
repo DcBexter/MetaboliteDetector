@@ -72,7 +72,7 @@ is S4 (#253).
 6. ~~Settings scope: cutoff score, score mode, scaled lib, centroid values, appearance options.~~ Done in #254; SF_FWHM and baseline adjustment are follow-ups.
 7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
 8. DE/EN language switch.
-9. ~~GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.~~ Done in #250 (rare rest: #290).
+9. ~~GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.~~ Done in #250 and #290.
 10. ~~Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).~~ Done in #243.
 11. ~~TIC zoom stays stale after switching runs; a click does not snap to a nearby component when it is just over 3 scans away.~~ Done in #251.
 

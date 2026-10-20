@@ -352,14 +352,21 @@ fn svd2(f: f64, g: f64, h: f64) -> ([[f64; 2]; 2], [f64; 2], [[f64; 2]; 2]) {
 }
 
 /// One implicit-shift QR sweep over the unreduced block `a..=b` (Wilkinson shift of the trailing
-/// 2×2 of `BᵀB`).
+/// 2×2 `T` of `BᵀB`).
 fn qr_step(d: &mut [f64; 3], e: &mut [f64; 2], a: usize, b: usize, u: &mut M3, v: &mut M3) {
-    let ta = d[b - 1] * d[b - 1] + if b >= a + 2 { e[b - 2] * e[b - 2] } else { 0.0 };
-    let tb = d[b] * d[b] + e[b - 1] * e[b - 1];
-    let tab = d[b - 1] * e[b - 1];
-    let dt = (ta - tb) / 2.0;
-    let sign = if dt >= 0.0 { 1.0 } else { -1.0 };
-    let mu = tb - tab * tab / (dt + sign * hypot(dt, tab));
+    let f = if b >= a + 2 { e[b - 2] } else { 0.0 };
+    let (p, g, q) = (d[b - 1], e[b - 1], d[b]);
+    let (ta, tb, tab) = (p * p + f * f, q * q + g * g, p * g);
+    // The eigenvalue of T nearest tb: the larger one as tr + h, the smaller one as det(T) over the
+    // larger, with det(T) as the sum of the squared 2×2 minors of the columns behind T. Found from
+    // black-box outputs (issue 290); `tb - tab² / (dt ± h)` differs in the last bits.
+    let l1 = (ta + tb) / 2.0 + hypot((ta - tb) / 2.0, tab);
+    let l2 = ((p * p) * (q * q) + (f * f) * (q * q) + (f * f) * (g * g)) / l1;
+    let mu = if (l1 - tb).abs() < (l2 - tb).abs() {
+        l1
+    } else {
+        l2
+    };
     let (mut y, mut z) = (d[a] * d[a] - mu, d[a] * e[a]);
     let mut bulge = 0.0;
     for k in a..b {
@@ -404,14 +411,14 @@ mod tests {
     /// `tools/gsl-oracle/make-cases.py`):
     /// `MD_QUADFIT_CASES=cases.txt cargo test -p md-core quadfit -- --ignored --nocapture`, one case
     /// per line as nine IEEE bit patterns in hex: x0 x1 x2 y0 y1 y2 c0 c1 c2. The cases stay local.
-    /// Every case with the default 10 bins per scan must match; other bin counts differ in about 1
-    /// of 10 000 design matrices by 1–2 ulp (known, counted only; issue 290).
+    /// Every case must match while `x² < 2^53`; beyond, `x * x` and glibc `pow` may round apart
+    /// (counted only, see `quadratic`).
     #[test]
     #[ignore]
     fn matches_the_old_fit_bit_for_bit() {
         let path = std::env::var("MD_QUADFIT_CASES").expect("MD_QUADFIT_CASES");
         let text = std::fs::read_to_string(path).unwrap();
-        let (mut n, mut bad, mut other_bins) = (0, 0, 0);
+        let (mut n, mut bad, mut large_x) = (0, 0, 0);
         for line in text.lines() {
             let v: Vec<f64> = line
                 .split_whitespace()
@@ -420,8 +427,8 @@ mod tests {
             let c = quadratic([v[0], v[1], v[2]], [v[3], v[4], v[5]]);
             n += 1;
             if c.map(f64::to_bits) != [v[6], v[7], v[8]].map(f64::to_bits) {
-                if v[1] - v[0] != 10.0 || v[2] >= 9.4e7 {
-                    other_bins += 1;
+                if v[2] * v[2] >= 2f64.powi(53) {
+                    large_x += 1;
                     continue;
                 }
                 bad += 1;
@@ -430,15 +437,8 @@ mod tests {
                 }
             }
         }
-        eprintln!(
-            "{n} cases, {bad} differ, {other_bins} known differences (other bins, x² ≥ 2^53)"
-        );
+        eprintln!("{n} cases, {bad} differ, {large_x} known differences (x² ≥ 2^53)");
         assert!(n > 0 && bad == 0, "{bad} of {n} cases differ");
-        // About 1-2 in 10 000 with make-cases.py; more means a regression outside the 10-bin path.
-        assert!(
-            other_bins * 1000 <= n,
-            "{other_bins} known differences in {n} cases"
-        );
     }
 
     #[test]
