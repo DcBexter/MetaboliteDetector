@@ -14,6 +14,7 @@ mod calibration;
 mod export;
 mod identify;
 mod isotopes;
+mod library_editor;
 mod settings;
 
 fn main() -> eframe::Result {
@@ -63,6 +64,7 @@ struct App {
     isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
+    editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     export: export::Export,
 }
@@ -85,6 +87,7 @@ impl Default for App {
             isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
+            editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             export: export::Export::default(),
         }
@@ -337,6 +340,7 @@ impl eframe::App for App {
         self.batch
             .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
         self.isotopes.window(ui.ctx());
+        self.library_editor(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {

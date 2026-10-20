@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
 use eframe::egui;
-use md_core::library::{LibraryCompound, import_msl, read_lbr};
+use md_core::library::LibraryCompound;
 use md_core::ri::RiCalibration;
 use md_core::search::{
     Identification, PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
@@ -15,6 +15,7 @@ use md_core::search::{
 use crate::{App, Run, spawn};
 
 pub struct Library {
+    pub path: PathBuf,
     pub name: String,
     pub compounds: Vec<LibraryCompound>,
     pub prepared: PreparedLibrary,
@@ -48,21 +49,17 @@ fn score_color(score: f64) -> egui::Color32 {
 
 /// Libraries are recognised by extension; everything else opens as a run.
 pub fn is_library(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr") || e.eq_ignore_ascii_case("msl"))
+    path.extension().is_some_and(|e| {
+        ["lbr", "msl", "mdlib"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
-    let lbr = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"));
-    let compounds = if lbr {
-        read_lbr(path)
-    } else {
-        import_msl(path)
-    }
-    .map_err(|e| format!("{}: {e}", path.display()))?;
+    let compounds = md_core::library::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Library {
+        path: path.to_path_buf(),
         name: path
             .file_name()
             .unwrap_or_default()
@@ -76,12 +73,15 @@ fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
 
 impl App {
     pub fn library_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Open library (.lbr, .msl)…").clicked()
+        if ui.button("Open library (.mdlib, .lbr, .msl)…").clicked()
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("Library", &["lbr", "msl", "MSL"])
+                .add_filter("Library", &["mdlib", "lbr", "msl", "MSL"])
                 .pick_file()
         {
             self.open_library(ui.ctx(), path);
+        }
+        if ui.button("Library editor…").clicked() {
+            self.editor.open = true;
         }
     }
 
@@ -112,6 +112,7 @@ impl App {
                 let lib = lib.clone();
                 self.library_job = Some(spawn(ctx, move || {
                     Ok(Arc::new(Library {
+                        path: lib.path.clone(),
                         name: lib.name.clone(),
                         prepared: PreparedLibrary::new(&lib.compounds, &wanted),
                         compounds: lib.compounds.clone(),
