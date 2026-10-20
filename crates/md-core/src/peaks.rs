@@ -378,7 +378,7 @@ fn candidate(
 
 /// Noise factor of the old detector. The old `GCMSAnalyzer` sets it from the run's global noise factor,
 /// which is 1.0 on the example runs (algorithms.md §2.3, docs/architecture.md).
-const NOISE_FACTOR: f64 = 1.0;
+pub const NOISE_FACTOR: f64 = 1.0;
 
 /// Index of the highest value, starting from `start`: a later index wins only with a strictly
 /// higher value (strict `>`, like the old code).

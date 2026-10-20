@@ -22,7 +22,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 1 | NetCDF (ANDI-MS) import | `&NetCDF import...`, `CDFBatchImporter`, `gcms::CdfImporter` | Batch converts `.cdf` to the internal `.bin`/`.idx` format; optional spectrum compression; optional TOF calibration. | done (read directly, no conversion; NetCDF export #30) |
 | 2 | FastFlight import | `&FastFlight Import...`, `gcms::FastFlightImporter`, `MsData.FFT` | Raw TOF data; needs `.mzcalib` TOF calibration; can write `_centroid/_profile/_nominal.cdf`. | #29 |
 | 3 | TOF m/z calibration | `TOFCalibrationWindow`, `TOFCalibrationCalculator` | Polynomial fit of calibration pairs from a reference spectrum; saved as `.mzcalib`. | #29 |
-| 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, info, score filter #79; export #9 |
+| 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, run info, score filter, auto-Y done; export #9 |
 | 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison, centroid, component panel #77 |
 | 6 | Chromatogram overlay | `ChromatogramOverlayDialog`, `MultiChromatogramPlot` | Overlay TIC or SIC of several runs. | done (#8) |
 | 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` #13/#78 |
@@ -51,7 +51,7 @@ by exactly one issue.
 |---|-------------|---------|
 | 1 | Batch conversion, spectrum compression, recursive search | not needed: runs are read directly |
 | 2, 3 | FastFlight `.FFT`/`.FFC` import, centroiding (`SF_*`), TOF calibration window, `.mzcalib`, Calibration Setter | #29 |
-| 4 | First derivative, time unit (ms/s/min), run info dialog, label filter by score, auto-scale Y | #79 |
+| 4 | First derivative, time unit (ms/s/min), run info dialog, label filter by score, auto-scale Y | done (#79); the global noise standard deviation and TOF calibration are not in the new data model and are left out of Run info |
 | 4, 21 | Copy data/image, CSV, PNG/PDF/SVG, image size dialog | #9 |
 | 5 | Split/difference/normal comparison with the library spectrum, centroid toggle, spectrum export | #77 |
 | 5 | Component panel: S/N, sharpness, discrepancy index, scores, ion counts, peak list | #77 |
