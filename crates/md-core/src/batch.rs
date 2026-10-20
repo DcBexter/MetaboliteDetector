@@ -12,7 +12,7 @@ mod edit;
 mod rescan;
 mod untargeted;
 
-pub use detail::{hit_list, ion_integrals, ions_path, settings_path};
+pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
 pub use rescan::rescan_runs;
 pub use untargeted::add_unknowns;
 

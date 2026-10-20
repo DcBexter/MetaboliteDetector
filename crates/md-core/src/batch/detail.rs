@@ -24,6 +24,16 @@ pub fn ion_integrals(f: &Found, ions: &[u32], min_sn: f32) -> Vec<Option<f64>> {
         .collect()
 }
 
+/// The integral of each of `ions` in `f` as far as the cell of `f` counts under `s`, else all `None`.
+/// Independent of normalisation: whether a substance was found does not depend on its shown value.
+pub fn cell_ions(f: &Found, ions: &[u32], s: &TableSettings) -> Vec<Option<f64>> {
+    let need = s.min_ions.clamp(1, ions.len().max(1));
+    match super::cell(f, ions, need, s) {
+        Some(_) => ion_integrals(f, ions, s.min_sn),
+        None => vec![None; ions.len()],
+    }
+}
+
 /// The library hits of the component `f` came from, the assigned one first (the old tooltip shows
 /// it in red), each with its overall score. Indices past `lib` address `extra`.
 pub fn hit_list(
@@ -84,10 +94,9 @@ impl Table {
         for r in &self.rows {
             let per_run: Vec<Vec<Option<f64>>> = by_compound
                 .iter()
-                .zip(&r.values)
-                .map(|(hits, v)| match (hits.get(&r.compound), v) {
-                    (Some(f), Some(_)) => ion_integrals(f, &r.ions, s.min_sn),
-                    _ => vec![None; r.ions.len()],
+                .map(|hits| match hits.get(&r.compound) {
+                    Some(f) => cell_ions(f, &r.ions, s),
+                    None => vec![None; r.ions.len()],
                 })
                 .collect();
             for (k, ion) in r.ions.iter().enumerate() {
@@ -187,6 +196,10 @@ mod tests {
 
     #[test]
     fn ions_csv_has_a_line_per_ion_and_leaves_unquantified_cells_empty() {
+        let two = TableSettings {
+            min_ions: 2,
+            ..Default::default()
+        };
         let run = |f: Found| RunResult {
             path: "a.cdf".into(),
             found: vec![f],
@@ -211,15 +224,21 @@ mod tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        t.write_ions_csv(&[&a, &b], &TableSettings::default(), &mut out)
-            .unwrap();
+        t.write_ions_csv(&[&a, &b], &two, &mut out).unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "\u{feff}Substance,Quant_ion,a.cdf,'=b.cdf\nGlucose,73,500,\nGlucose,147,100,\n"
         );
+        assert!(t.write_ions_csv(&[&a], &two, Vec::new()).is_err());
+        // A normalisation that blanks the shown value (e.g. z-scores) does not blank the integrals.
+        let mut z = t.clone();
+        z.rows[0].values = vec![None, None];
+        let mut out = Vec::new();
+        z.write_ions_csv(&[&a, &b], &two, &mut out).unwrap();
         assert!(
-            t.write_ions_csv(&[&a], &TableSettings::default(), Vec::new())
-                .is_err()
+            String::from_utf8(out)
+                .unwrap()
+                .contains("\nGlucose,73,500,\n")
         );
         assert_eq!(
             ions_path(Path::new("d/results.csv")),

@@ -250,7 +250,10 @@ fn run(a: Args) -> Result<bool, String> {
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
         ts.write_csv(&[], f).map_err(io)?;
-        if a.ion_integrals {
+        if !a.ion_integrals {
+            // An older ions file would not match this results file.
+            std::fs::remove_file(ions_path(p)).ok();
+        } else {
             let by_column: Vec<&RunResult> = table.sources.iter().map(|i| &runs[*i]).collect();
             let f = create(&ions_path(p)).map_err(io)?;
             table.write_ions_csv(&by_column, &ts, f).map_err(io)?;

@@ -13,7 +13,7 @@ use md_core::batch::{
     Completed, Found, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
     scan_runs, table,
 };
-use md_core::batch::{hit_list, ion_integrals, ions_path, settings_path};
+use md_core::batch::{cell_ions, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
@@ -566,7 +566,7 @@ impl Batch {
                     let totals = self.view.totals.then_some(self.totals.1.as_slice());
                     let d = Detail {
                         scan,
-                        min_sn: self.settings.min_sn,
+                        settings: &self.settings,
                     };
                     if let Some(act) = table_view(ui, shown, &self.norm, &self.view, totals, &d) {
                         self.norm.edits.apply(act, t.runs.len());
@@ -711,7 +711,10 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
             ),
         ),
     ];
-    if ex.ions {
+    if !ex.ions {
+        // An older ions file would not match this results file.
+        std::fs::remove_file(ions_path(p)).ok();
+    } else {
         let ip = ions_path(p);
         let runs: Vec<&RunResult> = (t.sources.iter())
             .filter_map(|i| ex.scan.runs.get(*i))
@@ -919,8 +922,7 @@ fn run_buttons(ui: &mut egui::Ui, j: usize, n: usize) -> Option<Act> {
 /// Where the cells of the shown table come from, for the details behind a cell.
 struct Detail<'a> {
     scan: &'a Scan,
-    /// Signal-to-noise limit of the table's settings.
-    min_sn: f32,
+    settings: &'a TableSettings,
 }
 
 impl Detail<'_> {
@@ -947,13 +949,12 @@ impl Detail<'_> {
         }
     }
 
-    /// The raw integral of quant ion `mass` of substance `row` in column `col`, where the cell
-    /// itself counts as quantified.
-    fn ion(&self, t: &Table, row: usize, col: usize, mass: u32) -> Option<f64> {
+    /// The raw integral of quant ion `k` of substance `row` in column `col`, where the cell counts
+    /// as quantified (whatever the normalisation made of its value).
+    fn ion(&self, t: &Table, row: usize, col: usize, k: usize) -> Option<f64> {
         let r = &t.rows[row];
-        r.values[col]?;
         let f = self.found(t, col, r.compound)?;
-        ion_integrals(f, &[mass], self.min_sn)[0]
+        cell_ions(f, &r.ions, self.settings)[k]
     }
 }
 
@@ -1049,7 +1050,7 @@ impl Body<'_> {
         row.col(|_| {});
         for col in 0..self.t.runs.len() {
             row.col(|ui| {
-                let v = self.d.ion(self.t, i, col, mass);
+                let v = self.d.ion(self.t, i, col, k);
                 ui.weak(v.map_or("–".into(), |v| format!("{v:.0}")));
             });
         }
@@ -1448,12 +1449,13 @@ mod tests {
     #[test]
     fn a_cell_shows_its_ion_integrals_and_the_other_hits_of_its_component() {
         let (scan, t) = one_hit_scan();
+        let settings = TableSettings::default();
         let d = Detail {
             scan: &scan,
-            min_sn: 3.0,
+            settings: &settings,
         };
-        assert_eq!(d.ion(&t, 0, 0, 73), Some(500.0));
-        assert_eq!(d.ion(&t, 0, 0, 200), None);
+        assert_eq!(d.ion(&t, 0, 0, 0), Some(500.0));
+        assert_eq!(d.ion(&t, 0, 0, 1), Some(100.0));
         let f = d.found(&t, 0, 0).unwrap();
         let hits = hit_list(f, &scan.lib.compounds, &scan.extra);
         assert_eq!(hits, [("Glucose".into(), 0.9), ("Fructose".into(), 0.8)]);
