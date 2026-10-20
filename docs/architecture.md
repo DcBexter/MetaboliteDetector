@@ -226,7 +226,7 @@ and each component at most once. `SearchSettings::default()` holds the old `LS_*
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
 spectrum, so no fragment pre-filter is needed (table above).
 
-The app opens a library with File → Open library (or a `.lbr`/`.msl` path on the command line), identifies every
+The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
 above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
 spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
@@ -385,7 +385,7 @@ end
   `save_mdlib` writes `<file>.tmp` and renames it over the target, so a failed save never leaves half a
   library.
 
-The library editor (Library → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
+The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
 active run (its spectrum, RT and RI), view the spectrum, and edit RT, RI, quant ions, MID fragments,
 comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
