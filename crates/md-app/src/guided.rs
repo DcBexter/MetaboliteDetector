@@ -246,6 +246,11 @@ pub fn publish(ctx: &egui::Context, mode: Mode) {
 
 /// Expert options: closed in Guided mode, open in Expert mode, and reachable in both.
 pub fn advanced(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    advanced_open(ui, id, false, add);
+}
+
+/// Like [`advanced`]; `force` keeps the section open, so a value to fix is never hidden.
+pub fn advanced_open(ui: &mut egui::Ui, id: &str, force: bool, add: impl FnOnce(&mut egui::Ui)) {
     let mode = ui
         .ctx()
         .data(|d| d.get_temp::<Mode>(mode_id()))
@@ -254,6 +259,7 @@ pub fn advanced(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::CollapsingHeader::new(text::ADVANCED)
         .id_salt((id, mode))
         .default_open(mode == Mode::Expert)
+        .open(force.then_some(true))
         .show(ui, add);
 }
 
