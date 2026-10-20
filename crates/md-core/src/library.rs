@@ -435,6 +435,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError
         Some("lbr") => read_lbr(path),
         Some("mdlib") => read_mdlib(path),
         Some("sdf") => import_nist(path),
+        Some("txt") if is_targetsearch(path) => import_targetsearch(path),
         _ => import_msl(path),
     }
 }
@@ -537,6 +538,58 @@ pub fn import_msl(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, Librar
             .push(format!("Initial import from{}", path.display()));
     }
     Ok(compounds)
+}
+
+/// Imports TargetSearch's tab-separated `library.txt` (see [`parse_targetsearch`]).
+pub fn import_targetsearch(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let path = path.as_ref();
+    let mut compounds = parse_targetsearch(&text(&std::fs::read(path)?))?;
+    for c in &mut compounds {
+        c.sources
+            .push(format!("Initial import from{}", path.display()));
+    }
+    Ok(compounds)
+}
+
+/// True for a TSV whose header starts with TargetSearch's `Name<TAB>RI` columns.
+pub fn is_targetsearch(path: impl AsRef<Path>) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    // Only the first bytes: this also runs on dropped run files.
+    std::fs::File::open(path)
+        .and_then(|f| f.take(16).read_to_end(&mut head))
+        .is_ok_and(|_| head.starts_with(b"Name\tRI\t"))
+}
+
+/// Parses TargetSearch's `library.txt`: a header line, then one line per compound with the tab-separated
+/// columns `Name`, `RI` (on the FAME scale of the file, kept as is), `Win_1` (kept as feature `WIN_1`),
+/// `SEL_MASS` (`;`-separated, the quantification ions) and `SPECTRUM` (`mz:intensity` pairs). It is
+/// rewritten as MSL and parsed by [`parse_msl`], so line numbers in errors count compounds + 1 header.
+pub fn parse_targetsearch(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let mut msl = String::new();
+    for (i, line) in text.lines().enumerate().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+        let [name, ri, win, sel, spectrum] = cols[..] else {
+            return Err(LibraryError::Msl {
+                line: i + 1,
+                reason: "expected 5 tab-separated columns".into(),
+            });
+        };
+        let pairs: Vec<_> = spectrum.split_whitespace().collect();
+        msl.push_str(&format!(
+            "NAME: {name}\nRI: {ri}\nWIN_1: {win}\nQUANTIFICATION: {}\nNUM PEAKS: {}\n",
+            sel.replace(';', " "),
+            pairs.len()
+        ));
+        for p in pairs {
+            msl.push_str(&format!("({})", p.replace(':', " ")));
+        }
+        msl.push_str("\n\n");
+    }
+    parse_msl(&msl)
 }
 
 /// Parses AMDIS MSL text, and NIST MSP text (peak lines `m/z intensity` separated by `;` or spaces,
@@ -1276,6 +1329,28 @@ fn unescape(s: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn targetsearch_library_txt_opens() {
+        let dir = std::env::temp_dir().join(format!("md-core-ts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("library.txt");
+        std::fs::write(
+            &p,
+            "Name\tRI\tWin_1\tSEL_MASS\tSPECTRUM\r\nGlycine (2TMS)\t228554\t4000\t86;102\t86:26 102:999\r\n",
+        )
+        .unwrap();
+        let libs = super::open(&p).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(libs.len(), 1);
+        let c = &libs[0];
+        assert_eq!(c.name, "Glycine (2TMS)");
+        assert_eq!(c.spectrum.ri, 228554.0);
+        assert_eq!(c.quant_ions, [86.0, 102.0]);
+        assert_eq!(c.spectrum.masses, [86.0, 102.0]);
+        assert_eq!(c.features["WIN_1"], "4000");
+        assert!(super::parse_targetsearch("Name\tRI\nx\t1\n").is_err());
+    }
+
     #[test]
     fn open_picks_the_reader_by_extension() {
         let dir = std::env::temp_dir().join(format!("md-core-open-{}", std::process::id()));
