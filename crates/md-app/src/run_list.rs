@@ -13,18 +13,20 @@ impl App {
             let mut close = None;
             for (i, run) in self.runs.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("×").on_hover_text("Close").clicked() {
-                        close = Some(i);
-                    }
-                    ui.checkbox(&mut run.visible, "")
+                    let visible = ui
+                        .checkbox(&mut run.visible, "")
                         .on_hover_text("Show in plots");
                     ui.colored_label(color(i), "■");
-                    if ui
+                    let name = ui
                         .selectable_label(i == self.active, &run.name)
-                        .on_hover_text(run.path.display().to_string())
-                        .clicked()
-                    {
+                        .on_hover_text(run.path.display().to_string());
+                    if name.clicked() {
                         self.active = i;
+                    }
+                    visible.labelled_by(name.id);
+                    // At the row end, away from the name, so selecting a run never closes one.
+                    if ui.small_button("×").on_hover_text("Close").clicked() {
+                        close = Some(i);
                     }
                 });
             }

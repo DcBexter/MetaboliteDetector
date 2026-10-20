@@ -116,6 +116,9 @@ fn trace_plot(
 impl App {
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.runs.is_empty() && self.loading.is_empty() {
+                return self.start_screen(ui);
+            }
             self.trace_controls(ui);
             ui.horizontal_wrapped(|ui| {
                 self.view.controls(ui);
@@ -136,25 +139,45 @@ impl App {
         });
     }
 
+    /// Nothing open yet: the two ways in, instead of empty plots and controls.
+    fn start_screen(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() / 3.0);
+            ui.label(
+                "Open GC-MS runs (NetCDF or old .bin) to see their chromatograms and spectra.",
+            );
+            ui.add_space(8.0);
+            self.open_chromatograms_button(ui);
+            self.open_library_button(ui);
+        });
+    }
+
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
-            ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
-            ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
+            ui.selectable_value(&mut self.trace, Trace::Tic, "TIC")
+                .on_hover_text("Total ion chromatogram: the sum of all masses per scan");
+            ui.selectable_value(&mut self.trace, Trace::Sic, "SIC")
+                .on_hover_text("Selected ion chromatogram: only the m/z below");
+            ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC")
+                .on_hover_text("Both, one above the other with a shared time axis");
             ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                ui.label("m/z");
+                let mz = ui.label("m/z");
                 ui.add(
                     egui::DragValue::new(&mut self.mz)
                         .range(1.0..=2000.0)
                         .max_decimals(2),
-                );
-                ui.label("±");
+                )
+                .on_hover_text("Mass of the selected ion chromatogram")
+                .labelled_by(mz.id);
+                let tol = ui.label("±");
                 ui.add(
                     egui::DragValue::new(&mut self.tolerance)
                         .range(0.0..=10.0)
                         .speed(0.05)
                         .max_decimals(2),
-                );
+                )
+                .on_hover_text("Mass window around m/z that is summed")
+                .labelled_by(tol.id);
             });
         });
     }

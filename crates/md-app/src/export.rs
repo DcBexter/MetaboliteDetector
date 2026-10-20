@@ -154,12 +154,18 @@ impl App {
                 .save_file()
         };
         let mut result = None;
-        if ui.button("Export chromatogram as CSV…").clicked()
+        if ui
+            .button("Export chromatogram as CSV…")
+            .on_hover_text("Save the plotted chromatogram traces as a table")
+            .clicked()
             && let Some(p) = save("chromatogram", "CSV", "csv")
         {
             result = Some(self.chromatogram_csv(&p));
         }
-        if ui.button("Export spectrum as CSV…").clicked()
+        if ui
+            .button("Export spectrum as CSV…")
+            .on_hover_text("Save the shown spectrum (m/z and intensity) as a table")
+            .clicked()
             && let Some(p) = save("spectrum", "CSV", "csv")
         {
             result = Some(self.spectrum_csv(&p));
@@ -172,7 +178,10 @@ impl App {
             ),
             ("Export spectrum as PNG…", "spectrum", self.export.spectrum),
         ] {
-            if ui.button(label).clicked()
+            if ui
+                .button(label)
+                .on_hover_text("Save the plot as it is shown on screen")
+                .clicked()
                 && let Some(path) = save(what, "PNG image", "png")
             {
                 // The screenshot is read after the next frame, so the dialog is gone from it.
