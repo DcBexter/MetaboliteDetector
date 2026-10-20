@@ -10,15 +10,16 @@ use md_core::results::{ResultRow, find_substance, result_rows, write_csv};
 use crate::Run;
 use crate::identify::Library;
 
+/// Column titles in the app's spelling; the CSV keeps the old program's (`md_core::results::write_csv`).
 const HEAD: [&str; 8] = [
-    "Compound Name",
+    "Compound name",
     "RT (min)",
     "RI",
-    "Peak Area",
-    "Overall Score",
-    "Spec. Score",
-    "RI Score",
-    "Quant. Ions",
+    "Peak area",
+    "Overall score",
+    "Spec. score",
+    "RI score",
+    "Quant. ions",
 ];
 
 /// What the cached rows were built from: active run and its `rev`.
@@ -243,9 +244,19 @@ fn table(
             .id_salt("results table")
             .striped(true)
             .sense(egui::Sense::click())
-            .column(Column::auto().at_least(180.0))
-            .columns(Column::auto(), 6)
-            .column(Column::remainder())
+            .resizable(true)
+            // A long name is cut (the row's tooltip has it whole) so the scores stay in view.
+            .column(Column::initial(106.0).at_least(90.0).clip(true))
+            // Widths that fit the 720 px a window gets at 1280 px, each with room for the sort
+            // arrow (a column never shrinks again); right-aligned cells would make automatic
+            // columns grow to the window.
+            .column(Column::initial(66.0).at_least(40.0))
+            .column(Column::initial(44.0).at_least(40.0))
+            .column(Column::initial(80.0).at_least(40.0))
+            .column(Column::initial(96.0).at_least(40.0))
+            .column(Column::initial(84.0).at_least(40.0))
+            .column(Column::initial(70.0).at_least(40.0))
+            .column(Column::remainder().at_least(90.0).clip(true))
             .header(20.0, |mut h| {
                 for (c, title) in HEAD.iter().enumerate() {
                     h.col(|ui| {
