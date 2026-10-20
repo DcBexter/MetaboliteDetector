@@ -100,11 +100,10 @@ fn msl_export_matches_the_old_program() {
         return;
     };
     let lib = read_lbr(&lbr).unwrap();
-    // The script names the files after the old ExportType numbers: 0 profile, 1 nominal, 2 FWHM.
     for (kind, name) in [
-        (MslType::Profile, "nominal"),
-        (MslType::Nominal, "type1"),
-        (MslType::Fwhm, "type2"),
+        (MslType::Profile, "profile"),
+        (MslType::Nominal, "nominal"),
+        (MslType::Fwhm, "fwhm"),
     ] {
         let old = std::fs::read_to_string(format!("{prefix}.{name}.msl")).unwrap();
         let new = write_msl_as(&lib, kind);

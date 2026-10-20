@@ -2,7 +2,7 @@
 # Exports a library with the old MetaboliteDetector 3.3 as AMDIS MSL (the three ExportType values).
 # Run on Linux/WSL with the old binary installed (or MD_APP pointing to metabolitedetector_app), g++ and nm:
 #   docs/reverse-engineering/tools/golden/make-msl-export.sh LIB.lbr OUT_PREFIX
-# Output: OUT_PREFIX.nominal.msl, OUT_PREFIX.type1.msl, OUT_PREFIX.type2.msl. Do not commit them.
+# Output: OUT_PREFIX.profile.msl, OUT_PREFIX.nominal.msl, OUT_PREFIX.fwhm.msl. Do not commit them.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 app=${MD_APP:-/usr/bin/metabolitedetector_app}

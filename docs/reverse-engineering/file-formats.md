@@ -558,7 +558,9 @@ Not checked or not ported (Gaps): centroiding of spectra whose masses are 0.01 o
 non-integer masses for Nominal (the rewrite only rounds), the FWHM value for a compound without a FWHM list but
 another bin width (the rewrite writes 1.00), and values with `;` or line breaks (the rewrite replaces line
 breaks by a space so a name cannot start a record). The files are not read back exactly by `parse_msl`
-(four decimals) and `parse_msl` does not read the FWHM type.
+(four decimals) and `parse_msl` does not read the FWHM type. The FWHM type joins FWHM and intensity without a
+space when the intensity has four digits (`( 57.000000  1.001000)`): no parser can split that peak, the old program
+writes it the same way. The gaps are owned by #114.
 
 ### 6.3 NIST MSP parser (`NISTParser`)
 

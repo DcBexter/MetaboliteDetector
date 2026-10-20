@@ -20,7 +20,7 @@ template <class F> F fn(uintptr_t addr) { return reinterpret_cast<F>(base + addr
 #undef SYM
 
 // usage: LD_PRELOAD=old_msl_export.so metabolitedetector_app LIB.lbr OUT_PREFIX
-// writes OUT_PREFIX.nominal.msl, OUT_PREFIX.type1.msl and OUT_PREFIX.type2.msl (ExportType 0, 1, 2).
+// writes OUT_PREFIX.profile.msl, OUT_PREFIX.nominal.msl and OUT_PREFIX.fwhm.msl (ExportType 0, 1, 2).
 int export_main(int argc, char** argv, char**) {
     if (argc < 3) {
         std::fprintf(stderr, "usage: %s LIB.lbr OUT_PREFIX\n", argv[0]);
@@ -38,7 +38,7 @@ int export_main(int argc, char** argv, char**) {
         return 1;
     }
     if (!lib) return 1;
-    const char* names[] = {"nominal", "type1", "type2"};
+    const char* names[] = {"profile", "nominal", "fwhm"};
     for (int t = 0; t < 3; t++) {
         std::string path = std::string(argv[2]) + "." + names[t] + ".msl";
         try {
