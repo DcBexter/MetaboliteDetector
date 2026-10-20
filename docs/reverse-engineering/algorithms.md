@@ -503,6 +503,59 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
 - Whether the duplicated bin peaks from 4.5 are intended. A port should reproduce them first to match golden output.
 
+## 4b. Centroided and nominal spectra for the NetCDF export (Observed; ported in `crates/md-core/src/centroid.rs`)
+
+The old `NetCDFExporter` writes each scan as profile, centroid or nominal mass (`_profile/_centroid/_nominal.cdf`) with
+`NetCDFExport::addScan(ions, intensities, tic, rt_ms / 1000)`. The TIC is the scan's own, not the sum of what is written.
+The ports below are checked bit for bit against the old binary's own functions: `tools/spectrum/run.sh` calls
+`SpectrumFunctions::getCentroidSpectrum<int,float>` (0x5dfe78) and `Spectrum<int,float>::getBinnedSpectrum` (0x602a6a) on
+4000 random spectra of 3 to 600 points (3180 centroids); every mass, area and point count equals the port's
+(`crates/md-core/tests/centroid.rs`, `matches_old_program`).
+
+### 4b.1 getCentroidSpectrum<int,float>(spectrum, begin, end, maxdev) -> detectPeaks<int>
+
+Thresholds are `SF_CENTROID_THRESHOLD_BEGIN/END/MAX_BASE_DEV` (10, -5, 30). Values are the ints of the spectrum.
+
+```
+d[i] = trunc((-2 v[i-2] - v[i-1] + v[i+1] + 2 v[i+2]) / 10.0) for 2 <= i < n-2, else 0   (SavitzkyGolayFilterFirstDerivative<int>)
+n <= 4: no peaks
+(mean, sd) = analyzeBaseline<int>(v, 25)
+i = 2; while i < n-2:
+  if d[i] > begin:
+    start = top = i; i++
+    while i < n-2: if d[i] >= 0 { top = i; i++ } else if d[i+1] < 0 { i++; break } else { i++ }
+    end = 0
+    while i+1 < n:                         # the same i: the next peak is searched after this position
+      if d[i] > endthr && d[i+1] > endthr && (sd == 0 || sd*maxdev > |v[i-1]-mean|) { end = i-1; break }
+      i++
+    keep if end != 0 && end-start > 2 && top != start && top != end
+  i++
+```
+
+A kept peak covers `v[start..=end]` (the extension by the peak width exists in the old code but the centroid caller leaves it off):
+- `createSpectrumPeak`: highest point `max` = first strict maximum from `top`.
+- area (`determineIntegral`, called before the baseline is set): the plain sum of the points, truncated to int. `determinePeakBaseLine` runs afterwards and does not change it.
+- mass (`determineCentroid`): over the points with `v >= 0.5 * v[max]`: `x += (float)mz * (float)v` (float product, summed in double), `w += v`, count += 1; mass = `(float)(x / w)`. The count is the "FWHM".
+
+`analyzeBaseline<int>(v, 25)`: segments of 25 points, `i = 0; i < n - 25; i += 25`. A segment counts if its values cross its own mean at least `25 / 2` times (a crossing: `v[k] >= m && v[k+1] < m` or `v[k] <= m && m < v[k+1]`); then its mean and `gsl_stats_variance_m` are pooled (`tools::Statistics::collectedMean/collectedVariance`, sample variance of all accepted points). A spectrum shorter than 25 points makes the old code use segments of one point, whose variance is 0/0: sd is NaN and no peak end is ever accepted. A spectrum with no accepted segment has mean 0 and sd 0.
+
+### 4b.2 Spectrum<int,float>::getBinnedSpectrum(values, ions, width) (nominal mass)
+
+```
+half = width / 2.0 (double);  bin(m) = (float)(int)((m + half) / width) * width
+cur = bin(ions[0]); best = values[0]
+for i in 0..n:
+  if ions[i] >= cur + half: push (cur, best); best = values[i]; cur = bin(ions[i])
+  else if values[i] > best: best = values[i]
+  if i == n-1: push (cur, best)
+```
+The export uses width 1. An empty spectrum gives an empty spectrum ("Creating empty spectrum").
+
+### 4b.3 Not ported
+
+- `Spectrum::getCentroidSpectrum(type)` (0x600ffc) chooses between these two by `CentroidIntensityType` and data type: data that is already centroid (DataType 2) is copied. The rewrite has no data type, so a centroid export of such a run centroids it again.
+- The old export also takes `reorderPeaks` for non-CDF runs (§4.2, `IonTraces::exact`); that is a separate analysis step, not part of the export.
+
 ## 5. Library search and scoring
 
 Template instance `<int,float>`. vtable `LibrarySearch<int,float>` at 0xcb7258 (Observed):
