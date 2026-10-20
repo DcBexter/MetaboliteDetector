@@ -374,6 +374,9 @@ impl Batch {
                     )),
                     None => ui.label("Open a library first (File → Open library)."),
                 };
+                if lib.is_some_and(|l| l.settings != self.applied.search()) {
+                    ui.label("Library is being prepared for the new search settings.");
+                }
                 ui.label(&self.note);
             }
         });
