@@ -747,6 +747,33 @@ Applying re-runs `IonTraces` → peaks → deconvolution for every open run on w
 dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
 New runs open with the applied settings.
 
+## Saved state
+
+`crates/md-app/src/persist.rs` (S4, #253). eframe's `persistence` feature writes one file, `app.ron` in the
+config dir (below), on exit and every 30 s: egui's memory (panel sizes, tool window positions), the window
+geometry and, under the key `metabolite-detector`, our `KEY=value` lines. These hold every `GcmsSettings`
+field under its old key (`LS_RI_DIFF=10`, ranges as `73:75;147:148`, `PEAK_DETECTOR=default` or
+`matched <width> <threshold>`), `panel.<area>` for the View menu, `library`, `nist_library` and `recent`
+(newest first, at most 10; File → Open recent). Keys the version does not know are written back unchanged;
+`mode` (S7) and `language` (S8) are reserved for those features.
+
+Every value is checked at start: a bad value keeps its default, and each field `GcmsSettings::validate`
+names falls back to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
+key is missing from an existing file), the file is copied to `app.ron.<unix s>.bak` and the Settings window
+opens with the message. A library that is missing at start (a drive not mounted) is not opened but kept.
+Paths are saved absolute; a recent run that is clicked leaves the list until it loads again.
+
+First start (no `app.ron`): the old 3.3 settings are imported once and the Settings window says so. Sources:
+`HKCU\Software\TU-Braunschweig\MetaboliteDetector` (through `reg query`) on Windows, else
+`$XDG_CONFIG_HOME` or `~/.config` + `/TU-Braunschweig/MetaboliteDetector.conf` (Qt INI: quoting,
+`\xHH`/`\0` escapes; `LS_RESOLUTION` is a `@Variant` float, type 135, big-endian; Qt on Windows writes ints as
+`REG_DWORD` and that value as `REG_BINARY` UTF-16). A saved value wins over the default (`LS_RI_DIFF` 10 over
+20). `AN_BP_HEIGHT` and `MASS_FILTER` are read as `AN_MIN_HEIGHT_BP` and `LS_MASS_FILTER` (Inferred: same
+meaning and default); non-empty old range lists are not decoded. `rc_lib_file`, `rc_lib_nist_file` and
+`rc_open_file` become the libraries and the first recent run, `[GUI] size` the window size; other
+`[Algorithm]` keys (`LS_CUTOFF`, `baseline_correction`, `rc_*`) are kept for later versions, the
+`[GUI]` window state blobs are not.
+
 ## Updates
 
 `crates/md-app/src/update.rs` (Help menu, #235): `update/release.rs` holds the pure parts (newest

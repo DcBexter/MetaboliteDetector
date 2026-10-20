@@ -21,7 +21,7 @@ pub fn list_and_details<T>(
 }
 
 /// The areas of the main window; the View menu shows or hides each, egui keeps their sizes.
-/// The layout persistence (S4, #253) saves this together with the sizes.
+/// `persist` saves this; eframe saves the sizes with egui's memory (S4, #253).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Panels {
     pub runs: bool,
@@ -46,6 +46,18 @@ impl Default for Panels {
 }
 
 impl Panels {
+    /// Each area under its saved key; unlike the menu names these never change.
+    pub fn saved(&mut self) -> [(&'static str, &mut bool); 6] {
+        [
+            ("runs", &mut self.runs),
+            ("components", &mut self.components),
+            ("chromatogram", &mut self.chromatogram),
+            ("spectrum", &mut self.spectrum),
+            ("detected_peaks", &mut self.detected_peaks),
+            ("info", &mut self.info),
+        ]
+    }
+
     /// Each area with its View menu name and hover text, in menu order.
     pub fn toggles(&mut self) -> [(&mut bool, &'static str, &'static str); 6] {
         [

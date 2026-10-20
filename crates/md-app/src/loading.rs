@@ -80,6 +80,7 @@ impl App {
                         self.error =
                             Some(format!("{}: {}", run.path.display(), warnings.join("; ")));
                     }
+                    self.saved.remember(run.path.clone());
                     self.runs.push(run);
                 }
                 Ok(Err(e)) => self.error = Some(e),
