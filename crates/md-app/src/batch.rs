@@ -297,20 +297,8 @@ impl Batch {
                     self.shown = Some((n.clone(), shown));
                 }
                 if let Some((_, shown)) = &self.shown {
-                    // The export has the values the table shows.
-                    if ui.button("Export CSV…").clicked()
-                        && let Some(p) = rfd::FileDialog::new()
-                            .add_filter("CSV", &["csv"])
-                            .set_file_name("results.csv")
-                            .save_file()
-                    {
-                        self.note = match std::fs::File::create(&p)
-                            .map(std::io::BufWriter::new)
-                            .and_then(|f| shown.write_csv(f))
-                        {
-                            Ok(()) => format!("Saved {}", p.display()),
-                            Err(e) => format!("Export failed: {e}"),
-                        };
+                    if let Some(note) = export_button(ui, shown) {
+                        self.note = note;
                     }
                     table_view(ui, shown, &self.norm);
                 }
@@ -324,6 +312,26 @@ impl Batch {
             None => {}
         }
     }
+}
+
+/// The export has the values the table shows. Returns a note after a save attempt.
+fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
+    if !ui.button("Export CSV…").clicked() {
+        return None;
+    }
+    let p = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name("results.csv")
+        .save_file()?;
+    Some(
+        match std::fs::File::create(&p)
+            .map(std::io::BufWriter::new)
+            .and_then(|f| t.write_csv(f))
+        {
+            Ok(()) => format!("Saved {}", p.display()),
+            Err(e) => format!("Export failed: {e}"),
+        },
+    )
 }
 
 /// Rows are virtualised, so only the visible ones are laid out each frame.
