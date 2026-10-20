@@ -1359,8 +1359,12 @@ mod tests {
         let runs = [at("d1", 100), at("d2", 200)];
         let t = md_core::batch::table(&runs, &[], &[], &Default::default()).unwrap();
         assert_eq!(run_times(&t, &runs), (vec![100, 200], 0));
-        let t = t.select_runs(&[1]);
-        assert_eq!(shown_runs(&runs, &t.sources)[0].path, runs[1].path);
+        let t = t.select_runs(&[1, 0]);
+        let shown: Vec<_> = shown_runs(&runs, &t.sources)
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(shown, [runs[1].path.clone(), runs[0].path.clone()]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
