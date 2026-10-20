@@ -8,10 +8,11 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, Plot};
 use md_core::batch::{QuantSettings, ShiftReference, complete_scan, scan_runs};
 use md_core::isotope::IsotopeTable;
 use md_core::library::LibraryCompound;
-use md_core::mid::{Method, Mids, determine, mid_library};
+use md_core::mid::{FragmentMid, Method, Mids, determine, group_stat, mid_library};
 use md_core::ri::RiCalibration;
 use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
@@ -34,6 +35,12 @@ struct Done {
     /// One per fit: the labelled runs' names, or the group.
     columns: Vec<String>,
     mids: Mids,
+    /// Per-run methods: mean and standard error of the labelled runs per substance, fragment and
+    /// isotopomer (old group `GL`); empty for the group methods.
+    stats: Vec<Vec<Vec<(f64, f64)>>>,
+    /// The old program's text exports: the MIDs, and for the per-run methods the statistics.
+    text: String,
+    stats_text: Option<String>,
     errors: Vec<String>,
     took: Duration,
 }
@@ -151,11 +158,10 @@ impl MidWindow {
         let paths: Vec<PathBuf> = self.labelled.iter().chain(&unlabelled).cloned().collect();
         let columns: Vec<String> = match method.per_run() {
             true => (self.labelled.iter())
+                // Old `QFileInfo::baseName`: the file name up to the first dot.
                 .map(|p| {
-                    p.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
+                    let name = p.file_name().unwrap_or_default().to_string_lossy();
+                    name.split('.').next().unwrap_or_default().to_owned()
                 })
                 .collect(),
             false => vec!["labelled".into()],
@@ -230,10 +236,27 @@ impl MidWindow {
                         .collect();
                 }
             }
+            let per_run = method.per_run();
+            let stats = (mids.compounds.iter())
+                .filter(|_| per_run)
+                .map(|c| {
+                    (c.fragments.iter())
+                        .map(|f| (0..f.isotopomers).map(|k| group_stat(f, k)).collect())
+                        .collect()
+                })
+                .collect();
+            let text = match per_run {
+                true => mids.run_text(&mids_lib, method, &columns),
+                false => mids.group_text(&mids_lib),
+            };
+            let stats_text = per_run.then(|| mids.stats_text(&mids_lib));
             Ok(Done {
                 lib: mids_lib,
                 columns,
                 mids,
+                stats,
+                text,
+                stats_text,
                 errors,
                 took: started.elapsed(),
             })
@@ -402,10 +425,10 @@ fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
     );
 }
 
-/// Substances, fragments and per column the MID ± CI of each isotopomer and R².
+/// Substances, fragments and per column the MID ± CI of each isotopomer and R², with a bar chart.
 /// shortcut: every substance header is laid out each frame; fine for hundreds of substances.
 fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(format!(
             "{} with MIDs in {:.2?}",
             match r.mids.compounds.len() {
@@ -414,16 +437,9 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
             },
             r.took
         ));
-        if ui.button("Export CSV…").clicked()
-            && let Some(p) = rfd::FileDialog::new()
-                .add_filter("CSV", &["csv"])
-                .set_file_name("mids.csv")
-                .save_file()
-        {
-            *note = match std::fs::write(&p, r.mids.csv(&r.lib, &r.columns)) {
-                Ok(()) => format!("Saved {}", p.display()),
-                Err(e) => format!("Export failed: {e}"),
-            };
+        export_buttons(ui, "MIDs", "mids.txt", &r.text, note);
+        if let Some(text) = &r.stats_text {
+            export_buttons(ui, "statistics", "mid-statistics.txt", text, note);
         }
     });
     let error = ui.visuals().error_fg_color;
@@ -442,57 +458,158 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
                 .id_salt(c.compound)
                 .default_open(i == 0)
                 .show(ui, |ui| {
-                    for f in &c.fragments {
+                    for (j, f) in c.fragments.iter().enumerate() {
+                        let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
                         ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
-                        fragment_grid(ui, f, &r.columns, (c.compound, f.lo));
+                        fragment_grid(ui, f, &r.columns, stats, (c.compound, f.lo));
+                        fragment_plot(ui, f, &r.columns, stats, (c.compound, f.lo));
                     }
                 });
         }
     });
 }
 
+/// "Export …" and "Copy …" of one of the old program's text exports.
+fn export_buttons(ui: &mut egui::Ui, what: &str, file: &str, text: &str, note: &mut String) {
+    if ui.button(format!("Export {what}…")).clicked()
+        && let Some(p) = rfd::FileDialog::new()
+            .add_filter("Text", &["txt", "tsv"])
+            .set_file_name(file)
+            .save_file()
+    {
+        *note = match std::fs::write(&p, text) {
+            Ok(()) => format!("Saved {}", p.display()),
+            Err(e) => format!("Export failed: {e}"),
+        };
+    }
+    if ui
+        .button(format!("Copy {what}"))
+        .on_hover_text("Tab-separated, as the export file")
+        .clicked()
+    {
+        ui.ctx().copy_text(text.to_owned());
+        *note = format!("Copied the {what}.");
+    }
+}
+
+/// Cell text of a value, a dash for none (NaN in the old program).
+fn cell(v: Option<f64>) -> String {
+    v.filter(|v| v.is_finite())
+        .map_or("–".into(), |v| format!("{v:.4}"))
+}
+
 fn fragment_grid(
     ui: &mut egui::Ui,
-    f: &md_core::mid::FragmentMid,
+    f: &FragmentMid,
     columns: &[String],
+    stats: &[(f64, f64)],
     id: (usize, u32),
 ) {
-    let n = (f.fits.iter().flatten())
-        .map(|x| x.mids.len())
-        .max()
-        .unwrap_or(0);
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         ui.label("");
         for c in columns {
             ui.strong(c);
         }
+        if !stats.is_empty() {
+            ui.strong("Mean").on_hover_text(
+                "Mean of the labelled runs; shares of 0 and runs without MID do not count",
+            );
+            ui.strong("StdErr").on_hover_text(
+                "Standard error of the mean (SD / √n), none for fewer than two runs",
+            );
+        }
         ui.end_row();
-        for k in 0..n {
+        for k in 0..f.isotopomers {
             ui.label(format!("M{k} (m/z {})", f.lo as usize + k));
             for fit in &f.fits {
-                ui.label(
-                    fit.as_ref()
-                        .and_then(|x| x.mids.get(k))
-                        .map_or("–".into(), |m| {
-                            match fit.as_ref().and_then(|x| x.cis.get(k).copied().flatten()) {
-                                Some(ci) => format!("{m:.4} ± {ci:.4}"),
-                                None => format!("{m:.4}"),
-                            }
-                        }),
-                );
+                let fit = fit.as_ref();
+                let m = cell(fit.and_then(|x| x.mids.get(k).copied()));
+                ui.label(match fit.and_then(|x| x.cis.get(k).copied().flatten()) {
+                    Some(ci) => format!("{m} ± {ci:.4}"),
+                    None => m,
+                });
+            }
+            if let Some((mean, se)) = stats.get(k) {
+                ui.label(cell(Some(*mean)));
+                ui.label(cell(Some(*se)));
             }
             ui.end_row();
         }
         ui.label("R²");
         for fit in &f.fits {
-            ui.label(
-                fit.as_ref()
-                    .and_then(|x| x.r2)
-                    .map_or("–".into(), |r2| format!("{r2:.4}")),
-            );
+            ui.label(cell(fit.as_ref().and_then(|x| x.r2)));
         }
         ui.end_row();
     });
+}
+
+/// Bars per isotopomer: one per run or group, and for the per-run methods the mean; whiskers show
+/// the CI of a group or the standard error of the mean.
+fn fragment_plot(
+    ui: &mut egui::Ui,
+    f: &FragmentMid,
+    columns: &[String],
+    stats: &[(f64, f64)],
+    id: (usize, u32),
+) {
+    let n = f.isotopomers;
+    let fits = columns.iter().zip(&f.fits);
+    // Per series: name and per isotopomer the value and its error.
+    let mut series: Vec<(&str, Vec<_>)> = fits
+        .map(|(c, fit)| {
+            let v = (0..n).map(|k| match fit {
+                Some(x) => (
+                    x.mids.get(k).copied().unwrap_or(f64::NAN),
+                    x.cis.get(k).copied().flatten(),
+                ),
+                None => (f64::NAN, None),
+            });
+            (c.as_str(), v.collect())
+        })
+        .collect();
+    if !stats.is_empty() {
+        series.push((
+            "Mean ± StdErr",
+            stats.iter().map(|s| (s.0, Some(s.1))).collect(),
+        ));
+    }
+    let width = 0.8 / series.len().max(1) as f64;
+    let whisker = ui.visuals().text_color();
+    Plot::new(("mid plot", id))
+        .height(160.0)
+        .legend(Legend::default())
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .y_axis_label("Share")
+        .x_axis_formatter(move |m, _| {
+            let k = m.value.round();
+            match (m.value - k).abs() < 1e-6 && k >= 0.0 && (k as usize) < n {
+                true => format!("M{k}"),
+                false => String::new(),
+            }
+        })
+        .show(ui, |p| {
+            let mut errors = Vec::new();
+            for (j, (name, values)) in series.iter().enumerate() {
+                let x = |k: usize| k as f64 - 0.4 + width * (j as f64 + 0.5);
+                let bars = (values.iter().enumerate())
+                    .filter(|(_, v)| v.0.is_finite())
+                    .map(|(k, v)| Bar::new(x(k), v.0).width(width * 0.9).name(format!("M{k}")));
+                p.bar_chart(BarChart::new(*name, bars.collect()).color(crate::color(j)));
+                for (k, (v, e)) in values.iter().enumerate() {
+                    if let Some(e) = e.filter(|e| e.is_finite() && v.is_finite()) {
+                        errors.push(
+                            BoxElem::new(x(k), BoxSpread::new(v - e, *v, *v, *v, v + e))
+                                .box_width(0.0)
+                                .whisker_width(width * 0.5)
+                                .stroke(egui::Stroke::new(1.0, whisker)),
+                        );
+                    }
+                }
+            }
+            p.box_plot(BoxPlot::new("", errors).allow_hover(false));
+        });
 }
 
 #[cfg(test)]
