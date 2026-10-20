@@ -782,7 +782,7 @@ fn view_controls(
                 .inner;
             if mode == Mode::Groups {
                 r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.")
-                    .on_disabled_hover_text("Not on z-scores: there a missing value cannot count as 0 and \"#\" (values above 0) means nothing. Turn the z-score off; the group statistics then use the normalised values, like the old program.");
+                    .on_disabled_hover_text("Not with z-scores: a missing value cannot count as 0 there, and \"#\" (values above 0) means nothing. Turn the z-score off; the group statistics then use the normalised values, like the old program.");
             }
         }
     });
@@ -857,6 +857,9 @@ fn number(v: f64, decimals: usize) -> String {
 fn significant(v: f64) -> String {
     if v == 0.0 || !v.is_finite() {
         return number(v, 0);
+    }
+    if v.abs() < 1e-10 {
+        return format!("{v:.5e}");
     }
     let decimals = (5 - v.abs().log10().floor() as i32).clamp(0, 15) as usize;
     let s = format!("{v:.decimals$}");
@@ -1367,6 +1370,7 @@ mod tests {
         assert_eq!(significant(1_234_567.0), "1234567");
         assert_eq!(significant(-0.0123456789), "-0.0123457");
         assert_eq!(significant(f64::NAN), "–");
+        assert_eq!(significant(-1e-20), "-1.00000e-20");
 
         // z-scores of 1, 2, 10: only one is above 0, so "#" would say 1 of 3 hits.
         n = Norm {
