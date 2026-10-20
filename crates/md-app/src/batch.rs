@@ -373,14 +373,14 @@ impl Batch {
                 ui,
                 "Quant ions per substance",
                 "QUANT_ION_NUMBER",
-                "How many ions of each substance are integrated and summed.",
+                "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
                 egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
             );
             row(
                 ui,
                 "Min. distance of quant ions",
                 "QUANT_MIN_DIST_IONS",
-                "Quant ions of one substance are at least this many m/z apart.",
+                "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
                 egui::DragValue::new(&mut s.quant.min_dist)
                     .range(0.0..=100.0)
                     .speed(0.1),
@@ -389,7 +389,7 @@ impl Batch {
                 ui,
                 "Quant ion quality cut-off",
                 "QUANT_QUALITY_CUTOFF",
-                "Ions whose peak quality is below this (lower is better) are picked first.",
+                "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
                 egui::DragValue::new(&mut s.quant.quality_cutoff)
                     .range(0.0..=100.0)
                     .speed(0.1),
@@ -462,8 +462,8 @@ impl Batch {
         });
         crate::settings::ranges(
             ui,
-            "Ions never used as quant ions",
-            "Ion ranges (m/z from–to) never picked as quant ions.\nOld key: QUANT_EXCL_IONS",
+            "Ions avoided as quant ions",
+            "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
             &mut s.quant.excluded,
         );
     }
@@ -835,8 +835,9 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
         ui.checkbox(&mut v.export_ions, "Export quant ions")
             .on_hover_text("Also writes results.ions.csv with the raw integral of every quant ion.");
         if v.mode == Mode::Groups {
-            ui.label("Blank group");
+            let blank = ui.label("Blank group");
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
+                .labelled_by(blank.id)
                 .on_hover_text(
                     "Replicate group of the blank runs; every other group gets a p-value against it.",
                 );
