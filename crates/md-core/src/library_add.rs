@@ -53,7 +53,7 @@ pub fn component_ions(
     comp: &Component,
 ) -> Result<Option<Vec<IonPeak>>, TooLarge> {
     let mut traces = IonTraces::new(data)?;
-    let found = traces.detect_peaks(peaks);
+    let found = traces.detect_all_peaks(peaks);
     let same = |k: &&Component| {
         (k.first_scan, k.apex_scan, k.last_scan)
             == (comp.first_scan, comp.apex_scan, comp.last_scan)
@@ -258,6 +258,7 @@ mod tests {
             model: Vec::new(),
             spectrum: spectrum.to_vec(),
             peaks: Vec::new(),
+            exact_spectrum: Vec::new(),
         }
     }
 

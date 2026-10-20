@@ -27,6 +27,9 @@ impl LibraryCompound {
             spectrum: (self.spectrum.masses.iter().zip(&self.spectrum.values))
                 .map(|(&mz, &v)| (mz.round() as u32, v.max(0) as u32))
                 .collect(),
+            exact_spectrum: (self.spectrum.masses.iter().zip(&self.spectrum.values))
+                .map(|(&mz, &v)| (mz, v.max(0) as u32))
+                .collect(),
             peaks: (self.peaks.iter().enumerate())
                 .map(|(i, p)| FittedPeak {
                     peak: i,
@@ -568,6 +571,7 @@ mod tests {
                 model: vec![1.0, 5.0, 9.0, 5.0, 1.0],
                 spectrum: vec![(73, 500), (147, 999), (207, 40)],
                 peaks: vec![fit(0, 900.0), fit(1, 400.0), fit(2, 100.0), fit(3, 30.0)],
+                exact_spectrum: Vec::new(),
             },
             Component {
                 first_scan: 3,
@@ -576,6 +580,7 @@ mod tests {
                 model: vec![1.0, 2.0, 1.0],
                 spectrum: vec![(50, 10)],
                 peaks: vec![],
+                exact_spectrum: Vec::new(),
             },
         ];
         let times: Vec<f64> = (0..20).map(|i| 100.0 + f64::from(i) * 0.5).collect();

@@ -243,6 +243,7 @@ pub(crate) fn build(
         offsets,
         mz,
         intensity,
+        exact_masses: false,
     })
 }
 
