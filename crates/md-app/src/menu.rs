@@ -128,6 +128,7 @@ impl App {
 
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         self.open_chromatograms_button(ui);
+        self.recent_menu(ui);
         self.open_library_button(ui);
         self.open_nist_button(ui);
         let has_run = !self.runs.is_empty();
