@@ -17,3 +17,4 @@ __pycache__/
 /example-data/TargetSearchData/
 /example-data/*.tar.gz
 /example-data/old-results/
+/example-data/high-resolution/
