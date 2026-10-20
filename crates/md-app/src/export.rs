@@ -103,8 +103,9 @@ impl App {
     /// Shown chromatogram of the active run as CSV: time and the traces the plots draw.
     fn chromatogram_csv(&self, path: &Path) -> Result<(), String> {
         let run = self.runs.get(self.active).ok_or("no run open")?;
-        let mut header = vec!["Retention time (min)".to_owned()];
-        let mut columns: Vec<&[f64]> = vec![&run.minutes];
+        let mut header = vec![format!("Retention time ({})", self.view.unit.label())];
+        let times: Vec<f64> = run.minutes.iter().map(|m| self.view.time(*m)).collect();
+        let mut columns: Vec<&[f64]> = vec![&times];
         if self.trace != Trace::Sic {
             header.push("TIC".into());
             columns.push(&run.tic);

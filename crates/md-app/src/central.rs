@@ -4,10 +4,10 @@ use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
 use md_core::decimate;
 
-use crate::{App, Run, Trace, color, export, identify};
+use crate::{App, Run, Trace, color, export, identify, view::View};
 
 /// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
-/// time (min).
+/// time in the view's unit.
 #[allow(clippy::too_many_arguments)]
 fn trace_plot(
     ui: &mut egui::Ui,
@@ -15,6 +15,7 @@ fn trace_plot(
     label: &str,
     height: f32,
     runs: &[Run],
+    view: &View,
     cursor_min: f64,
     trace: fn(&Run) -> &[f64],
     marks: &[[f64; 2]],
@@ -27,41 +28,76 @@ fn trace_plot(
         .y_axis_min_width(90.0)
         .link_axis(link, [true, false])
         .link_cursor(link, [true, false])
-        .x_axis_label("Retention time (min)")
+        .x_axis_label(format!("Retention time ({})", view.unit.label()))
         .y_axis_label(label)
         .show(ui, |p| {
             // Draw at most ~2 points per pixel of the visible range, whatever the file size.
             let (lo, hi) = if p.auto_bounds().x {
                 (f64::NEG_INFINITY, f64::INFINITY)
             } else {
-                (p.plot_bounds().min()[0], p.plot_bounds().max()[0])
+                (
+                    view.minutes(p.plot_bounds().min()[0]),
+                    view.minutes(p.plot_bounds().max()[0]),
+                )
             };
+            let mut y_span: Option<(f64, f64)> = None;
             let width = p.response().rect.width().max(100.0) as usize;
             for (i, run) in runs.iter().enumerate() {
                 let ys = trace(run);
                 // A SIC is empty until its first job finishes.
                 if run.visible && ys.len() == run.minutes.len() {
-                    let points = decimate(&run.minutes, ys, lo, hi, width);
+                    // shortcut: the derivative is recomputed every frame (O(scans)); cache per run if runs grow past ~1M scans.
+                    let d;
+                    let ys = if view.derivative {
+                        d = md_core::first_derivative(ys);
+                        &d
+                    } else {
+                        ys
+                    };
+                    // Decimate in minutes, then convert: the scan arrays stay untouched.
+                    let mut points = decimate(&run.minutes, ys, lo, hi, width);
+                    for pt in &mut points {
+                        pt[0] = view.time(pt[0]);
+                    }
+                    for (a, b) in points.iter().map(|q| (q[1], q[1])) {
+                        y_span = Some(y_span.map_or((a, b), |(l, h)| (l.min(a), h.max(b))));
+                    }
                     p.line(Line::new(run.name.as_str(), points).color(color(i)));
                 }
             }
+            if view.auto_y
+                && let Some((l, h)) = y_span
+            {
+                let pad = ((h - l) * 0.05).max(f64::EPSILON);
+                p.set_plot_bounds_y(l - pad..=h + pad);
+            }
             if !marks.is_empty() {
-                p.points(Points::new("components", marks.to_vec()).radius(3.0));
+                let marks: Vec<[f64; 2]> = marks.iter().map(|m| [view.time(m[0]), m[1]]).collect();
+                p.points(Points::new("components", marks).radius(3.0));
             }
             for (at, name, color) in labels {
                 let text = egui::RichText::new(name).color(*color);
-                p.text(Text::new("hits", (*at).into(), text).anchor(egui::Align2::LEFT_BOTTOM));
+                let at = [view.time(at[0]), at[1]];
+                p.text(Text::new("hits", at.into(), text).anchor(egui::Align2::LEFT_BOTTOM));
             }
-            p.vline(VLine::new("", cursor_min));
+            p.vline(VLine::new("", view.time(cursor_min)));
             p.pointer_coordinate()
         });
-    plot.response.clicked().then_some(plot.inner?.x)
+    plot.response
+        .clicked()
+        .then_some(view.minutes(plot.inner?.x))
 }
 
 impl App {
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             self.trace_controls(ui);
+            ui.horizontal(|ui| {
+                self.view.controls(ui);
+                if ui.button("Run info").clicked() {
+                    self.view.info_open = true;
+                }
+            });
             if self.trace != Trace::Tic {
                 self.update_sics(ui.ctx());
             }
@@ -98,6 +134,14 @@ impl App {
         });
     }
 
+    fn derivative_label(&self, label: String) -> String {
+        if self.view.derivative {
+            format!("d/dscan {label}")
+        } else {
+            label
+        }
+    }
+
     /// Arrow keys move the scan cursor of the active run.
     fn step_scan(&mut self, ui: &egui::Ui) {
         let run = &mut self.runs[self.active];
@@ -122,10 +166,11 @@ impl App {
         let mut clicked = None;
         let top = ui.cursor().min;
         if self.trace != Trace::Sic {
-            // Components of the active run as dots on its TIC.
+            // Components of the active run as dots on its TIC; not on the derivative, whose y differs.
             let marks: Vec<[f64; 2]> = run
                 .components
                 .iter()
+                .filter(|_| !self.view.derivative)
                 .map(|k| {
                     [
                         run.minutes[k.apex_scan as usize],
@@ -133,13 +178,18 @@ impl App {
                     ]
                 })
                 .collect();
-            let labels = identify::labels(run);
+            let labels = if self.view.derivative {
+                Vec::new()
+            } else {
+                identify::labels(run, |s| self.view.shows(s))
+            };
             clicked = trace_plot(
                 ui,
                 "tic",
-                "TIC",
+                &self.derivative_label("TIC".into()),
                 height,
                 &self.runs,
+                &self.view,
                 cursor,
                 |r| &r.tic,
                 &marks,
@@ -148,12 +198,14 @@ impl App {
         }
         if self.trace != Trace::Tic {
             let label = format!("SIC m/z {} ± {}", self.mz, self.tolerance);
+            let label = self.derivative_label(label);
             let sic = trace_plot(
                 ui,
                 "sic",
                 &label,
                 height,
                 &self.runs,
+                &self.view,
                 cursor,
                 |r| &r.sic,
                 &[],
