@@ -5,6 +5,10 @@
 #   docs/reverse-engineering/tools/golden/make-reference.sh
 # Output: crates/md-core/tests/data/old-md-3.3.tsv (default peak detector) and old-md-3.3-matched.tsv
 # (matched filtering, peak width 10, threshold 3: the Calibration Setter defaults); see golden.py for the format.
+# With --high-resolution it only writes old-md-3.3-high-resolution.tsv for the high-resolution run made from
+# 7235eg04 (example-data/high-resolution/7235eg04-hr.cdf, git-ignored). When that file is missing it runs
+#   MD_HIGH_RESOLUTION_OUT=$PWD/example-data/high-resolution cargo test -p md-core --test golden_old_md -- --ignored write_high_resolution_run
+# (needs cargo; or run that command elsewhere first).
 # With MD_RESULTS=DIR it also saves DIR/<run>.cmp per run, a known calibration as DIR/harness.calib
 # (text) and DIR/harness.calib.bin (binary), and the raw dump DIR/raw.tsv. These come from the old
 # program: keep them local (example-data/old-results/ is ignored by git).
@@ -69,6 +73,16 @@ if [[ "${1:-}" == --reread ]]; then
   exit
 fi
 out=$repo/crates/md-core/tests/data
+if [[ "${1:-}" == --high-resolution ]]; then
+  hr=$repo/example-data/high-resolution
+  if [[ ! -f "$hr/7235eg04-hr.cdf" ]]; then
+    mkdir -p "$hr"
+    (cd "$repo" && MD_HIGH_RESOLUTION_OUT="$hr" cargo test -q -p md-core --test golden_old_md -- --ignored write_high_resolution_run)
+  fi
+  LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$hr/7235eg04-hr.cdf" > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
+  python3 "$here/golden.py" "static default settings, high-resolution run made from 7235eg04" < "$work/raw.tsv" > "$out/old-md-3.3-high-resolution.tsv"
+  exit
+fi
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
 python3 "$here/golden.py" "static default settings" < "$work/raw.tsv" > "$out/old-md-3.3.tsv"
 # The raw dump has every peak field with 9 digits; the .cmp test compares against it.

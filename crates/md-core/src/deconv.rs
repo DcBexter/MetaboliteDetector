@@ -160,16 +160,18 @@ fn fit_component(
     }
     t.sort_by(|a, b| peaks[*b].sharpness.total_cmp(&peaks[*a].sharpness));
     let mass = |k: usize| traces.masses[peaks[k].row as usize];
-    let excluded = |m: u32| {
+    // The old test reads the exact ion mass.
+    let excluded = |k: usize| {
+        let m = traces.mz[peaks[k].row as usize];
         s.excluded_model_ions
             .iter()
-            .any(|(lo, hi)| *lo <= m as f32 && m as f32 <= *hi)
+            .any(|(lo, hi)| *lo <= m && m <= *hi)
     };
     let quota = ((t.len() as f64 * 0.25) as usize).max(1);
     let mut m: Vec<usize> = t
         .iter()
         .copied()
-        .filter(|k| peaks[*k].quality <= 10.0 && !excluded(mass(*k)))
+        .filter(|k| peaks[*k].quality <= 10.0 && !excluded(*k))
         .take(quota)
         .collect();
     if m.is_empty() {
@@ -228,6 +230,8 @@ fn fit_component(
     }
 
     // A mass seen twice keeps its first (sharpest) height; the base peak counts all of them.
+    // shortcut: keyed by nominal mass, so the exact masses of a high-resolution run merge here (the
+    // old map keeps each exact mass); exact spectra need float masses in `.cmp` and library search.
     let bp = fitted.iter().map(|f| f.2).max().unwrap_or(0);
     let mut spectrum = BTreeMap::new();
     for f in &fitted {
