@@ -619,9 +619,7 @@ impl Batch {
                             self.note = note;
                         }
                         let times = self.times.as_ref().map(|t| t.0.as_slice());
-                        if let Some(note) = pool_mapping_button(ui, t, &self.norm, times) {
-                            self.note = note;
-                        }
+                        pool_mapping_button(ui, t, &self.norm, times, &mut self.note);
                         if self.frag_job.is_none()
                             && let Some(rx) = frag_button(ui, shown, scan)
                         {
@@ -854,31 +852,35 @@ fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
 }
 
 /// The old program's "Export pool mapping": which pool runs each run was divided by, for the runs
-/// the table shows. Returns a note after a save attempt.
+/// the table shows. A save attempt leaves a note.
 fn pool_mapping_button(
     ui: &mut egui::Ui,
     t: &Table,
     n: &Norm,
     times: Option<&[i64]>,
-) -> Option<String> {
+    note: &mut String,
+) {
     if n.kind != Kind::Pool || !ui.button("Export pool mapping…").clicked() {
-        return None;
+        return;
     }
     let (base, times) = edited_runs(t, n, times);
     let Normalization::Pool(p) = mode(n, &base, &times) else {
-        return None;
+        return;
     };
-    let mut path = rfd::FileDialog::new()
+    let Some(mut path) = rfd::FileDialog::new()
         .add_filter("Text", &["txt"])
         .set_file_name("pool_mapping.txt")
-        .save_file()?;
+        .save_file()
+    else {
+        return;
+    };
     if path.extension().is_none_or(|e| e != "txt") {
         path.as_mut_os_string().push(".txt");
     }
-    Some(match std::fs::write(&path, pool_mapping_text(&base, &p)) {
+    *note = match std::fs::write(&path, pool_mapping_text(&base, &p)) {
         Ok(()) => format!("Saved {}", path.display()),
         Err(e) => format!("Export failed: {e}"),
-    })
+    };
 }
 
 /// With `z_scored` there are no group statistics: the old program computes them on the normalised

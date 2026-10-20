@@ -93,7 +93,7 @@ pub fn pool_mapping(t: &Table, p: &Pool) -> Vec<Vec<usize>> {
         .collect()
 }
 
-/// The old program's "Export pool mapping" file (`exportPoolMapping` 0x4552a0): a header, then one
+/// The old program's "Export pool mapping" file (`exportPoolMapping` 0x5552a0): a header, then one
 /// line per run with the names of the pool runs its values were divided by, tab-separated.
 pub fn pool_mapping_text(t: &Table, p: &Pool) -> String {
     let mut out = String::from("Mapping\nSample\tPools\n\n");
@@ -323,7 +323,7 @@ mod tests {
         );
         let p = Pool { nearest: 2, ..p };
         assert!(pool_mapping_text(&table(), &p).contains("\na2\tp2\tp1\n"));
-        // The mapping is what `normalize` divides by: a2's x is missing, a1's is 5 / x(p1) = 5 / 20.
+        // The mapping is what `normalize` divides by: a2's x is missing, a1's is 5 / mean(20, 40).
         let n = normalize(&table(), &Normalization::Pool(p));
         assert_eq!(values(&n, 1)[0], Some(5.0 / 30.0));
     }
