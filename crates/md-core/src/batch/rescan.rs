@@ -96,12 +96,16 @@ pub fn rescan_runs(
                                 rt_s,
                                 ions: Vec::new(),
                                 rescanned: true,
+                                rescued: Vec::new(),
                             });
                             found.len() - 1
                         });
                     let f = &mut found[k];
                     // A zero-integral peak of the same ion is replaced.
                     f.ions.retain(|p| ions.iter().all(|n| n.mass != p.mass));
+                    if !f.rescanned {
+                        f.rescued.extend(ions.iter().map(|p| p.mass));
+                    }
                     f.ions.append(&mut ions);
                     f.ions.sort_by(|a, b| b.integral.total_cmp(&a.integral));
                 }
@@ -277,6 +281,7 @@ mod tests {
                 signal_to_noise: 1.0,
             }],
             rescanned: false,
+            rescued: Vec::new(),
         };
         let shifted = RiCalibration::identity().shifted_to(120.0, 100.0);
         let run = |found: Vec<Found>, calibration| RunResult {

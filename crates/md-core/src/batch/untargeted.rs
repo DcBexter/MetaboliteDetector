@@ -53,6 +53,7 @@ pub fn add_unknowns(
                 rt_s: u.rt_s,
                 ions: u.ions,
                 rescanned: false,
+                rescued: Vec::new(),
             });
         }
         prepared = PreparedLibrary::new(&lib, &s.search);
@@ -118,6 +119,30 @@ mod tests {
             unknown,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn retention_index_and_time_are_weighted_by_the_spectra() {
+        let s = [(50, 100), (60, 200), (70, 300)];
+        let with_ri = |rt_s, ri| Unknown {
+            ri,
+            ..unknown(rt_s, &s)
+        };
+        let mut runs: Vec<RunResult> = [(10.0, None), (20.0, Some(100.0)), (30.0, Some(110.0))]
+            .map(|(t, ri)| run(vec![with_ri(t, ri)]))
+            .into();
+        let lib = add_unknowns(
+            &mut runs,
+            0,
+            &ScanSettings::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(lib.len(), 1);
+        // The first known RI is taken over; the next is weighted by the two spectra so far.
+        assert!((lib[0].spectrum.ri - (2.0 * 100.0 + 110.0) / 3.0).abs() < 1e-9);
+        // Times: (10 + 20 + 30) / 3.
+        assert!((lib[0].spectrum.rt_ms - 20_000.0).abs() < 1e-6);
     }
 
     #[test]
