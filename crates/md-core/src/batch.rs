@@ -119,13 +119,19 @@ pub struct Scanned {
 
 /// The ion peaks of a component, largest integral first (§7.2).
 pub fn ion_peaks(k: &Component, peaks: &[Peak], traces: &IonTraces) -> Vec<IonPeak> {
+    ion_peaks_by(k, peaks, |i| traces.masses[peaks[i].row as usize])
+}
+
+/// [`ion_peaks`] with the ion mass of peak `i` given by `mass_of` (peaks read from a `.cmp` have no
+/// trace row).
+pub fn ion_peaks_by(k: &Component, peaks: &[Peak], mass_of: impl Fn(usize) -> u32) -> Vec<IonPeak> {
     let mut ions: Vec<IonPeak> = k
         .peaks
         .iter()
         .map(|f| {
             let p = &peaks[f.peak];
             IonPeak {
-                mass: traces.masses[p.row as usize],
+                mass: mass_of(f.peak),
                 integral: f.integral,
                 quality: p.quality,
                 signal_to_noise: p.signal_to_noise,
@@ -152,22 +158,46 @@ pub fn scan_chromatogram(
     drop(c);
     let peaks = traces.detect_peaks(&s.peaks);
     let comps = deconvolute(&traces, &peaks, &s.deconv);
+    Ok(scan_components(&times, &comps, &peaks, lib, s, |i| {
+        traces.masses[peaks[i].row as usize]
+    }))
+}
+
+/// The run behind a `.cmp` input: its saved components instead of a deconvolution. The scan times
+/// are right at the apex scans only, which is all the later passes read.
+fn scan_saved(path: &Path, lib: &PreparedLibrary, s: &ScanSettings) -> Result<Scanned, String> {
+    let ((comps, masses, peaks), times) =
+        crate::cmp::standalone_components(path).map_err(|e| e.to_string())?;
+    Ok(scan_components(&times, &comps, &peaks, lib, s, |i| {
+        masses[i]
+    }))
+}
+
+/// Calibration, library search and ion peaks of the components of one run.
+fn scan_components(
+    times: &[f64],
+    comps: &[Component],
+    peaks: &[Peak],
+    lib: &PreparedLibrary,
+    s: &ScanSettings,
+    mass_of: impl Fn(usize) -> u32,
+) -> Scanned {
     let calibration = s.calibration.as_ref().map(|cal| {
         let shifted = s.shift.and_then(|r| {
-            shift_to_reference(cal, &times, &comps, lib, r.compound, r.cutoff, &s.search)
+            shift_to_reference(cal, times, comps, lib, r.compound, r.cutoff, &s.search)
         });
         shifted.unwrap_or_else(|| cal.clone())
     });
     let ris = calibration
         .as_ref()
-        .map(|cal| cal.component_ris(&times, &comps));
-    let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s.search);
+        .map(|cal| cal.component_ris(times, comps));
+    let id = map_compounds_to_library(comps, ris.as_deref(), lib, &s.search);
     let (mut found, mut unknown) = (Vec::new(), Vec::new());
     for (i, (k, hit)) in comps.iter().zip(id.assigned).enumerate() {
         if hit.is_none() && !s.untargeted {
             continue;
         }
-        let ions = ion_peaks(k, &peaks, &traces);
+        let ions = ion_peaks_by(k, peaks, &mass_of);
         let rt_s = times[k.apex_scan as usize];
         match hit {
             Some(h) => found.push(Found {
@@ -186,15 +216,16 @@ pub fn scan_chromatogram(
             }),
         }
     }
-    Ok(Scanned {
+    Scanned {
         found,
         unknown,
         calibration,
-    })
+    }
 }
 
 /// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
-/// (rayon) as well. `done` counts finished files. Once `cancel` is set, no further file starts and
+/// (rayon) as well. A `.cmp` file stands for a run already analysed: its saved components are searched
+/// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
 /// the result is `None`. Unreadable files are listed as errors and do not stop the batch.
 pub fn scan_runs(
     paths: &[PathBuf],
@@ -215,9 +246,12 @@ pub fn scan_runs(
                         let Some(path) = paths.get(i) else { break };
                         // A panic in one file becomes its error, so the other files are kept.
                         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::read_run(path).and_then(|c| {
-                                scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
-                            })
+                            match crate::cmp::is_cmp(path) {
+                                true => scan_saved(path, lib, s),
+                                false => crate::read_run(path).and_then(|c| {
+                                    scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
+                                }),
+                            }
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
                         .map(|r| RunResult {
@@ -1067,6 +1101,68 @@ NUM PEAKS: 1
         assert!(partial[1].found.iter().all(|f| !f.ions.is_empty()));
         assert!(rows(&partial, &all).is_empty());
         assert!(!rows(&partial, &TableSettings::default()).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_saved_cmp_scans_like_the_run_it_came_from() {
+        let dir = std::env::temp_dir().join(format!("md-scan-cmp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (run, lib) = (two_substances(), two_substances_library());
+        let (s, cancel, done) = (
+            ScanSettings::default(),
+            AtomicBool::new(false),
+            AtomicUsize::new(0),
+        );
+        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let direct = scan_chromatogram(run.clone(), &prepared, &s).unwrap();
+        assert_eq!(direct.found.len(), 2);
+
+        let mut traces = IonTraces::new(&run).unwrap();
+        let peaks = traces.detect_peaks(&s.peaks);
+        let comps = deconvolute(&traces, &peaks, &s.deconv);
+        let masses: Vec<u32> = peaks
+            .iter()
+            .map(|p| traces.masses[p.row as usize])
+            .collect();
+        let compounds =
+            crate::cmp::compounds_of_components(&comps, &masses, &peaks, &run.scan_times_s, &[]);
+        let path = dir.join("run.cmp");
+        crate::cmp::write_cmp(&path, &compounds).unwrap();
+
+        let (runs, errors) = scan_runs(
+            std::slice::from_ref(&path),
+            &prepared,
+            &s,
+            1,
+            &done,
+            &cancel,
+        )
+        .unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        let saved = &runs[0].found;
+        assert_eq!(saved.len(), direct.found.len());
+        for (a, b) in saved.iter().zip(&direct.found) {
+            assert_eq!(
+                (a.compound, a.score, &a.ions),
+                (b.compound, b.score, &b.ions)
+            );
+            assert!((a.rt_s - b.rt_s).abs() < 1e-9 && !a.rescanned);
+        }
+        // The rescan has no raw data to look into and leaves a `.cmp` run alone.
+        let mut runs = runs;
+        runs[0].found.clear();
+        let (added, errors) = rescan_runs(
+            &mut runs,
+            &lib,
+            &[],
+            &s,
+            &QuantSettings::default(),
+            1,
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!((added, errors.len()), (0, 0));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
