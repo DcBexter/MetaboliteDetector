@@ -183,7 +183,7 @@ impl App {
 }
 
 /// Names of the assigned library compounds at the component apexes on the TIC.
-pub fn labels(run: &Run) -> Vec<Label> {
+pub fn labels(run: &Run, show: impl Fn(f64) -> bool) -> Vec<Label> {
     let Some(((lib, ..), id, _)) = &run.ident else {
         return Vec::new();
     };
@@ -191,7 +191,7 @@ pub fn labels(run: &Run) -> Vec<Label> {
         .iter()
         .zip(&id.assigned)
         .filter_map(|(k, hit)| {
-            let h = hit.as_ref()?;
+            let h = hit.as_ref().filter(|h| show(h.overall))?;
             let s = k.apex_scan as usize;
             Some((
                 [run.minutes[s], run.tic[s]],
