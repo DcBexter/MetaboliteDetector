@@ -883,6 +883,9 @@ mod tests {
         // B has no library ions: §7.2 on its peaks gives the only one, so min_ions is capped at 1.
         assert_eq!(t.rows[1].ions, [50]);
         assert_eq!(t.rows[1].values, [None, Some(7.0), Some(5.0)]);
+        // The time of a hit is kept only where the cell has a value.
+        assert_eq!(t.rows[0].rts_s, [Some(10.0), None, None]);
+        assert_eq!(t.rows[1].rts_s, [None, Some(22.0), Some(20.0)]);
         // Reproducibility: A reaches 1/2 in ctrl, B 1/1 in mut.
         let strict = TableSettings {
             min_reproducibility: 0.75,

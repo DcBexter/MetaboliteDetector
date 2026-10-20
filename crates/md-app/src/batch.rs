@@ -78,6 +78,11 @@ impl Edits {
         self.cols.is_none() && self.rows.is_empty()
     }
 
+    /// "Restore removed": brings back all runs and substances and the original order.
+    fn restore(&mut self) {
+        *self = Self::default();
+    }
+
     /// Applies what the user asked for in the shown table with `n` columns in the base table.
     fn apply(&mut self, act: Act, n: usize) {
         let mut cols = self.cols(n);
@@ -421,12 +426,12 @@ impl Batch {
         );
     }
 
-    /// Progress and Cancel while a scan runs, else Start and what it will use.
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
     fn library_ready(&self, lib: &Library) -> bool {
         lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
     }
 
+    /// Progress and Cancel while a scan runs, else Start and what it will use.
     fn job_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -475,7 +480,7 @@ impl Batch {
                     None => ui.label("Open a library first (File → Open library)."),
                 };
                 if lib.is_some_and(|l| !self.library_ready(l)) {
-                    ui.label("Library is being prepared for the new search settings.");
+                    ui.label("Library is being prepared for the new search or RT-only settings.");
                 }
                 ui.label(&self.note);
             }
@@ -805,7 +810,7 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
                 )
                 .clicked()
         {
-            *edits = Edits::default();
+            edits.restore();
         }
     });
 }
@@ -1326,6 +1331,13 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
+        // "Restore removed" brings back the runs, the substances and the original order.
+        n.kind = Kind::None;
+        n.edits.apply(Act::MoveRun(0, 1), 3);
+        n.edits.restore();
+        let shown = shown_table(&t, &n, None);
+        assert_eq!(shown.runs, t.runs);
+        assert_eq!(shown.rows, t.rows);
     }
 
     #[test]
