@@ -245,12 +245,12 @@ fn run(a: Args) -> Result<bool, String> {
     let io = |e: std::io::Error| format!("output: {e}");
     table.write_csv(&mut out).map_err(io)?;
     out.flush().map_err(io)?;
+    for e in &errors {
+        eprintln!("error: {e}");
+    }
     // The replicate groups go next to a CSV file; standard output has no room for a second table.
     if let Some(p) = &a.output {
         table.write_groups_file(p).map_err(io)?;
-    }
-    for e in &errors {
-        eprintln!("error: {e}");
     }
     eprintln!(
         "{} runs scanned in {:.2?} ({} failed): {} substances",

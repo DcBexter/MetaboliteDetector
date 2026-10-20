@@ -449,13 +449,17 @@ impl Table {
         self.groups.iter().any(|g| !g.is_empty())
     }
 
-    /// Writes the groups next to the results CSV `csv` (`groups_path`), unless no run has a group.
-    /// Returns the file written.
+    /// Writes the groups next to the results CSV `csv` (`groups_path`) and returns that file; if no
+    /// run has a group, an old groups file of the same name is removed (a script would read it) and
+    /// there is none to return.
     pub fn write_groups_file(&self, csv: &Path) -> std::io::Result<Option<PathBuf>> {
-        if !self.has_groups() {
-            return Ok(None);
-        }
         let path = groups_path(csv);
+        if !self.has_groups() {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(None),
+            };
+        }
         self.write_groups_csv(std::io::BufWriter::new(std::fs::File::create(&path)?))?;
         Ok(Some(path))
     }

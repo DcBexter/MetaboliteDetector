@@ -467,11 +467,11 @@ fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
         .save_file()?;
     let saved = std::fs::File::create(&p)
         .map(std::io::BufWriter::new)
-        .and_then(|f| t.write_csv(f))
-        .and_then(|()| t.write_groups_file(&p));
-    Some(match saved {
-        Ok(None) => format!("Saved {}", p.display()),
-        Ok(Some(g)) => format!("Saved {} and {}", p.display(), g.display()),
+        .and_then(|f| t.write_csv(f));
+    Some(match saved.map(|()| t.write_groups_file(&p)) {
+        Ok(Ok(None)) => format!("Saved {}", p.display()),
+        Ok(Ok(Some(g))) => format!("Saved {} and {}", p.display(), g.display()),
+        Ok(Err(e)) => format!("Saved {}, but not the replicate groups: {e}", p.display()),
         Err(e) => format!("Export failed: {e}"),
     })
 }
