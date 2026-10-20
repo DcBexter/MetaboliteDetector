@@ -619,6 +619,8 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
         pause();
         bytes = match read() {
             Ok(bytes) => bytes,
+            // Gone: another starting window kept it aside and says so; nothing left to guard.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Some(file), None),
             Err(e) => return aside(e),
         };
     }
@@ -965,6 +967,12 @@ size=@Size(1591 800)
             good,
             "the whole file is the new last good copy"
         );
+        // Kept aside by another starting window during the pause: not a reason to save elsewhere.
+        let (dir, file) = state_dir("gone", &[]);
+        std::fs::write(&file, "not ron {").unwrap();
+        let gone = guard_after(Some(file.clone()), || std::fs::remove_file(&file).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(gone, (Some(file), None));
     }
 
     /// Without a good copy the damaged file becomes the one backup; the defaults apply.
