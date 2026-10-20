@@ -126,8 +126,8 @@ The port: `stats::anova` (tail via the regularized incomplete beta function), sh
 no spread within or between groups.
 
 Verified (#222): `tools/anova/old_anova.cpp` (`make-anova.sh`, `LD_PRELOAD` like the MID tools) calls `oneWayANOVA`
-on 74 cases (hand cases, unequal groups, zeros, p down to 6e-23, 60 random); `crates/md-core/tests/old_anova.rs`
-matches all of them to 1e-9 relative. The old function divides 0 by 0 for identical values (nan) and, with
+on 74 cases (two of them never reach it in `getANOVAPValue`; hand cases, unequal groups, zeros, p down to 6e-23, 60 random); `crates/md-core/tests/old_anova.rs`
+matches the other 72 to 1e-9 relative (checked again with the final generator). The old function divides 0 by 0 for identical values (nan) and, with
 `N = k` or an empty group, ends in the GSL error handler (the whole program aborts); the port gives no p-value
 ("–") in these cases. `getANOVAPValue` never calls it with fewer than two groups.
 

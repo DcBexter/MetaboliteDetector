@@ -15,7 +15,9 @@ use md_core::batch::{
     Completed, Found, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
     scan_runs, table,
 };
-use md_core::batch::{cell_ions, group_label, group_names, hit_list, ions_path, settings_path};
+use md_core::batch::{
+    cell_ions, group_label, group_names, group_stats_path, hit_list, ions_path, settings_path,
+};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
@@ -614,6 +616,7 @@ impl Batch {
                             .concat(),
                             ions: self.view.export_ions,
                             blank: &self.view.blanks,
+                            group_stats: !self.norm.z_score,
                         };
                         if let Some(note) = export_button(ui, shown, &ex) {
                             self.note = note;
@@ -722,6 +725,8 @@ struct Export<'a> {
     ions: bool,
     /// The replicate group the group statistics test against (if the table has it).
     blank: &'a str,
+    /// Write the group statistics; not for z-scores, which the view does not show them for either.
+    group_stats: bool,
 }
 
 /// Normalisation and edits of the shown table, for the settings file next to an export.
@@ -787,12 +792,16 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
     let sp = settings_path(p);
+    let group_stats = if ex.group_stats {
+        t.write_group_stats_file(p, Some(ex.blank))
+    } else {
+        // An older file would not match this results file.
+        std::fs::remove_file(group_stats_path(p)).ok();
+        Ok(None)
+    };
     let mut results = vec![
         ("replicate groups", t.write_groups_file(p).transpose()),
-        (
-            "group statistics",
-            t.write_group_stats_file(p, Some(ex.blank)).transpose(),
-        ),
+        ("group statistics", group_stats.transpose()),
         (
             "settings",
             Some(
@@ -1746,6 +1755,7 @@ mod tests {
             extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
             blank: "BLANK",
+            group_stats: true,
         };
         let note = save_results(&csv, &t, &ex).unwrap();
         assert!(note.contains("results.settings.csv"), "{note}");
@@ -1762,6 +1772,17 @@ mod tests {
             ions,
             "\u{feff}Substance,Quant_ion,a.cdf\nGlucose,73,500\nGlucose,147,100\n"
         );
+
+        // Group statistics only for a table that has groups, and not for z-scores (the view has none).
+        let grouped = Table {
+            groups: vec!["ctrl".into()],
+            ..t.clone()
+        };
+        save_results(&csv, &grouped, &ex).unwrap();
+        assert!(dir.join("results.groupstats.csv").exists());
+        ex.group_stats = false;
+        save_results(&csv, &grouped, &ex).unwrap();
+        assert!(!dir.join("results.groupstats.csv").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

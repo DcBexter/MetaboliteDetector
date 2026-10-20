@@ -410,7 +410,7 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 quantified; names that start with `=`, `+`, `-` or `@` get a leading `'`); with replicate groups, `-o FILE`
 and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`) and
 `FILE.groupstats.csv` (`Table::write_group_stats_file`: per group `Mean_`, `Rel_Std_Err_`, `Hits_` and with a group
-`BLANK` `P_blank_`, last `P_ANOVA`, unrounded, empty = not defined; the same numbers as the "Group statistics" view,
+`BLANK` (the app: the group named in "Blank group"; md-cli: `BLANK`) `P_blank_`, last `P_ANOVA`, unrounded, empty = not defined; the same numbers as the "Group statistics" view,
 which takes them from `Table::group_stats`; the old `exportData` writes the shown table cell by cell, so its group
 view had the p-value column too, #222); `-o FILE` always
 writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and

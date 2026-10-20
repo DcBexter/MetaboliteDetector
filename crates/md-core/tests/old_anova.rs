@@ -75,12 +75,12 @@ fn parse_old(text: &str) -> Vec<(String, Option<f64>)> {
     (text.lines())
         .map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            let p = if f[0] == "anova" {
-                f[2].parse().ok()
-            } else {
-                None
+            let p = match (f[0], f.get(2).copied()) {
+                ("anova", Some("nan" | "-nan" | "inf")) | ("error", _) => None,
+                ("anova", Some(v)) => Some(v.parse::<f64>().unwrap()),
+                _ => panic!("unknown line: {l}"),
             };
-            (f[1].to_string(), p.filter(|p: &f64| p.is_finite()))
+            (f[1].to_string(), p)
         })
         .collect()
 }
