@@ -15,13 +15,12 @@ use md_core::batch::{
     Completed, Found, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
     scan_runs, table,
 };
-use md_core::batch::{cell_ions, hit_list, ions_path, settings_path};
+use md_core::batch::{cell_ions, group_label, group_names, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
-use md_core::stats::{anova, group_values, student, summary};
 
 use crate::identify::Library;
 use crate::spawn;
@@ -614,6 +613,7 @@ impl Batch {
                             ]
                             .concat(),
                             ions: self.view.export_ions,
+                            blank: &self.view.blanks,
                         };
                         if let Some(note) = export_button(ui, shown, &ex) {
                             self.note = note;
@@ -720,6 +720,8 @@ struct Export<'a> {
     extra: Vec<(&'static str, String)>,
     /// Also write the integral of every quant ion.
     ions: bool,
+    /// The replicate group the group statistics test against (if the table has it).
+    blank: &'a str,
 }
 
 /// Normalisation and edits of the shown table, for the settings file next to an export.
@@ -787,6 +789,10 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let sp = settings_path(p);
     let mut results = vec![
         ("replicate groups", t.write_groups_file(p).transpose()),
+        (
+            "group statistics",
+            t.write_group_stats_file(p, Some(ex.blank)).transpose(),
+        ),
         (
             "settings",
             Some(
@@ -953,23 +959,6 @@ fn view_controls(
     });
 }
 
-/// Replicate groups in name order, like the old statistics table.
-fn group_names(t: &Table) -> Vec<&str> {
-    let mut g: Vec<&str> = t.groups.iter().map(String::as_str).collect();
-    g.sort_unstable();
-    g.dedup();
-    g
-}
-
-/// A run without replicate group (empty pattern) belongs to the whole batch.
-fn group_label(g: &str) -> String {
-    if g.is_empty() {
-        "all runs".into()
-    } else {
-        g.into()
-    }
-}
-
 /// A statistic that is undefined (NaN) shows as a dash.
 fn number(v: f64, decimals: usize) -> String {
     if v.is_finite() {
@@ -1001,7 +990,7 @@ pub(crate) fn significant(v: f64) -> String {
 fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, String)> {
     if v.mode != Mode::Groups {
         return (t.runs.iter().zip(&t.groups))
-            .map(|(r, g)| (r.clone(), group_label(g)))
+            .map(|(r, g)| (r.clone(), group_label(g).to_string()))
             .collect();
     }
     let stats = ["Mean", "Rel. Std. Err.", "#", "P (blank)"];
@@ -1010,7 +999,7 @@ fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, Stri
         .flat_map(|g| {
             stats[..per_group]
                 .iter()
-                .map(move |s| (s.to_string(), group_label(g)))
+                .map(move |s| (s.to_string(), group_label(g).to_string()))
         })
         .chain([("P (ANOVA)".to_string(), "all groups".to_string())])
         .collect()
@@ -1020,22 +1009,18 @@ fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, Stri
 /// hits and (with a blank group) the p-value against the blanks; last the ANOVA p-value over all
 /// the groups, blanks included, like the old "p-value" column.
 fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> Vec<String> {
-    let values = |g: &str| group_values(t, row, &[g.to_string()], true);
-    let blanks = blank.map(values);
+    let p = |p: Option<f64>| p.map_or("–".into(), |p| format!("{p:.4}"));
+    let stats = t.group_stats(row, groups, blank);
     let mut out = Vec::new();
-    for g in groups {
-        let x = values(g);
-        let s = summary(&x);
+    for (k, s) in stats.groups.iter().enumerate() {
         out.push(significant(s.mean));
         out.push(number(s.rel_std_err, 3));
         out.push(s.hits.to_string());
-        if let Some(b) = &blanks {
-            let p = (blank != Some(g)).then(|| student(&x, b)).flatten();
-            out.push(p.map_or("–".into(), |p| format!("{p:.4}")));
+        if blank.is_some() {
+            out.push(p(stats.p_blank[k]));
         }
     }
-    let all: Vec<Vec<f64>> = groups.iter().map(|g| values(g)).collect();
-    out.push(anova(&all).map_or("–".into(), |p| format!("{p:.4}")));
+    out.push(p(stats.anova));
     out
 }
 
@@ -1760,6 +1745,7 @@ mod tests {
             settings: &settings,
             extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
+            blank: "BLANK",
         };
         let note = save_results(&csv, &t, &ex).unwrap();
         assert!(note.contains("results.settings.csv"), "{note}");

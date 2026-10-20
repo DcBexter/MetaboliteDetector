@@ -29,7 +29,8 @@ Options:
   -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
   -o, --output FILE           CSV file (default: standard output); with --replicates the group of each
-                              run goes to FILE.groups.csv,
+                              run goes to FILE.groups.csv and the statistics of the groups (mean, rel.
+                              std. error, hits, p-value against a group BLANK, ANOVA) to FILE.groupstats.csv,
                               the settings used to FILE.settings.csv
   -j, --parallel N            runs in memory at once (default 4)
       --replicates REGEX      replicate group = first capture group of the file name
@@ -273,6 +274,7 @@ fn run(a: Args) -> Result<bool, String> {
     // Groups, settings and ion integrals go next to a CSV file; standard output has no room for more tables.
     if let Some(p) = &a.output {
         table.write_groups_file(p).map_err(io)?;
+        table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
         ts.write_csv(&how, f).map_err(io)?;
@@ -452,6 +454,13 @@ mod tests {
         assert_eq!(lines[0], "\u{feff}Substance,RT_s,Quant_ions,ctrl_1.cdf");
         let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
         assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,ctrl\n");
+        let stats = std::fs::read_to_string(dir.join("out.groupstats.csv")).unwrap();
+        assert!(
+            stats.starts_with(
+                "\u{feff}Substance,RT_s,Quant_ions,Mean_ctrl,Rel_Std_Err_ctrl,Hits_ctrl,P_ANOVA\nearly,"
+            ),
+            "{stats}"
+        );
         assert!(lines[1].starts_with("early,"), "{csv}");
         assert!(lines[2].starts_with("\"late, \"\"x\"\"\","), "{csv}");
         assert_eq!(lines.len(), 3);

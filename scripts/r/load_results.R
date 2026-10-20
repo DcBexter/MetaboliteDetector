@@ -26,6 +26,19 @@ if (file.exists(groups_csv)) {
   groups <- setNames(unguard(g$Group), unguard(g$Run))[names(runs)]
 }
 
+# Statistics of the replicate groups per substance (the "Group statistics" view): Substance, RT_s,
+# Quant_ions, then Mean_<group>, Rel_Std_Err_<group>, Hits_<group>, P_blank_<group> (with a group
+# BLANK) for every group and last P_ANOVA, as the data.frame `groupstats` (NULL without groups).
+groupstats_csv <- paste0(tools::file_path_sans_ext(csv_path), ".groupstats.csv")
+groupstats <- NULL
+if (file.exists(groupstats_csv)) {
+  groupstats <- read.csv(groupstats_csv, check.names = FALSE, stringsAsFactors = FALSE,
+                         fileEncoding = "UTF-8-BOM",
+                         colClasses = c(Substance = "character", Quant_ions = "character"))
+  names(groupstats) <- unguard(names(groupstats))
+  groupstats$Substance <- unguard(groupstats$Substance)
+}
+
 # Settings used (`Setting,Value`, written next to every export) as the named character vector
 # `settings`, and the integral of every quant ion (exported with "Export quant ions" or
 # md-cli --ion-integrals; Substance, Quant_ion, then one column per run) as the data.frame `ions`.

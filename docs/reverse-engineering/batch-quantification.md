@@ -125,6 +125,16 @@ The port: `stats::anova` (tail via the regularized incomplete beta function), sh
 "Group statistics" (`P (ANOVA)`). `None` ("–") where the old code would divide by zero: an empty group, `N = k`,
 no spread within or between groups.
 
+Verified (#222): `tools/anova/old_anova.cpp` (`make-anova.sh`, `LD_PRELOAD` like the MID tools) calls `oneWayANOVA`
+on 74 cases (hand cases, unequal groups, zeros, p down to 6e-23, 60 random); `crates/md-core/tests/old_anova.rs`
+matches all of them to 1e-9 relative. The old function divides 0 by 0 for identical values (nan) and, with
+`N = k` or an empty group, ends in the GSL error handler (the whole program aborts); the port gives no p-value
+("–") in these cases. `getANOVAPValue` never calls it with fewer than two groups.
+
+Export: `BatchQuantificationResultWidget::exportData` (0x4506c0) writes the shown table model cell by cell (header
+row, then the rows of the model), so the group view with its p-value column is exported as shown. The port writes
+`FILE.groupstats.csv` next to the results CSV (`Table::write_group_stats_file`).
+
 ## Port: what differs
 
 | Old | Port |
