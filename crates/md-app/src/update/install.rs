@@ -216,11 +216,8 @@ fn write_new(archive: &[u8], targets: &mut [(&str, PathBuf, bool)]) -> io::Resul
         let new = side(target, ".new");
         let mut out = std::fs::File::create(&new)?;
         io::copy(&mut entry, &mut out)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            out.set_permissions(std::fs::Permissions::from_mode(0o755))?;
-        }
+        // The new binary keeps the mode of the one it replaces, never the archive's.
+        out.set_permissions(std::fs::metadata(target)?.permissions())?;
         *found = true;
     }
     Ok(())
@@ -258,6 +255,12 @@ mod tests {
         let (exe, cli) = (dir.join("metabolite-detector"), dir.join("md-cli"));
         std::fs::write(&exe, "old app").unwrap();
         std::fs::write(&cli, "old cli").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::Permissions::from_mode(0o750);
+            std::fs::set_permissions(&exe, mode).unwrap();
+        }
         let data = archive(&[
             ("README.md", b"readme"),
             ("metabolite-detector", b"new app"),
@@ -272,7 +275,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&exe).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o755);
+            assert_eq!(mode & 0o777, 0o750);
         }
         std::fs::remove_dir_all(&dir).ok();
     }

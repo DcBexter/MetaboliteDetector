@@ -755,7 +755,7 @@ over HTTPS, and installs nothing unless the SHA-256 matches:
 - Portable exe (anywhere else on Windows): written as `<exe>.new`, the running exe renamed to `<exe>.old`, the new
   one moved in and started; the next start deletes `<exe>.old`.
 - Linux tar.gz: `metabolite-detector` (the running exe) and `md-cli` next to it, if present, are written as
-  `<file>.new` with mode 755 and renamed over the originals only once all are written.
+  `<file>.new` with the mode of the file it replaces and renamed over the originals only once all are written.
 
 ## Build and test
 
