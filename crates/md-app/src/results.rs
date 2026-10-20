@@ -16,10 +16,10 @@ const HEAD: [&str; 8] = [
     "RT (min)",
     "RI",
     "Peak area",
-    "Overall score",
-    "Spec. score",
+    "Score",
+    "Spectrum",
     "RI score",
-    "Quant. ions",
+    "Quant ions",
 ];
 
 /// What the cached rows were built from: active run and its `rev`.
@@ -245,18 +245,19 @@ fn table(
             .striped(true)
             .sense(egui::Sense::click())
             .resizable(true)
-            // A long name is cut (the row's tooltip has it whole) so the scores stay in view.
-            .column(Column::initial(106.0).at_least(90.0).clip(true))
+            // The name takes the room the fixed columns leave; a longer one is cut (the row's
+            // tooltip has it whole) so the scores stay in view.
+            .column(Column::remainder().at_least(106.0).clip(true))
             // Widths that fit the 720 px a window gets at 1280 px, each with room for the sort
             // arrow (a column never shrinks again); right-aligned cells would make automatic
             // columns grow to the window.
             .column(Column::initial(66.0).at_least(40.0))
             .column(Column::initial(44.0).at_least(40.0))
             .column(Column::initial(80.0).at_least(40.0))
-            .column(Column::initial(96.0).at_least(40.0))
-            .column(Column::initial(84.0).at_least(40.0))
+            .column(Column::initial(60.0).at_least(40.0))
+            .column(Column::initial(80.0).at_least(40.0))
             .column(Column::initial(70.0).at_least(40.0))
-            .column(Column::remainder().at_least(90.0).clip(true))
+            .column(Column::initial(90.0).at_least(60.0).clip(true))
             .header(20.0, |mut h| {
                 for (c, title) in HEAD.iter().enumerate() {
                     h.col(|ui| {

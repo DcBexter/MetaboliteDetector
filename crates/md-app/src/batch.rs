@@ -937,7 +937,7 @@ fn number(v: f64, decimals: usize) -> String {
 
 /// A mean with 6 significant digits, like the old table (Qt shows a double as `'g'` with 6), so
 /// normalised fractions stay readable; without exponent.
-fn significant(v: f64) -> String {
+pub(crate) fn significant(v: f64) -> String {
     if v == 0.0 || !v.is_finite() {
         return number(v, 0);
     }
