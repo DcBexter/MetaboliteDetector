@@ -14,8 +14,11 @@ impl App {
         });
     }
 
-    fn file_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Open chromatograms…").clicked()
+    pub fn open_chromatograms_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Open chromatograms…")
+            .on_hover_text("Load one or more GC-MS runs; each is analysed in the background")
+            .clicked()
             && let Some(paths) = rfd::FileDialog::new()
                 .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
                 .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
@@ -26,8 +29,28 @@ impl App {
                 self.open(ui.ctx(), path);
             }
         }
+    }
+
+    fn file_menu(&mut self, ui: &mut egui::Ui) {
+        self.open_chromatograms_button(ui);
+        self.open_library_button(ui);
+        if ui
+            .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
+            .on_hover_text("Close every open run")
+            .on_disabled_hover_text("No runs are open")
+            .clicked()
+        {
+            (self.runs, self.active) = (Vec::new(), 0);
+        }
+        // Export needs a run; without one the section is empty and gets no second separator.
+        if !self.runs.is_empty() {
+            ui.separator();
+        }
         if let Some(r) = self.runs.get(self.active)
-            && ui.button("Export as NetCDF…").clicked()
+            && ui
+                .button("Export as NetCDF…")
+                .on_hover_text("Save the active run as an ANDI-MS NetCDF file")
+                .clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("NetCDF (ANDI-MS)", &["cdf"])
                 .set_file_name(format!("{}.cdf", r.name))
@@ -39,9 +62,13 @@ impl App {
                 .map(|e| format!("{}: {e}", path.display()));
         }
         self.export_menu(ui);
-        self.library_menu(ui);
-        if ui.button("Close all").clicked() {
-            (self.runs, self.active) = (Vec::new(), 0);
+        ui.separator();
+        if ui
+            .button("Library editor…")
+            .on_hover_text("Create or change a library: compounds, RI, quantification ions")
+            .clicked()
+        {
+            self.editor.open = true;
         }
     }
 

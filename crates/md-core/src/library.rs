@@ -601,6 +601,114 @@ pub enum MslType {
     Fwhm,
 }
 
+/// `Compound::getNormalizedIntensities`: the base peak becomes 1000, the rest is rounded, and a peak
+/// never drops to 0.
+fn normalized_intensities(values: &[i32]) -> Vec<i32> {
+    let base = f64::from(values.iter().copied().max().unwrap_or(0));
+    // shortcut: the old program's result for a base peak of 0 or less is not known, keep the values.
+    if base <= 0.0 {
+        return values.to_vec();
+    }
+    values
+        .iter()
+        .map(|&v| match (f64::from(v) / base * 1000.0).round() as i32 {
+            0 => 1,
+            n => n,
+        })
+        .collect()
+}
+
+/// `Spectrum::getBinnedSpectrum` of the old program with bin width 1: the peaks of one whole mass
+/// become one peak with the largest intensity. A bin starts at `trunc((mass + 0.5) / 1)`, so x.5 rounds
+/// up, and the masses must be sorted.
+fn bin_to_whole_masses(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>) {
+    let bin = |m: f32| ((f64::from(m) + 0.5) as i32) as f32;
+    let (mut out_m, mut out_v) = (Vec::new(), Vec::new());
+    let (Some(&first), Some(&first_v)) = (masses.first(), values.first()) else {
+        return (out_m, out_v);
+    };
+    let (mut bin_mass, mut best) = (bin(first), first_v);
+    for (i, (&m, &v)) in masses.iter().zip(values).enumerate() {
+        if f64::from(m) >= f64::from(bin_mass) + 0.5 {
+            out_m.push(bin_mass);
+            out_v.push(best);
+            (bin_mass, best) = (bin(m), v);
+        } else if v > best {
+            best = v;
+        }
+        if i == masses.len() - 1 {
+            out_m.push(bin_mass);
+            out_v.push(best);
+        }
+    }
+    (out_m, out_v)
+}
+
+/// `Compound::getCentroidCompound` of the old program for a compound without FWHM list. Points whose
+/// neighbours are at most 0.01 apart form one profile peak (rising to the apex, then falling to the
+/// valley). Its mass is the intensity-weighted mean of the points at or above half the group maximum,
+/// its intensity their sum and its FWHM their count; a lone point stays as it is with FWHM 1.
+/// Returns masses, intensities and FWHMs.
+fn centroid(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
+    let n = masses.len().min(values.len());
+    let (mut out_m, mut out_v, mut out_w) = (Vec::new(), Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < n {
+        let (j, max) = group_end(&masses[..n], &values[..n], i);
+        let end = if j >= n { j - 1 } else { j };
+        let peak = if i == end {
+            Some((masses[i], values[i], 1.0))
+        } else {
+            weighted_peak(&masses[i..=end], &values[i..=end], max)
+        };
+        if let Some((m, v, w)) = peak {
+            out_m.push(m);
+            out_v.push(v);
+            out_w.push(w);
+        }
+        i = j + 1;
+    }
+    (out_m, out_v, out_w)
+}
+
+/// Where the profile peak starting at `start` ends (`n` when it runs to the end) and its largest value.
+fn group_end(masses: &[f32], values: &[i32], start: usize) -> (usize, f64) {
+    let n = masses.len();
+    // The old code reads past the end as "the same as the last point".
+    let at = |k: usize| values[k.min(n - 1)];
+    let mass_at = |k: usize| masses[k.min(n - 1)];
+    let (mut j, mut max, mut rising) = (start, f64::MIN, true);
+    while j < n {
+        let (v0, v1, v2) = (at(j), at(j + 1), at(j + 2));
+        max = max.max(f64::from(v0));
+        if f64::from(mass_at(j + 1) - mass_at(j)) > 0.01 {
+            break;
+        }
+        // Climb to the apex (two falling steps in a row end the climb), then fall to the valley
+        // (a clear rise ends the peak).
+        if rising && v1 < v0 && v2 < v1 {
+            rising = false;
+        } else if !rising && v1 > v0 && v2 > v1 {
+            break;
+        } else {
+            j += 1;
+        }
+    }
+    (j, max)
+}
+
+/// Mass, intensity and FWHM of several points; the old code drops a peak without weight.
+fn weighted_peak(ms: &[f32], vs: &[i32], max: f64) -> Option<(f32, i32, f64)> {
+    let half = max / 2.0;
+    let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (&m, &v) in ms.iter().zip(vs).filter(|&(_, &v)| f64::from(v) >= half) {
+        weighted += f64::from(m * v as f32);
+        sum += f64::from(v);
+        width += 1.0;
+    }
+    (sum != 0.0 && weighted != 0.0).then(|| ((weighted / sum) as f32, sum as i32, width))
+}
+
 /// Writes compounds as the old program does for `kind`, byte for byte. Unlike [`write_msl`] this is for
 /// other programs (AMDIS): it rounds RT, RI and quantification ions to four decimals, so reading it
 /// back is not exact, and a `;` inside a feature value starts a new `KEY:` line.
@@ -626,25 +734,49 @@ pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
             let _ = write!(s, "{q:.4}\t");
         }
         if kind != MslType::Fwhm {
-            let _ = write!(s, "\nRESOLUTION:{:.4}", sp.bin_width);
+            // Binning to whole masses sets the bin width of the exported compound to 1.
+            let width = if kind == MslType::Nominal {
+                1.0
+            } else {
+                sp.bin_width
+            };
+            let _ = write!(s, "\nRESOLUTION:{width:.4}");
         }
-        let _ = write!(s, "\nNUM PEAKS:{}", sp.masses.len());
-        for (i, (m, v)) in sp.masses.iter().zip(&sp.values).enumerate() {
+        // The old program keeps the peaks in a map, so they always come out sorted by mass.
+        let mut order: Vec<usize> = (0..sp.masses.len().min(sp.values.len())).collect();
+        order.sort_by(|&x, &y| sp.masses[x].total_cmp(&sp.masses[y]));
+        let sorted_m: Vec<f32> = order.iter().map(|&i| sp.masses[i]).collect();
+        let sorted_v: Vec<i32> = order.iter().map(|&i| sp.values[i]).collect();
+        let (masses, values, fwhm) = match kind {
+            MslType::Profile => (sorted_m, sorted_v, Vec::new()),
+            // The old program centroids first unless the compound already has a FWHM list.
+            _ => match &c.fwhm {
+                Some(f) => {
+                    let f = order
+                        .iter()
+                        .map(|&i| f.get(i).copied().unwrap_or(1.0))
+                        .collect();
+                    (sorted_m, sorted_v, f)
+                }
+                None => centroid(&sorted_m, &sorted_v),
+            },
+        };
+        let (masses, values) = if kind == MslType::Nominal {
+            bin_to_whole_masses(&masses, &values)
+        } else {
+            (masses, values)
+        };
+        let values = normalized_intensities(&values);
+        let _ = write!(s, "\nNUM PEAKS:{}", masses.len());
+        for (i, (m, v)) in masses.iter().zip(&values).enumerate() {
             if i % 5 == 0 {
                 s.push('\n');
             }
             let _ = match kind {
                 MslType::Nominal => write!(s, "({m:>4.0} {v:>4}) "),
                 MslType::Profile => write!(s, "({m:>10.6} {v:>4}) "),
-                // shortcut: no FWHM list means 1.0 like the old program on the sample library; upgrade
-                // when a library with another bin width and no FWHM turns up.
                 MslType::Fwhm => {
-                    let w = c
-                        .fwhm
-                        .as_ref()
-                        .and_then(|f| f.get(i))
-                        .copied()
-                        .unwrap_or(1.0);
+                    let w = fwhm.get(i).copied().unwrap_or(1.0);
                     write!(s, "({m:>10.6} {w:>5.2}{v:>4}) ")
                 }
             };
@@ -1303,20 +1435,79 @@ mod tests {
         let out = |c: &LibraryCompound, k| write_msl_as(std::slice::from_ref(c), k);
         assert_eq!(
             out(&c, MslType::Nominal),
-            format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73  999) ( 148    1) {end}")
+            format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73 1000) ( 148    1) {end}")
         );
         assert_eq!(
             out(&c, MslType::Profile),
             format!(
-                "{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n( 73.000000  999) (147.500000    1) {end}"
+                "{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n( 73.000000 1000) (147.500000    1) {end}"
             )
         );
         c.fwhm = Some(vec![0.5]);
         assert_eq!(
             out(&c, MslType::Fwhm),
-            format!("{head}\nNUM PEAKS:2\n( 73.000000  0.50 999) (147.500000  1.00   1) {end}")
+            format!("{head}\nNUM PEAKS:2\n( 73.000000  0.501000) (147.500000  1.00   1) {end}")
         );
         assert_eq!(write_msl_as(&[], MslType::Nominal), "\n\n");
+    }
+
+    /// The old program keeps peaks sorted by mass, whatever order the file has.
+    #[test]
+    fn old_msl_export_sorts_the_peaks_by_mass() {
+        let c = parse_msl(
+            "NAME: u
+NUM PEAKS: 3
+(100 10) (50 1000) (73 20)
+",
+        )
+        .unwrap();
+        for (kind, peaks) in [
+            (MslType::Nominal, "(  50 1000) (  73   20) ( 100   10)"),
+            (
+                MslType::Profile,
+                "( 50.000000 1000) ( 73.000000   20) (100.000000   10)",
+            ),
+        ] {
+            assert!(write_msl_as(&c, kind).contains(peaks), "{kind:?}");
+        }
+    }
+
+    /// The expected peaks are what the old program wrote for the same spectra
+    /// (docs/reverse-engineering/tools/golden/make-msl-export.sh with a `.msl` input).
+    #[test]
+    fn old_msl_export_bins_and_centroids_like_the_old_program() {
+        let text = "NAME: f\nNUM PEAKS: 9\n(41.1 80) (73.2 500) (73.4 300) (74 20) (99.9 10)\n\
+                    (100.004 200) (100.008 100) (100.5 1000) (147.5 50)\n\n\
+                    NAME: c\nNUM PEAKS: 4\n(56.995 111) (57 1000) (57.004 333) (58 11)\n";
+        let lib = parse_msl(text).unwrap();
+        let peaks = |c: &LibraryCompound, k| {
+            let out = write_msl_as(std::slice::from_ref(c), k);
+            out.split("NUM PEAKS:")
+                .nth(1)
+                .unwrap()
+                .split_once('\n')
+                .unwrap()
+                .1
+                .replace('\n', "|")
+        };
+        assert_eq!(
+            peaks(&lib[0], MslType::Nominal),
+            "(  41   80) (  73  500) (  74   20) ( 100  300) ( 101 1000) |( 148   50) ||||"
+        );
+        assert_eq!(
+            peaks(&lib[0], MslType::Fwhm),
+            "( 41.099998  1.00  80) ( 73.199997  1.00 500) ( 73.400002  1.00 300) ( 74.000000  1.00  20) ( 99.900002  1.00  10) \
+             |(100.005333  2.00 300) (100.500000  1.001000) (147.500000  1.00  50) ||||"
+        );
+        assert!(peaks(&lib[0], MslType::Profile).contains("(100.003998  200) (100.008003  100)"));
+        assert_eq!(
+            peaks(&lib[1], MslType::Nominal),
+            "(  57 1000) (  58   11) ||||"
+        );
+        assert_eq!(
+            peaks(&lib[1], MslType::Fwhm),
+            "( 57.000000  1.001000) ( 58.000000  1.00  11) ||||"
+        );
     }
 
     #[test]
@@ -1380,6 +1571,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "a test of many cases: each assert counts, and Sonar skips tests"
+    )]
     fn mdlib_rejects_broken_files() {
         let h = "MetaboliteDetector library 1\n";
         let line = |body: &str| match parse_mdlib(&format!("{h}{body}")) {
