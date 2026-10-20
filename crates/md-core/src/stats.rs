@@ -547,6 +547,7 @@ mod tests {
                     rts_s: vec![None; v.len()],
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 

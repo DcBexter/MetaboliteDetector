@@ -582,7 +582,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         .set_file_name("mids.csv")
         .save_file()?;
     let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
-    let names = t.runs.clone();
+    let sources = t.sources.clone();
     let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
     Some(spawn(ui.ctx(), move || {
         let n = lib.compounds.len();
@@ -597,7 +597,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
                 ))
             })
             .collect();
-        let e = frag_export(&shown_runs(&runs, &names), &compounds);
+        let e = frag_export(&shown_runs(&runs, &sources), &compounds);
         let mut note = match std::fs::write(&p, &e.csv) {
             Ok(()) => format!("Saved {}", p.display()),
             Err(err) => format!("Export failed: {err}"),
@@ -615,15 +615,10 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
 }
 
 /// The scanned runs of the shown table's columns, in its order: removed runs stay out of exports.
-/// shortcut: files are found by name, so equal names in different folders are not told apart.
-fn shown_runs(runs: &[RunResult], names: &[String]) -> Vec<RunResult> {
-    let by_name: std::collections::HashMap<_, _> = runs
+fn shown_runs(runs: &[RunResult], sources: &[usize]) -> Vec<RunResult> {
+    sources
         .iter()
-        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), r)))
-        .collect();
-    names
-        .iter()
-        .filter_map(|n| by_name.get(n).copied().cloned())
+        .filter_map(|i| runs.get(*i).cloned())
         .collect()
 }
 
@@ -991,20 +986,14 @@ fn mode(n: &Norm, t: &Table, times: &[i64]) -> Normalization {
 }
 
 /// The old program orders runs by acquisition date; the file date stands in for it.
-/// shortcut: files are found by name, so equal names in different folders are not told apart.
 fn run_times(t: &Table, runs: &[RunResult]) -> (Vec<i64>, usize) {
-    let by_name: std::collections::HashMap<_, _> = runs
-        .iter()
-        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), &r.path)))
-        .collect();
     let mut missing = 0;
     let times = t
-        .runs
+        .sources
         .iter()
-        .map(|name| {
-            by_name
-                .get(name)
-                .and_then(|p| std::fs::metadata(p).ok()?.modified().ok())
+        .map(|i| {
+            runs.get(*i)
+                .and_then(|r| std::fs::metadata(&r.path).ok()?.modified().ok())
                 .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or_else(
                     || {
@@ -1094,6 +1083,7 @@ mod tests {
             runs: vec!["a".into(), "b".into(), "c".into()],
             groups: vec![String::new(); 3],
             rows: vec![row(0, [1.0, 2.0, 3.0]), row(1, [4.0, 5.0, 6.0])],
+            ..Default::default()
         };
         let mut n = Norm::default();
         n.edits.apply(Act::DropRun(0), 3);
@@ -1115,12 +1105,38 @@ mod tests {
             ..Default::default()
         };
         let runs = [run("a"), run("b"), run("c")];
-        let shown = shown_runs(&runs, &["c.cdf".into(), "a.cdf".into()]);
+        let shown = shown_runs(&runs, &[2, 0]);
         let names: Vec<_> = shown
             .iter()
             .map(|r| r.path.file_name().unwrap().to_owned())
             .collect();
         assert_eq!(names, ["c.cdf", "a.cdf"]);
+    }
+
+    #[test]
+    fn runs_with_the_same_name_in_two_folders_are_told_apart() {
+        let root = std::env::temp_dir().join(format!("md-same-name-{}", std::process::id()));
+        let at = |dir: &str, secs: u64| {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            let path = root.join(dir).join("a.cdf");
+            let file = std::fs::File::create(&path).unwrap();
+            file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(secs))
+                .unwrap();
+            RunResult {
+                path,
+                ..Default::default()
+            }
+        };
+        let runs = [at("d1", 100), at("d2", 200)];
+        let t = md_core::batch::table(&runs, &[], &[], &Default::default()).unwrap();
+        assert_eq!(run_times(&t, &runs), (vec![100, 200], 0));
+        let t = t.select_runs(&[1, 0]);
+        let shown: Vec<_> = shown_runs(&runs, &t.sources)
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(shown, [runs[1].path.clone(), runs[0].path.clone()]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
