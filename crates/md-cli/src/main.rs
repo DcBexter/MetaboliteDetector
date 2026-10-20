@@ -218,6 +218,23 @@ fn run(a: Args) -> Result<bool, String> {
         );
     }
     let rescan = a.rescan;
+    // How the table was made, for the settings file next to the output.
+    let named = |p: &Option<PathBuf>| {
+        p.as_ref()
+            .map_or("none".into(), |p| p.display().to_string())
+    };
+    let how = vec![
+        ("LIBRARY", a.library.display().to_string()),
+        ("SETTINGS_FILE", named(&a.settings)),
+        ("CALIBRATION", named(&a.calibration)),
+        (
+            "SHIFT_REFERENCE",
+            a.shift_reference.clone().unwrap_or_else(|| "none".into()),
+        ),
+        ("UNTARGETED", a.untargeted.to_string()),
+        ("RESCAN", rescan.to_string()),
+        ("RUNS_GIVEN", a.runs.len().to_string()),
+    ];
 
     // Open the output first: a wrong path must not cost a whole scan.
     let mut out: Box<dyn Write> = match &a.output {
@@ -249,7 +266,7 @@ fn run(a: Args) -> Result<bool, String> {
         table.write_groups_file(p).map_err(io)?;
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
-        ts.write_csv(&[], f).map_err(io)?;
+        ts.write_csv(&how, f).map_err(io)?;
         if !a.ion_integrals {
             // An older ions file would not match this results file.
             std::fs::remove_file(ions_path(p)).ok();
@@ -392,6 +409,8 @@ mod tests {
         assert!(run(args(&line).unwrap().unwrap()).unwrap());
         let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
         assert!(settings.contains("\nQUANT_ION_NUMBER,2\n"), "{settings}");
+        assert!(settings.contains("\nUNTARGETED,false\n"), "{settings}");
+        assert!(settings.contains("\nCALIBRATION,none\n"), "{settings}");
         assert!(!dir.join("out.ions.csv").exists());
 
         // The ion integrals are written on request: a line per substance and quant ion.
