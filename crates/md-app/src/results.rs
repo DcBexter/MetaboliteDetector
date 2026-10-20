@@ -235,12 +235,8 @@ impl Results {
             .button("Save components…")
             .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
             .clicked()
-            && let Some(p) = dialog(run).save_file()
         {
-            self.note = match save_components(run, &p, cal) {
-                Ok(n) => format!("Saved {n} components to {}", p.display()),
-                Err(e) => format!("Save failed: {e}"),
-            };
+            self.save(run, cal);
         }
         let busy = run.analysis.busy();
         if ui
@@ -258,6 +254,25 @@ impl Results {
             return result.is_ok();
         }
         false
+    }
+
+    /// Asks for a `.cmp` file and writes the components of `run` there (button and Ctrl+S).
+    pub fn save(&mut self, run: &Run, cal: Option<&RiCalibration>) {
+        if let Some(p) = dialog(run).save_file() {
+            self.note = match save_components(run, &p, cal) {
+                Ok(n) => format!("Saved {n} components to {}", p.display()),
+                Err(e) => format!("Save failed: {e}"),
+            };
+        }
+    }
+
+    /// Ctrl+E: the whole list of `run` as CSV, unfiltered, whether or not the list is on screen.
+    pub fn export_csv(&mut self, run: &Run, cal: Option<&RiCalibration>) {
+        let rows: Vec<ResultRow> = build_rows(run, cal.filter(|_| run.ident.is_none()))
+            .into_iter()
+            .map(|r| r.res)
+            .collect();
+        self.note = export(&run.name, &rows);
     }
 
     /// Library names that contain the search text; a click lists the components that have it as a hit.
@@ -304,7 +319,7 @@ impl Results {
 
 /// Position in a list of `len` after one step of ↑ (-1) or ↓ (+1) from position `at`; without a
 /// selection ↓ starts at the top and ↑ at the bottom.
-fn stepped(len: usize, at: Option<usize>, step: i32) -> Option<usize> {
+pub(crate) fn stepped(len: usize, at: Option<usize>, step: i32) -> Option<usize> {
     let last = len.checked_sub(1)?;
     Some(match at {
         None if step > 0 => 0,
