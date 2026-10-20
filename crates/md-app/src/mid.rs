@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::layout::ToolWindow;
 use eframe::egui;
-use md_core::batch::{QuantSettings, RescanSettings, ShiftReference, complete_scan, scan_runs};
+use md_core::batch::{QuantSettings, ShiftReference, complete_scan, scan_runs};
 use md_core::isotope::IsotopeTable;
 use md_core::library::LibraryCompound;
 use md_core::mid::{Method, Mids, determine, mid_library};
@@ -162,7 +162,7 @@ impl MidWindow {
             false => vec!["labelled".into()],
         };
         let (nl, nu) = (self.labelled.len(), unlabelled.len());
-        let rescan = self.rescan.then(RescanSettings::default);
+        let rescan = self.rescan;
         let (done, cancel) = (
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
@@ -197,7 +197,7 @@ impl MidWindow {
                 &mids_lib,
                 &s,
                 &QuantSettings::default(),
-                rescan.as_ref(),
+                rescan,
                 4,
                 &c,
             )
