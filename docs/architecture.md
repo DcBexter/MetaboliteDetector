@@ -19,7 +19,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 
 ```
 Cargo.toml              workspace: members crates/*, shared dependencies and lints, release profile
-rust-toolchain.toml     stable toolchain with clippy and rustfmt
+rust-toolchain.toml     pinned Rust version with clippy and rustfmt; Renovate raises it
 crates/md-core/         library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
@@ -56,11 +56,11 @@ TypeScript, Python and C#), so it shows no architecture for this project.
 
 ### Code analysis
 
-`.github/workflows/sonar.yml` runs SonarQube Cloud on `main` and on pull requests. It measures coverage with
-`cargo llvm-cov` (LCOV) and hands Sonar a Clippy JSON report; Sonar does not run Clippy itself. `sonar-project.properties` marks each crate's
+The Ubuntu job of `.github/workflows/ci.yml` runs SonarQube Cloud on `main` and on pull requests, reusing its own build: it measures coverage with
+`cargo llvm-cov` (LCOV) and hands Sonar its Clippy JSON report; Sonar does not run Clippy itself. `sonar-project.properties` marks each crate's
 `src/` as code and `tests/`, `examples/` and `benches/` as test code. Coverage counts `md-core` only: `md-app` just draws, so logic that
 needs tests belongs in `md-core`. Automatic Analysis cannot analyze Rust,
-so it must be off; the job is skipped until the repository secret `SONAR_TOKEN` exists.
+so it must be off; the scan step is skipped until the repository secret `SONAR_TOKEN` exists.
 
 ## Performance rules
 
@@ -383,10 +383,11 @@ cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
 
-`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy ... -D warnings` and
-`cargo test --workspace` on Ubuntu and Windows for every non-draft PR and every push to `main` that
-touches `crates/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the workflow. It does not fetch the example data, so
-those tests skip themselves; run them locally. Only `main` saves the cargo cache; PRs restore it.
+`.github/workflows/ci.yml` runs Clippy (warnings fail) and the tests on Ubuntu and Windows for every non-draft PR and every
+push to `main`, with no paths filter, because the required checks must report on every PR. Ubuntu also runs `cargo fmt --check`,
+runs the tests through `cargo llvm-cov` and the Sonar scan, so Linux builds once for both. The summary job `CI` fails unless both
+OS jobs succeeded; it is the required CI result for `main`. It does not fetch the example data, so those tests skip themselves;
+run them locally. Only `main` saves the cargo cache; PRs restore it.
 
 ## Compatibility goals
 
