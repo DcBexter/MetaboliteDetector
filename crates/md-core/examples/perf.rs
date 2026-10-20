@@ -199,6 +199,7 @@ fn main() {
                         })
                         .collect(),
                     rescanned: false,
+                    rescued: Vec::new(),
                 })
                 .collect(),
             unknown: Vec::new(),

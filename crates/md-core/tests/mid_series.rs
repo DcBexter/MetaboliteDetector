@@ -161,6 +161,7 @@ fn check(cases_text: &str, old: &str, lib: Option<&[LibraryCompound]>) -> usize 
                         })
                         .collect(),
                     rescanned: false,
+                    rescued: Vec::new(),
                 }],
                 unknown: Vec::new(),
                 calibration: None,
