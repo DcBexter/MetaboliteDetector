@@ -43,7 +43,7 @@ rounded:
 spacing:
   item-x: "8px"
   item-y: "3px"
-  window-margin: "6px"
+  window-margin: "10px"
   button-x: "8px"
   button-y: "2px"
   group-gap: "8px"
@@ -139,9 +139,11 @@ planned, so no sentence is assembled from fragments.
   and/or SIC plot(s), normalisation toggles, spectrum plot.
 - Chromatogram plots share the x axis (linked) and a fixed 90 px y-axis width so axes line up.
 - Spacing is egui's: 8 px between items in a row, 3 px between rows, 8 px (`add_space(8.0)`) between
-  groups inside a window, 6 px window margin.
+  groups inside a window. Window margin 10 px, the corner resize grip, so no control sits under it;
+  scroll bars are solid and take their own room (`style::apply`).
 - Forms are two-column `egui::Grid`s: label left, control right. Tables are striped grids.
-- Default window size 1200 × 800; nothing may overlap down to 800 × 600 (overlap test, #89).
+- Default window size 1200 × 800; nothing may overlap or be cut off at the side down to
+  800 × 600 and at 520 px width (overlap test, #89). Rows of controls use `horizontal_wrapped`.
 
 ## Elevation & Depth
 

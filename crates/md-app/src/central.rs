@@ -171,34 +171,37 @@ impl App {
     }
 
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.trace, Trace::Tic, "TIC")
                 .on_hover_text("Total ion chromatogram: the sum of all masses per scan");
             ui.selectable_value(&mut self.trace, Trace::Sic, "SIC")
                 .on_hover_text("Selected ion chromatogram: only the m/z below");
             ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC")
                 .on_hover_text("Both, one above the other with a shared time axis");
-            ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                let mz = ui.label("m/z");
-                ui.add(
-                    egui::DragValue::new(&mut self.mz)
-                        .range(1.0..=2000.0)
-                        .max_decimals(2),
-                )
-                .on_hover_text("Mass of the selected ion chromatogram")
-                .on_disabled_hover_text("Switch to SIC or TIC + SIC to set the ion")
-                .labelled_by(mz.id);
-                let tol = ui.label("±");
-                ui.add(
-                    egui::DragValue::new(&mut self.tolerance)
-                        .range(0.0..=10.0)
-                        .speed(0.05)
-                        .max_decimals(2),
-                )
-                .on_hover_text("Mass window around m/z that is summed")
-                .on_disabled_hover_text("Switch to SIC or TIC + SIC to set the ion")
-                .labelled_by(tol.id);
-            });
+            // Each control on its own, not in a nested scope, so the row can wrap between them.
+            let sic = self.trace != Trace::Tic;
+            let off = "Switch to SIC or TIC + SIC to set the ion";
+            let mz = ui.add_enabled(sic, egui::Label::new("m/z"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.mz)
+                    .range(1.0..=2000.0)
+                    .max_decimals(2),
+            )
+            .on_hover_text("Mass of the selected ion chromatogram")
+            .on_disabled_hover_text(off)
+            .labelled_by(mz.id);
+            let tol = ui.add_enabled(sic, egui::Label::new("±"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.tolerance)
+                    .range(0.0..=10.0)
+                    .speed(0.05)
+                    .max_decimals(2),
+            )
+            .on_hover_text("Mass window around m/z that is summed")
+            .on_disabled_hover_text(off)
+            .labelled_by(tol.id);
         });
     }
 
