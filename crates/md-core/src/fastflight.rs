@@ -77,6 +77,37 @@ pub fn find_calibration(path: &Path) -> Result<PathBuf, FastFlightError> {
 /// seconds, m/z comes from `calibration`, and intensities are what `FastFlightImporter::importData`
 /// stores: the smallest intensity of a scan subtracted, the first point dropped.
 pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, FastFlightError> {
+    let (mut times, mut starts, mut counts) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut mz, mut intensity) = (Vec::new(), Vec::new());
+    for_each_scan(path, |time_ms, bins, values| {
+        times.push(time_ms / 1000.0);
+        starts.push(mz.len() as f64);
+        counts.push(bins.len() as f64);
+        mz.extend(bins.iter().map(|b| calibration.mz(*b)));
+        intensity.extend(values.iter().map(|v| *v as f32));
+    })?;
+    andi::build(times, &starts, &counts, mz, intensity)
+        .map_err(|e| FastFlightError::Corrupt(e.to_string()))
+}
+
+/// The run summed over all scans, per TOF bin: (bin, total intensity) in bin order. This is what
+/// the calibration window shows, since the bins are what the calibration maps to m/z.
+pub fn bin_spectrum(path: &Path) -> Result<Vec<(f32, f64)>, FastFlightError> {
+    let mut sums = std::collections::BTreeMap::<u32, f64>::new();
+    for_each_scan(path, |_, bins, values| {
+        for (b, v) in bins.iter().zip(&values) {
+            *sums.entry(*b as u32).or_default() += f64::from(*v);
+        }
+    })?;
+    Ok(sums.into_iter().map(|(b, v)| (b as f32, v)).collect())
+}
+
+/// Walks the scans of a run in time order: `visit(time in ms, TOF bins, intensities)` for each scan
+/// with signal, with the lowest intensity subtracted and the first point dropped.
+fn for_each_scan(
+    path: &Path,
+    mut visit: impl FnMut(f64, Vec<f32>, Vec<i32>),
+) -> Result<(), FastFlightError> {
     let dir = if path.is_dir() {
         path
     } else {
@@ -91,8 +122,7 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
     // Every point takes a 3-byte word, so more points than that mean index entries share data.
     let max_points = fft_file.metadata().map_or(0, |m| m.len() as usize / 3);
     let mut fft = BufReader::new(fft_file);
-    let (mut times, mut starts, mut counts) = (Vec::new(), Vec::new(), Vec::new());
-    let (mut mz, mut intensity) = (Vec::new(), Vec::new());
+    let mut points = 0;
     for scan in index {
         fft.seek(SeekFrom::Start(scan.offset))
             .map_err(|e| FastFlightError::Io(dir.join(FFT), e))?;
@@ -116,19 +146,15 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
             bins.remove(0);
             values.remove(0);
         }
-        if mz.len() + bins.len() > max_points {
+        points += bins.len();
+        if points > max_points {
             return Err(FastFlightError::Corrupt(
                 "the index points several scans at the same data".into(),
             ));
         }
-        times.push(scan.time_ms / 1000.0);
-        starts.push(mz.len() as f64);
-        counts.push(bins.len() as f64);
-        mz.extend(bins.iter().map(|b| calibration.mz(*b)));
-        intensity.extend(values.iter().map(|v| *v as f32));
+        visit(scan.time_ms, bins, values);
     }
-    andi::build(times, &starts, &counts, mz, intensity)
-        .map_err(|e| FastFlightError::Corrupt(e.to_string()))
+    Ok(())
 }
 
 struct Scan {

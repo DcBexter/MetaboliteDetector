@@ -98,10 +98,10 @@ impl App {
         if self.loading.is_empty()
             && let Some(t) = self.load_started.take()
         {
-            let ms = t.elapsed().as_millis();
+            let took = crate::view::took(t.elapsed());
             self.load_note = match self.runs.len() {
-                1 => format!("1 run open, loaded in {ms} ms"),
-                n => format!("{n} runs open, last batch loaded in {ms} ms"),
+                1 => format!("1 run open, loaded in {took}"),
+                n => format!("{n} runs open, last batch loaded in {took}"),
             };
         }
     }
