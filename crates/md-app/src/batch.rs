@@ -643,6 +643,7 @@ fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
 }
 
 fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&str]) {
+    // Two rows: the window must not need more than the room beside the run list.
     ui.horizontal(|ui| {
         for (mode, title) in [
             (Mode::Values, "Values"),
@@ -654,6 +655,8 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
                 r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.");
             }
         }
+    });
+    ui.horizontal(|ui| {
         ui.add_enabled(
             v.mode == Mode::Values,
             egui::Checkbox::new(&mut v.totals, "Total sample intensities"),
