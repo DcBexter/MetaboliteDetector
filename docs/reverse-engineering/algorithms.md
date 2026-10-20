@@ -169,23 +169,42 @@ createPeak(ion, begin, end, max, values, D, extend, stat):
 
 ### 3.3 MatchedPeakDetector<int,float>::detectPeaks (MCP 0x6ee9ce; syms 0x5ee9ce)
 
+Members (ctor 0x5ee926, Observed): `peak_width` (size_t) at this+0x10, `threshold` (int) at this+0x18. The base ctor sets nf = 1.0, which createPeak does not read.
+
 ```
-W = peak_width (ctor arg); thr = ctor threshold (int)
-f = tools::Filter::matched2ndDerivativeGaussianFilter<int>(values, density)   # Observed call; density = 4*W is NOT confirmed
-regions: begin at i where f[i-1] < thr < f[i]; end at first j > i with f[j] <= thr
-accept region if (end - begin) > 2
-createPeak(ion, begin, end, f[begin..end])
+density = 4 * peak_width                                   # shl $2 at 0x5eea0d (Observed)
+if values.size == 0: return empty
+f = tools::Filter::matched2ndDerivativeGaussianFilter<int>(values, density)
+prev = f.at(0); i = 0
+while i < f.size:
+    begin = end = i
+    if prev < thr and f[i] > thr:                          # upward crossing, both strict
+        prev = f[i]; i += 1                                # prev is not updated in the inner loop
+        while i < f.size:
+            if prev > thr and f[i] <= thr: end = i; break  # first scan at or below thr is INCLUDED
+            i += 1
+    if begin != end and end - begin > 2:
+        peaks.push_back(createPeak(ion, begin, end, *f))   # the FILTERED vector (Observed, rbx at 0x5eec6d)
+    prev = f[i]; i += 1                                    # f[f.size] when the region stays open (out of bounds; the loop then ends)
 ```
 
-- Filter (syms 0x64a5fd int, 0x64966d double; Observed): for x in [-d, d], u = 4x/d, kernel k(x) = (1.73/sqrt(d)) * (1 - u^2) * exp(-u^2/2), a negative 2nd-derivative Gaussian with sigma = d/4. Taps outside the signal count as 0; the int variant truncates the result (cvttsd2si). Edge behaviour beyond that: Unknown.
-- Ctor (0x5ee926) takes (size_t peak_width, int threshold) without defaults. Its only caller is CalibrationSetter::threadFinished (0x4947f4), with both values from spin boxes of the RI calibration dialog (Observed; pairing Inferred).
-- The region rules above are Inferred.
-- Whether createPeak gets the raw or the filtered vector is ambiguous. The decompile passes the filtered vector (Observed), so the peak area is taken from the filtered data (Inferred interpretation).
+All of this is Observed from objdump. A region still above the threshold at the trace end gets `end == begin` and is dropped. The next region can start at `end + 1` at the earliest, and only if `f[end] < thr`.
+
+Filter (syms 0x64a5fd int, 0x64966d double; Observed): for x in [-d, d], u = 4x/d, kernel k(x) = (1.73/sqrt(d)) * (1 - u^2) * exp(-u^2/2), a negative 2nd-derivative Gaussian with sigma = d/4. Taps outside the signal count as 0; the int variant truncates the result (cvttsd2si). Both variants then overwrite the ends: `out[i] = out[d]` for i < d, then `out[i] = out[n-d-1]` for i >= n-d, or 0 everywhere if n <= d (0x64a901..0x64aa61 int, 0x64996d..0x649af7 double). So the zero taps never reach the result, and a filter without this step finds 333 extra peaks at the trace ends of 7235eg04 (matched golden comparison).
+
+GUI (Observed): the only ctor caller is `CalibrationSetter::threadFinished` (0x4947f4), the "Compound Detection" tab of the *Calibration Setter* window. Its combo box "Peak detection method" offers "Default" and "Matched Filtering"; the choice is not saved in the settings file.
+
+- "Default" (`currentText() == "Default"`, 0x494674): the five fields write the globals AN_PEAK_THRESHOLD_BEGIN (spin box +0x210), AN_PEAK_THRESHOLD_END (+0x228), AN_MIN_PEAK_HEIGHT (+0x240), AN_NUMBER_BINS (+0x258) and AN_DECONVOLUTION_WIDTH (+0x270, labelled "Peak sharpness proportionality:"). Then `new DefaultPeakDetector()`.
+- Otherwise: `MatchedPeakDetector(peak_width = (int) +0x228, threshold = (int) +0x210)`. The other three fields are NOT written, so bins, deconvolution width and minimum peak height keep their current values.
+- `on_combo_method_currentIndexChanged` (0x4938b0) relabels the first two fields. Default: "Peak threshold beg.:" = 10, "Peak threshold end:" = -10 (range -1e8..0). Matched: "Peak threshold:" = 3, "Peak width:" = 10 (range 1..1000). Values from rodata 0xa7e8b8..0xa7e908 (Observed).
+- `CompoundDetector::run` (0x4952d8) then runs the same pipeline as the main window: `GCMSAnalyzer(scan, detector)`, `detectAllPeaks(true, 10.0f, 0.05f)`, `deconvoluteChromatogram()`, `calculateRI`, `Compound::toDisk` (.cmp).
+
+Consequence (Observed): the deconvolution (Section 4) reads the peaks' own values through `Peak::getValue` / `getMaxValue`. With the matched detector these are the filtered values, so the apex histogram, the model peak, the fit and the raw integral all use the filtered traces.
 
 ### 3.4 MatchedPeakDetector<int,float>::createPeak (MCP 0x6eed8e; syms 0x5eed8e)
 
-- apex = argmax over [begin, end] (strict >) on the supplied values.
-- Peak(ion, begin, end, apex, values, nf = 0.5). Observed.
+- apex = argmax over [begin, end] (strict >, starting at begin) on the supplied (filtered) values.
+- Peak(ion, begin, end, apex, values[begin..=end], nf = 0.5). No `checkPeak`, so S/N keeps the PeakEssential default -1 (Observed in the golden dump).
 
 ### 3.5 Peak<int,float>::Peak(ion, begin, end, maxScan, values, nf) (MCP 0x6f2754; syms 0x5f2754)
 
@@ -455,7 +474,7 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 
 ### 4.11 Unknowns (deconvolution)
 
-- `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling (kernel: Section 3.3). This is needed to reproduce the threshold T = 5.0 exactly.
+- (resolved) `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling: Section 3.3.
 - Meaning of `getDataType() == 2`, and how `Compound(rt, ints, ions, res)` uses `res`.
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
 - Whether the duplicated bin peaks from 4.5 are intended. A port should reproduce them first to match golden output.
@@ -918,13 +937,13 @@ Deviations of the rewrite:
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
-2. `tools::Filter::matched2ndDerivativeGaussianFilter` edge behaviour (kernel known, Section 3.3). It sets the component boundaries in 4.5 together with the fixed threshold 5.0.
+2. (resolved) `tools::Filter::matched2ndDerivativeGaussianFilter` edge behaviour: the ends hold the nearest inner value (Section 3.3).
 3. Spectrum binning and centroiding (`getBinnedSpectrum`, `getCentroidCompound`). Library scores depend on them when bin widths differ.
 4. DefaultPeakDetector details:
    - the C=0.2 tail rule (value read from rodata, not verified against output)
    - the `i` update after a rejected peak (possible off-by-one)
    - the identity of vtbl[4]/[5]
-5. MatchedPeakDetector: the density it passes to the filter, its region rules, and raw or filtered values in createPeak.
+5. MatchedPeakDetector: resolved (Section 3.3).
 6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
