@@ -171,11 +171,14 @@ peaks of the example runs:
   `analyzeBaseline` are not computed because the detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
-- **Precise apex ties round down.** The old app fits the parabola with `gsl_multifit_linear` in absolute
-  bin coordinates; at an exact half-step tie its rounding error decides the direction. Here the vertex is
-  exact and ties round down, which the old app does in 217 of 267 ties on the example runs. On a flat top
-  (three equal values) the old fit returns an arbitrary vertex near the apex; here there is no precise apex.
-  This only moves peaks between deconvolution histogram bins (golden test).
+- **Precise apex: not a deviation.** The old app fits the parabola with `gsl_multifit_linear` in absolute
+  bin coordinates; at an exact half-bin tie and on a flat top (three equal values) the fit's rounding
+  decides the result. `quadfit` rebuilds that fit bit for bit from black-box outputs of the old binary,
+  without GSL code (`docs/reverse-engineering/gsl-clean-room.md`), so ties and flat tops land where the
+  old app puts them. With the default 10 bins per scan it matches on every scan up to 1 000 000; with
+  other bin counts about 1 in 10 000 fits differs by 1–2 ulp, which can only move a tie. Above bins ×
+  scan ≈ 9.4e7 the x² entry may round differently from the old `pow` (shortcut in `quadfit.rs`;
+  both in issue 290).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -191,15 +194,17 @@ Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
-The old quirks are kept on purpose; with them, 241 of 246 old components match exactly (golden test below): the first
+The old quirks are kept on purpose; with them, all 246 old components match exactly (golden test below): the first
 and last bin of a region are added twice, so a peak can appear twice in a component and counts twice
 towards `AN_MIN_PEAK_NUMBER`; the model peak sums raw intensities including the baseline, so all heights
 of a spectrum share one scale factor.
 
 Conscious deviations:
 
-- **No precise apex → apex scan.** Where the parabola fit was refused, the histogram uses the apex scan.
-  What the old field holds then is unknown.
+- **No precise apex → bin 0.** Not a deviation: where the parabola fit was refused (apex at the peak
+  edge, vertex a scan or more away), the old `interpolatedMaxScan` keeps its initial 0, so the histogram
+  and `reorderPeaks` put the peak into bin 0 (`Peak::interpolated_max_scan`). Seen with the matched
+  detector, whose peaks can start at their apex.
 - **Collinear fits drop the peak.** The old code uses an SVD (`gsl_multifit_linear`), which also returns a
   minimum-norm fit when model and scan are collinear; here those peaks are skipped.
 - **Filter edges are zero-padded** (old edge handling unknown, §4.11), and `roundSignificantFigures` is
@@ -504,24 +509,22 @@ Tolerances and their reasons:
 |---|---|---|
 | Peaks: ion, first, apex, last scan | exact | same algorithm and integer data |
 | Peak S/N | 1e-5 relative | the reference prints 6 significant digits |
-| Component ions and apex scan | exact for 242 of 246 | 4 known differences, see below |
+| Component ions and apex scan | exact | same fit, bit for bit (`quadfit`) |
 | Ion height | ±1 | the old code rounds a few modelled heights the other way |
 | Ion integral | 1e-5 relative | the reference prints 7 significant digits |
 
-Remaining differences, all in deconvolution: 1 old component is missing, 3 differ by one or more ions,
-and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
-deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
-A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
+All 246 components match. Until issue 250, 5 differed: at precise-apex ties the old GSL fit rounds by
+its own rounding errors. `quadfit` now rebuilds that fit from black-box outputs only, so no GSL code is
+copied (GSL is GPL, this project MIT); the method is in `docs/reverse-engineering/gsl-clean-room.md`.
 
 A second reference, `old-md-3.3-matched.tsv`, is made the same way with the old `MatchedPeakDetector(10, 3)`
 (`MD_MATCHED="10 3"` for the driver; the *Calibration Setter* values, §3.3) and compared with
 `Detector::MATCHED` under the same tolerances. Its peaks (12 590, 12 411 and 12 422 in eg04, eg20, eg32)
-match exactly, S/N included (the old default -1). Of 2 807 old components, 2 657 match; 43 are missing,
-38 new ones have no old partner, 66 differ by ions and 41 by heights. The cause is the same precise-apex
-tie: the filtered traces are integers with broad, smooth tops, so the parabola vertex lands exactly on
-a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
-deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
-all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
+match exactly, S/N included (the old default -1), and all 2 807 old components match. The filtered traces
+are integers with broad, smooth tops, so the parabola vertex lands exactly on a half bin much more often
+(61 of the 12 590 peaks of eg04) and flat tops are common; before issue 250, 150 components differed
+because of that. Matched peaks can also start at their apex: the old program then leaves the precise apex
+at 0, which puts the peak into histogram bin 0 (10 components of eg07–eg25 depended on it).
 
 A third reference, `old-md-3.3-high-resolution.tsv`, covers a synthetic high-resolution run made from 7235eg04:
 - every m/z moves up by 0.047;
