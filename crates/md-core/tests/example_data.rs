@@ -384,3 +384,59 @@ fn component_detail_of_a_real_run() {
     assert_eq!(cmp.found, cmp.library);
     assert!(cmp.difference().iter().all(|d| *d == 0.0));
 }
+
+/// Saves the components of two example runs as `.cmp` into `example-data/old-results/md-core/` (ignored
+/// by git; `make-reference.sh --reread` checks there that the old program reads them) and loads them
+/// again with the values the component panel shows.
+#[test]
+fn example_components_save_and_load_again() {
+    use md_core::cmp::{components_from_file, compounds_of_components, write_cmp};
+    use md_core::detail::component_detail;
+
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../example-data/old-results/md-core");
+    for path in runs().into_iter().take(2) {
+        let c = md_core::andi::read(&path).unwrap();
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        let masses: Vec<u32> = peaks
+            .iter()
+            .map(|p| traces.masses[p.row as usize])
+            .collect();
+        let mut comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        comps.sort_by_key(|k| k.apex_scan);
+        assert!(comps.len() > 10, "{}", name(&path));
+
+        let saved = compounds_of_components(&comps, &masses, &peaks, &c.scan_times_s, &[]);
+        std::fs::create_dir_all(&out).unwrap();
+        let file = out.join(Path::new(&*name(&path)).with_extension("cmp"));
+        write_cmp(&file, &saved).unwrap();
+        let (back, m2, p2) = components_from_file(&file, &c.scan_times_s).unwrap();
+
+        assert_eq!(back.len(), comps.len());
+        for (a, b) in comps.iter().zip(&back) {
+            assert_eq!(
+                (
+                    a.first_scan,
+                    a.apex_scan,
+                    a.last_scan,
+                    &a.model,
+                    &a.spectrum
+                ),
+                (
+                    b.first_scan,
+                    b.apex_scan,
+                    b.last_scan,
+                    &b.model,
+                    &b.spectrum
+                )
+            );
+            // The file keeps one peak per mass in ascending order; the panel values are the same.
+            let (mut before, after) = (
+                component_detail(a, &peaks, &masses),
+                component_detail(b, &p2, &m2),
+            );
+            before.peaks.sort_by_key(|r| r.mass);
+            assert_eq!(before, after, "{} at scan {}", name(&path), a.apex_scan);
+        }
+    }
+}

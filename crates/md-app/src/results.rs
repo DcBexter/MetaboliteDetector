@@ -51,11 +51,15 @@ impl Results {
             ui.label("Open a chromatogram first.");
             return;
         };
-        self.saved_buttons(ui, run);
         let Some(((lib, ..), _, _)) = &run.ident else {
+            ui.horizontal(|ui| self.saved_buttons(ui, run));
+            if !self.note.is_empty() {
+                ui.label(&self.note);
+            }
             ui.label("Open a library to identify the components of the run.");
             return;
         };
+        let lib = lib.clone();
         let stamp = (active, run.rev);
         let mut cache = self.cache.take().filter(|c| c.0 == stamp);
         if cache.is_none() {
@@ -64,12 +68,20 @@ impl Results {
         }
         let (stamp, rows) = cache.expect("filled above");
 
+        let mut loaded = false;
         ui.horizontal(|ui| {
             ui.label(format!("{} — library {}", run.name, lib.name));
             if ui.button("Export CSV…").clicked() {
                 self.note = export(&run.name, &rows);
             }
+            loaded = self.saved_buttons(ui, run);
         });
+        // The table below was built from the components that were just replaced.
+        if loaded {
+            ui.ctx().request_repaint();
+            return;
+        }
+        let lib = &lib;
         ui.horizontal(|ui| {
             ui.label("Find substance");
             ui.add(
@@ -111,35 +123,36 @@ impl Results {
         self.cache = Some((stamp, rows));
     }
 
-    /// Save the components of the run as a `.cmp` file the old program reads, or load such a file in
-    /// place of the run's components.
-    fn saved_buttons(&mut self, ui: &mut egui::Ui, run: &mut Run) {
-        ui.horizontal(|ui| {
-            if ui
-                .button("Save components…")
-                .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
-                .clicked()
-                && let Some(p) = dialog(run).save_file()
-            {
-                self.note = match save_components(run, &p) {
-                    Ok(n) => format!("Saved {n} components to {}", p.display()),
-                    Err(e) => format!("Save failed: {e}"),
-                };
-            }
-            let busy = run.analysis.busy();
-            if ui
-                .add_enabled(!busy, egui::Button::new("Load components…"))
-                .on_hover_text("Replaces the components with those of a .cmp file of this run")
-                .on_disabled_hover_text("Wait until the analysis has finished")
-                .clicked()
-                && let Some(p) = dialog(run).pick_file()
-            {
-                self.note = match load_components(run, &p) {
-                    Ok(n) => format!("Loaded {n} components from {}", p.display()),
-                    Err(e) => format!("Load failed: {e}"),
-                };
-            }
-        });
+    /// Two buttons: save the components of the run as a `.cmp` file the old program reads, or load such
+    /// a file in place of them. Returns whether components were loaded.
+    fn saved_buttons(&mut self, ui: &mut egui::Ui, run: &mut Run) -> bool {
+        if ui
+            .button("Save components…")
+            .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
+            .clicked()
+            && let Some(p) = dialog(run).save_file()
+        {
+            self.note = match save_components(run, &p) {
+                Ok(n) => format!("Saved {n} components to {}", p.display()),
+                Err(e) => format!("Save failed: {e}"),
+            };
+        }
+        let busy = run.analysis.busy();
+        if ui
+            .add_enabled(!busy, egui::Button::new("Load components…"))
+            .on_hover_text("Replaces the components with those of a .cmp file of this run")
+            .on_disabled_hover_text("Wait until the analysis has finished")
+            .clicked()
+            && let Some(p) = dialog(run).pick_file()
+        {
+            let result = load_components(run, &p);
+            self.note = match &result {
+                Ok(n) => format!("Loaded {n} components from {}", p.display()),
+                Err(e) => format!("Load failed: {e}"),
+            };
+            return result.is_ok();
+        }
+        false
     }
 
     /// Library names that contain the search text; a click lists the components that have it as a hit.
