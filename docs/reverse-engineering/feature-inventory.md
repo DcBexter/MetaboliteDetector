@@ -74,11 +74,11 @@ open issue that owns the rest. Sub-features come from the binary's menus, dialog
 | 20 | CSV results + R template instead of the embedded R console | done (#26); manual check in Excel and R #154 (needs-human-input) |
 | files | `.cmp` v4, `.calib` text and binary, `.lbr` v2–v5, `.mzcalib`, `.bin`/`.idx` | done (#13, #29, #30, #41) |
 | files | `.cmp` versions 1 to 3 (older releases, no sample) | not planned |
-| files | High-resolution runs: exact-mass traces, spectra, `reorderPeaks` | done (#34, #173); exact masses in `.cmp` and search, real FastFlight noise factor #198 (needs-human-input) |
+| files | High-resolution runs: exact-mass traces, spectra, `reorderPeaks` | done (#34, #173); exact masses in `.cmp` and search, DataType 0 (profile) runs, DataType 1 compression, real FastFlight noise factor #198 (needs-human-input) |
 
-No parity gap is open. What remains needs a human (`needs-human-input`): #21 (licensed NIST library),
-#147 (real labelled runs), #154 (CSV in Excel and R), #198 (real FastFlight caches, exact masses in
-`.cmp`), #129 (ruleset) and #130 (manual acceptance with sample data).
+No parity gap is open that can be closed without human input. What remains needs a human (`needs-human-input`): #21 (licensed NIST library),
+#147 (real labelled runs), #154 (CSV in Excel and R), #198 (real FastFlight caches; it also still has code to write:
+exact masses in `.cmp` and search, profile runs, compression), #129 (ruleset) and #130 (manual acceptance with sample data).
 
 ## Internal file types (T)
 
