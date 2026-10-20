@@ -227,7 +227,7 @@ impl TofWindow {
     }
 
     fn fit(&self) -> Result<TofCalibration, TofError> {
-        let pairs: Vec<(f32, f64)> = (self.rows.iter().filter(|r| r.used))
+        let pairs: Vec<(f32, f64)> = (self.rows.iter().filter(|r| r.used && r.mz > 0.0))
             .map(|r| (r.bin as f32, r.mz))
             .collect();
         TofCalibration::fit(&pairs, self.degree)
@@ -323,7 +323,7 @@ impl TofWindow {
                 .set_file_name("calibration.mzcalib")
                 .save_file()
         {
-            let pairs: Vec<(f32, f64)> = (self.rows.iter().filter(|r| r.used))
+            let pairs: Vec<(f32, f64)> = (self.rows.iter().filter(|r| r.used && r.mz > 0.0))
                 .map(|r| (r.bin as f32, r.mz))
                 .collect();
             match c.write(&path, &pairs) {
@@ -381,5 +381,18 @@ mod tests {
         w.rows[3].used = false;
         w.rows[2].used = false;
         assert!(matches!(w.fit(), Err(TofError::NotEnoughPairs)));
+    }
+
+    #[test]
+    fn a_row_without_a_mass_stays_out_of_the_fit() {
+        let mut w = TofWindow::demo();
+        w.degree = 2;
+        w.rows.push(Row {
+            bin: 1200.0,
+            mz: 0.0,
+            used: true,
+        });
+        let c = w.fit().unwrap();
+        assert!(c.mz(1200.0) > 0.0);
     }
 }

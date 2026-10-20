@@ -83,15 +83,18 @@ impl App {
                     .set_file_name(format!("{}{}.cdf", r.name, kind.suffix()))
                     .save_file()
             {
-                // shortcut: writes on the UI thread (~50 ms per example run); spawn if runs grow.
-                let reduced = reduce(
-                    &r.data,
-                    kind,
-                    &CentroidSettings::from(&self.settings.applied),
-                );
-                self.error = md_core::andi::write_with_tic(&path, &reduced, &r.data.tic())
-                    .err()
-                    .map(|e| format!("{}: {e}", path.display()));
+                // shortcut: writes on the UI thread (~0.2 s per 10M points); spawn if runs grow.
+                let result = if kind == ExportKind::Profile {
+                    md_core::andi::write(&path, &r.data)
+                } else {
+                    let reduced = reduce(
+                        &r.data,
+                        kind,
+                        &CentroidSettings::from(&self.settings.applied),
+                    );
+                    md_core::andi::write_with_tic(&path, &reduced, &r.data.tic())
+                };
+                self.error = result.err().map(|e| format!("{}: {e}", path.display()));
                 ui.close();
             }
         }
