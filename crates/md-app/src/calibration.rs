@@ -167,7 +167,9 @@ impl Calibration {
         if self.rows == self.applied {
             return;
         }
-        let used = (self.rows.iter().filter(|r| r.used)).map(|r| (r.rt_min * 60.0, r.ri));
+        // A time of 0 is a line just added by hand (no marker elutes then), not yet a point.
+        let used = (self.rows.iter().filter(|r| r.used && r.rt_min > 0.0))
+            .map(|r| (r.rt_min * 60.0, r.ri));
         match RiCalibration::new(used) {
             Ok(cal) => (self.cal, self.error) = (Some(Arc::new(cal)), None),
             Err(e) => self.error = Some(e.to_string()),
@@ -175,9 +177,23 @@ impl Calibration {
         self.applied = self.rows.clone();
     }
 
+    /// Adds an empty line by hand (markers without an alkane mix, e.g. FAMEs). It joins the calibration
+    /// once it is valid, see `apply_edits`.
+    fn add_point(&mut self) {
+        if self.rows.is_empty() {
+            self.source = "entered by hand".into();
+        }
+        self.rows.push(Row {
+            name: String::new(),
+            ri: 0.0,
+            rt_min: 0.0,
+            used: true,
+        });
+    }
+
     fn clear(&mut self) {
         (self.cal, self.job, self.mix_job) = (None, None, None);
-        (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
+        (self.rows, self.applied, self.rt_only, self.error) = (Vec::new(), Vec::new(), false, None);
         (self.own, self.saved) = (HashMap::new(), None);
     }
 
@@ -422,6 +438,7 @@ impl Calibration {
             ui.label(
                 "Not calibrated: components have no RI, the library search uses the spectrum only.",
             );
+            self.add_point_button(ui);
             return;
         }
         ui.label(format!(
@@ -476,8 +493,22 @@ impl Calibration {
                         }
                     });
             });
+        self.add_point_button(ui);
         if !busy {
             self.apply_edits();
+        }
+    }
+
+    fn add_point_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Add point")
+            .on_hover_text(
+                "A new line for a marker you know (e.g. FAMEs): its time in this run and its RI. \
+                 At least two points with rising times and RIs make a calibration.",
+            )
+            .clicked()
+        {
+            self.add_point();
         }
     }
 
@@ -668,6 +699,39 @@ mod tests {
         assert_eq!((c.cal.clone(), c.rows.clone()), before);
         assert_eq!(c.source, "x.calib");
         assert_eq!(c.cal.as_deref(), Some(&cal));
+    }
+
+    #[test]
+    fn points_entered_by_hand_make_a_calibration() {
+        // FAME markers of the example run 7235eg08 (RT in s, RI).
+        let fames = [
+            (252.46, 262_320.0),
+            (311.36, 323_120.0),
+            (369.61, 381_020.0),
+        ];
+        let mut c = Calibration::default();
+        for (rt, ri) in fames {
+            c.add_point();
+            // The empty line the button adds (time 0) does not disturb the calibration so far.
+            let before = c.cal.clone();
+            c.apply_edits();
+            assert_eq!(c.cal, before);
+            let r = c.rows.last_mut().unwrap();
+            (r.rt_min, r.ri) = (rt / 60.0, ri);
+            // One point is not a calibration yet; the table keeps its error and no `cal`.
+            c.apply_edits();
+            assert_eq!(c.cal.is_some(), c.rows.len() > 1);
+        }
+        assert_eq!(c.source, "entered by hand");
+        assert!(c.error.is_none());
+        let cal = c.cal.as_ref().unwrap();
+        for (rt, ri) in fames {
+            assert!((cal.ri(rt) - ri).abs() < 1e-6);
+        }
+        // Switching a point off recalibrates from the rest.
+        c.rows[2].used = false;
+        c.apply_edits();
+        assert_eq!(c.cal.as_ref().unwrap().points().len(), 2);
     }
 
     #[test]
