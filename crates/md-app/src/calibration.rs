@@ -229,21 +229,33 @@ impl Calibration {
             return;
         }
         egui::Grid::new("alkane settings").show(ui, |ui| {
-            ui.label("Marker ion m/z");
-            ui.add(egui::DragValue::new(&mut self.mz).range(1.0..=2000.0));
+            let label = ui.label("Marker ion m/z");
+            ui.add(egui::DragValue::new(&mut self.mz).range(1.0..=2000.0))
+                .labelled_by(label.id)
+                .on_hover_text("The ion whose peaks mark the alkanes, e.g. 57 for n-alkanes");
             ui.end_row();
-            ui.label("Alkanes C");
+            let label = ui.label("Alkanes C");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut self.first).range(1..=self.last));
-                ui.label("to C");
-                ui.add(egui::DragValue::new(&mut self.last).range(self.first..=100));
+                ui.add(egui::DragValue::new(&mut self.first).range(1..=self.last))
+                    .labelled_by(label.id)
+                    .on_hover_text("Carbon number of the first alkane in the mix");
+                let to = ui.label("to C");
+                ui.add(egui::DragValue::new(&mut self.last).range(self.first..=100))
+                    .labelled_by(to.id)
+                    .on_hover_text("Carbon number of the last alkane in the mix");
             });
             ui.end_row();
-            ui.label("Filter width (scans)");
-            ui.add(egui::DragValue::new(&mut self.density).range(1..=1000));
+            let label = ui.label("Filter width (scans)");
+            ui.add(egui::DragValue::new(&mut self.density).range(1..=1000))
+                .labelled_by(label.id)
+                .on_hover_text(
+                    "Width of the smoothing window in scans; wider finds fewer, broader peaks",
+                );
             ui.end_row();
-            ui.label("Threshold");
-            ui.add(egui::DragValue::new(&mut self.threshold).range(0..=i32::MAX));
+            let label = ui.label("Threshold");
+            ui.add(egui::DragValue::new(&mut self.threshold).range(0..=i32::MAX))
+                .labelled_by(label.id)
+                .on_hover_text("Marker-ion peaks below this intensity are ignored");
             ui.end_row();
         });
         ui.horizontal(|ui| {
@@ -295,10 +307,12 @@ impl Calibration {
         };
         ui.collapsing("Calibration mix from the library", |ui| {
             ui.horizontal(|ui| {
-                ui.label("Add");
-                ui.text_edit_singleline(&mut self.mix_filter).on_hover_text(
-                    "Part of a library compound name; only compounds with an RI are offered",
-                );
+                let add = ui.label("Add");
+                ui.text_edit_singleline(&mut self.mix_filter)
+                    .labelled_by(add.id)
+                    .on_hover_text(
+                        "Part of a library compound name; only compounds with an RI are offered",
+                    );
             });
             if self.mix.is_empty() && self.mix_filter.is_empty() {
                 ui.weak("Type a name to pick the substances of your calibration mix.");
@@ -392,13 +406,15 @@ impl Calibration {
                 egui::Grid::new("calibration points")
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.strong("Use");
+                        let use_ = ui.strong("Use");
                         ui.strong("Substance");
-                        ui.strong("RT (min)");
-                        ui.strong("RI");
+                        let rt = ui.strong("RT (min)");
+                        let ri = ui.strong("RI");
                         ui.end_row();
                         for r in &mut self.rows {
-                            ui.checkbox(&mut r.used, "");
+                            ui.checkbox(&mut r.used, "")
+                                .labelled_by(use_.id)
+                                .on_hover_text("Use this point for the calibration");
                             // A mix substance that was not found has no time yet: red until it gets one.
                             let name = egui::RichText::new(&r.name);
                             let found = r.used || r.rt_min > 0.0;
@@ -416,9 +432,15 @@ impl Calibration {
                                 .speed(0.001)
                                 .range(0.0..=f64::MAX)
                                 .fixed_decimals(3);
-                            let t = ui.add(t);
-                            let ri = ui.add(egui::DragValue::new(&mut r.ri).fixed_decimals(1));
-                            busy |= [t, ri].iter().any(|x| x.dragged() || x.has_focus());
+                            let t = ui
+                                .add(t)
+                                .labelled_by(rt.id)
+                                .on_hover_text("Retention time of the substance in this run, in minutes");
+                            let n = ui
+                                .add(egui::DragValue::new(&mut r.ri).fixed_decimals(1))
+                                .labelled_by(ri.id)
+                                .on_hover_text("Retention index of the substance (100 per carbon for n-alkanes)");
+                            busy |= [t, n].iter().any(|x| x.dragged() || x.has_focus());
                             ui.end_row();
                         }
                     });
@@ -481,7 +503,7 @@ impl Calibration {
         };
         let rt_only = self.rt_only;
         ui.horizontal(|ui| {
-            ui.label("Reference substance");
+            let reference = ui.label("Reference substance");
             let shown = self.reference.as_deref().unwrap_or("None");
             egui::ComboBox::from_id_salt("reference")
                 .selected_text(shown)
@@ -492,13 +514,21 @@ impl Calibration {
                         let label = format!("{} ({:.1})", c.name, anchor(rt_only, c));
                         ui.selectable_value(&mut self.reference, Some(c.name.clone()), label);
                     }
-                });
-            ui.label("Cutoff");
-            let edit = ui.add(
-                egui::DragValue::new(&mut self.cutoff_edit)
-                    .range(0.0..=1.0)
-                    .speed(0.01),
-            );
+                })
+            .response
+            .labelled_by(reference.id)
+            .on_hover_text("A substance found in every run; its position there corrects the retention-time shift of the run");
+            let label = ui.label("Cutoff");
+            let edit = ui
+                .add(
+                    egui::DragValue::new(&mut self.cutoff_edit)
+                        .range(0.0..=1.0)
+                        .speed(0.01),
+                )
+                .labelled_by(label.id)
+                .on_hover_text(
+                    "Lowest match score (0–1) at which the reference counts as found in a run",
+                );
             if !edit.dragged() {
                 self.ref_cutoff = self.cutoff_edit;
             }
