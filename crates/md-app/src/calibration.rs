@@ -249,13 +249,13 @@ impl Calibration {
             ui.add(egui::DragValue::new(&mut self.density).range(1..=1000))
                 .labelled_by(label.id)
                 .on_hover_text(
-                    "Width of the smoothing window in scans; wider finds fewer, broader peaks",
+                    "Peak width the filter is tuned to (sigma about width / 4 scans); match it to the alkane peaks",
                 );
             ui.end_row();
             let label = ui.label("Threshold");
             ui.add(egui::DragValue::new(&mut self.threshold).range(0..=i32::MAX))
                 .labelled_by(label.id)
-                .on_hover_text("Marker-ion peaks below this intensity are ignored");
+                .on_hover_text("Peaks are kept where the filtered marker-ion trace rises above this value (not the raw intensity)");
             ui.end_row();
         });
         ui.horizontal(|ui| {

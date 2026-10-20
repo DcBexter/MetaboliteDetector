@@ -149,7 +149,8 @@ impl App {
                         .max_decimals(2),
                 )
                 .labelled_by(label.id)
-                .on_hover_text("Ion whose intensity the SIC trace shows");
+                .on_hover_text("Ion whose intensity the SIC trace shows")
+                .on_disabled_hover_text("Used by the SIC trace; pick SIC or TIC + SIC");
                 let label = ui.label("±");
                 ui.add(
                     egui::DragValue::new(&mut self.tolerance)
@@ -158,7 +159,8 @@ impl App {
                         .max_decimals(2),
                 )
                 .labelled_by(label.id)
-                .on_hover_text("Window around the m/z that the SIC trace adds up");
+                .on_hover_text("Window around the m/z that the SIC trace adds up")
+                .on_disabled_hover_text("Used by the SIC trace; pick SIC or TIC + SIC");
             });
         });
     }
