@@ -354,7 +354,7 @@ mod tests {
             "Library editor",
             "Add component to library",
             "Copy retention times",
-            "Components",
+            "Component list",
             "Detected peaks",
             "Biomarker statistics",
             "Substance 0",

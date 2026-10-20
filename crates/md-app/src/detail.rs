@@ -147,7 +147,7 @@ pub fn panel(
 }
 
 /// A value or a dash.
-fn num(v: Option<f64>, decimals: usize) -> String {
+pub(crate) fn num(v: Option<f64>, decimals: usize) -> String {
     v.map_or("–".into(), |v| format!("{v:.decimals$}"))
 }
 

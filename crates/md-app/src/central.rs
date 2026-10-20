@@ -5,6 +5,7 @@ use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
 
 use crate::plot_export::Area;
 use md_core::decimate;
+use std::sync::Arc;
 
 use crate::{App, Run, Trace, color, detail, export, identify, view::View};
 
@@ -156,6 +157,13 @@ impl App {
             // The chromatogram on top, the spectrum and Detected Peaks side by side below; each
             // split can be dragged, and the top leaves the spectrum at least 160 px.
             let p = self.panels;
+            // A hidden plot has nothing on screen to save as a picture.
+            if !p.chromatogram {
+                self.export.chromatograms = Area::default();
+            }
+            if !p.spectrum {
+                self.export.spectrum = Area::default();
+            }
             let below = p.spectrum || p.detected_peaks;
             let none = egui::Frame::NONE;
             if p.chromatogram && below {
@@ -271,8 +279,11 @@ impl App {
         }
     }
 
-    /// Arrow keys move the scan cursor of the active run.
+    /// Arrow keys move the scan cursor of the active run, unless a text field takes them.
     fn step_scan(&mut self, ui: &egui::Ui) {
+        if ui.ctx().text_edit_focused() {
+            return;
+        }
         let run = &mut self.runs[self.active];
         let last = run.data.scan_count() - 1;
         ui.input(|i| {
@@ -291,9 +302,9 @@ impl App {
         let run = &self.runs[self.active];
         let cursor = run.minutes[run.scan];
         // A zoom belongs to the run it was made on.
-        let reset = self.plotted.as_ref() != Some(&run.path);
+        let reset = !(self.plotted.as_ref()).is_some_and(|p| p.ptr_eq(&Arc::downgrade(&run.data)));
         if reset {
-            self.plotted = Some(run.path.clone());
+            self.plotted = Some(Arc::downgrade(&run.data));
         }
         let plots = if self.trace == Trace::Both { 2.0 } else { 1.0 };
         let gap = ui.spacing().item_spacing.y * (plots - 1.0);

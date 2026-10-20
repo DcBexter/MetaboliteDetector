@@ -5,7 +5,12 @@ use eframe::egui;
 use egui_plot::{Line, LineStyle, Plot};
 use md_core::detail::ion_profiles;
 
+use std::sync::Arc;
+
 use crate::{App, Trace, color, detail};
+
+/// A click this close to a curve, vertically, picks its ion.
+const PICK_PX: f32 = 12.0;
 
 impl App {
     pub fn detected_peaks(&mut self, ui: &mut egui::Ui) {
@@ -24,7 +29,8 @@ impl App {
         let profiles = ion_profiles(c, &run.peak_masses, &run.data);
         let picked = |mass: u32| self.trace != Trace::Tic && self.mz == mass as f32;
         let first = f64::from(c.first_scan) + 1.0;
-        let shown = Plot::new("detected peaks")
+        // One plot memory per component, so a zoom on one never hides the next one's curves.
+        let shown = Plot::new(("detected peaks", Arc::as_ptr(&run.data), run.rev, k))
             .x_axis_label("Scan")
             .y_axis_label("Intensity")
             .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
@@ -49,15 +55,18 @@ impl App {
                 }
                 p.pointer_coordinate()
             });
-        // The curve nearest to the click at that scan.
+        // The curve nearest to the click at that scan, if it passes within `PICK_PX`.
+        let t = &shown.transform;
         if shown.response.clicked()
             && let Some(at) = shown.inner
             && let Some(ion) = (profiles.iter())
                 .filter_map(|ion| {
                     let s = (at.x - first).round();
                     let y = ion.measured.get(usize::try_from(s as i64).ok()?)?;
-                    Some((ion.mass, (y - at.y).abs()))
+                    let px = (t.position_from_point_y(*y) - t.position_from_point_y(at.y)).abs();
+                    Some((ion.mass, px))
                 })
+                .filter(|(_, px)| *px <= PICK_PX)
                 .min_by(|a, b| a.1.total_cmp(&b.1))
         {
             detail::pick_ion(&mut self.mz, &mut self.trace, f64::from(ion.0));

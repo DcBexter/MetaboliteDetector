@@ -182,6 +182,8 @@ Small, quiet corners: 4 px on static widgets, 6 px on controls, windows and menu
 
 ### Lists and tables
 - Run list rows: visibility checkbox, colour swatch, selectable name, close button; full path on hover.
+- Component list: a virtualised `TableBuilder` with sortable headers; a click or ↑/↓ selects a row,
+  and the selection scrolls into view.
 - Tables: striped `Grid`, `strong` header row, numbers with fixed decimals.
 
 ### Plots (signature component)

@@ -5,9 +5,11 @@
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
+use md_core::Chromatogram;
 use md_core::results::{ResultRow, find_substance, result_rows, write_csv};
 use md_core::ri::RiCalibration;
 use md_core::search::Identification;
+use std::sync::{Arc, Weak};
 
 use crate::Run;
 use crate::identify::Library;
@@ -98,9 +100,13 @@ struct Row {
     ions: usize,
 }
 
-/// What the cached rows were built from: active run, its `rev`, and the calibration used without
-/// a library.
-type Stamp = (usize, u64, Option<usize>);
+/// What the cached rows were built from: the run's data, its `rev`, and the calibration used without
+/// a library. The data is held weakly, so a closed run never matches a new one at the same address.
+type Stamp = (Weak<Chromatogram>, u64, Option<RiCalibration>);
+
+fn same(a: &Stamp, b: &Stamp) -> bool {
+    a.0.ptr_eq(&b.0) && a.1 == b.1 && a.2 == b.2
+}
 
 #[derive(Default)]
 pub struct Results {
@@ -115,22 +121,17 @@ pub struct Results {
 }
 
 impl Results {
-    /// The list of the active run; `cal` gives the RI while no library identified the run.
-    pub fn panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        run: Option<&mut Run>,
-        active: usize,
-        cal: Option<&RiCalibration>,
-    ) {
-        ui.strong("Components");
+    /// The list of the active run; `cal` (the run's calibration) gives the RI while no library
+    /// identified the run.
+    pub fn panel(&mut self, ui: &mut egui::Ui, run: Option<&mut Run>, cal: Option<&RiCalibration>) {
+        ui.strong("Component list");
         let Some(run) = run else {
             return;
         };
         let lib = (run.ident.as_ref()).map(|((lib, ..), ..)| lib.clone());
         let cal = cal.filter(|_| lib.is_none());
-        let stamp = (active, run.rev, cal.map(|c| std::ptr::from_ref(c) as usize));
-        let mut cache = self.cache.take().filter(|c| c.0 == stamp);
+        let stamp = (Arc::downgrade(&run.data), run.rev, cal.cloned());
+        let mut cache = self.cache.take().filter(|c| same(&c.0, &stamp));
         if cache.is_none() {
             cache = Some((stamp, build_rows(run, cal)));
             self.looked_up = None;
@@ -163,7 +164,11 @@ impl Results {
                 }),
             )
             .labelled_by(label.id);
-            if !self.filter.is_empty() && ui.button("Clear").clicked() {
+            if !self.filter.is_empty()
+                && (ui.button("Clear"))
+                    .on_hover_text("Clear the search and show every component")
+                    .clicked()
+            {
                 self.filter.clear();
                 self.looked_up = None;
             }
@@ -446,7 +451,7 @@ fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(Col, bool)>, col: Col) {
 
 /// Cell text as the old table showed it (a missing value as a dash).
 fn cell(r: &Row, col: Col) -> String {
-    let num = |v: Option<f64>, digits: usize| v.map_or("–".into(), |v| format!("{v:.digits$}"));
+    use crate::detail::num;
     let res = &r.res;
     match col {
         Col::Name => res.name.clone(),
@@ -649,7 +654,7 @@ pub(crate) mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |ui| r.panel(ui, Some(run), 0, cal))
+        ctx.run_ui(input, |ui| r.panel(ui, Some(run), cal))
             .textures_delta
             .clear();
     }
@@ -770,5 +775,10 @@ pub(crate) mod tests {
         run.rev += 1;
         draw(&mut r, &mut run, None, Vec::new());
         assert_eq!(r.cache.as_ref().unwrap().1.len(), 1);
+        // Another run with the same `rev` (the active one was closed) gets its own rows.
+        let mut other = super::tests::run();
+        other.rev = run.rev;
+        draw(&mut r, &mut other, None, Vec::new());
+        assert_eq!(r.cache.as_ref().unwrap().1.len(), 2);
     }
 }

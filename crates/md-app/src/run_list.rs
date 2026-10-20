@@ -29,8 +29,8 @@ impl App {
                 self.run_list(ui);
             }
             if p.components {
-                let cal = self.ri.cal.as_deref();
-                (self.results).panel(ui, self.runs.get_mut(self.active), self.active, cal);
+                let cal = (self.runs.get(self.active)).and_then(|r| self.ri.for_run(r).cloned());
+                (self.results).panel(ui, self.runs.get_mut(self.active), cal.as_ref());
             }
         });
     }

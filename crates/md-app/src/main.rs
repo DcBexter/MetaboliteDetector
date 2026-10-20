@@ -116,7 +116,7 @@ struct App {
     /// Detected Peaks also draws the modelled profile of each ion.
     model_profile: bool,
     /// Run whose TIC zoom is shown; another run starts unzoomed.
-    plotted: Option<PathBuf>,
+    plotted: Option<std::sync::Weak<md_core::Chromatogram>>,
 }
 
 impl Default for App {
@@ -212,7 +212,7 @@ impl eframe::App for App {
                 run,
                 &self.nist,
                 (&mut self.mz, &mut self.trace),
-                self.ri.cal.as_deref(),
+                self.ri.for_run(run),
             )
         {
             self.nist_search();
