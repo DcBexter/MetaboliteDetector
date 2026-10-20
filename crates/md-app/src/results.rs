@@ -52,7 +52,7 @@ impl Results {
             ui.label("Open a chromatogram first.");
             return;
         };
-        let Some(((lib, ..), id, shifted)) = &run.ident else {
+        let Some(((lib, ..), id, _)) = &run.ident else {
             ui.label("Open a library to identify the components of the run.");
             return;
         };
@@ -63,19 +63,7 @@ impl Results {
         );
         let mut cache = self.cache.take().filter(|c| c.0 == stamp);
         if cache.is_none() {
-            let times = &run.data.scan_times_s;
-            let ris = (shifted.as_ref())
-                .or(run.ident.as_ref().and_then(|i| i.0.1.as_deref()))
-                .map(|c| c.component_ris(times, &run.components));
-            let rows = result_rows(
-                &run.components,
-                times,
-                ris.as_deref(),
-                &run.peak_masses,
-                id,
-                &lib.compounds,
-            );
-            cache = Some((stamp, rows));
+            cache = Some((stamp, build_rows(run)));
             self.looked_up = None;
         }
         let (stamp, rows) = cache.expect("filled above");
@@ -118,65 +106,7 @@ impl Results {
         if order.is_empty() && !rows.is_empty() {
             ui.weak("No component matches. Clear the search to see all.");
         }
-        let mut clicked = selected;
-        let current = run.component;
-        let sort = &mut self.sort;
-        ui.scope(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            TableBuilder::new(ui)
-                .id_salt("results table")
-                .striped(true)
-                .sense(egui::Sense::click())
-                .column(Column::auto().at_least(180.0))
-                .columns(Column::auto(), 6)
-                .column(Column::remainder())
-                .header(20.0, |mut h| {
-                    for (c, title) in HEAD.iter().enumerate() {
-                        h.col(|ui| {
-                            ui.with_layout(align(c), |ui| {
-                                let arrow = match *sort {
-                                    Some((s, d)) if s == c => [" ▲", " ▼"][d as usize],
-                                    _ => "",
-                                };
-                                let t = egui::RichText::new(format!("{title}{arrow}")).strong();
-                                let resp = ui
-                                    .add(egui::Label::new(t).sense(egui::Sense::click()))
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .on_hover_text("Click to sort: ascending, descending, off");
-                                if resp.clicked() {
-                                    *sort = match *sort {
-                                        Some((s, false)) if s == c => Some((c, true)),
-                                        Some((s, true)) if s == c => None,
-                                        _ => Some((c, false)),
-                                    };
-                                }
-                            });
-                        });
-                    }
-                })
-                .body(|body| {
-                    body.rows(18.0, order.len(), |mut row| {
-                        let r = &rows[order[row.index()]];
-                        row.set_selected(current == Some(r.component));
-                        for (c, text) in cells(r).into_iter().enumerate() {
-                            row.col(|ui| {
-                                ui.with_layout(align(c), |ui| {
-                                    // An unmatched component reads as a placeholder.
-                                    match r.compound.is_none() && c == 0 {
-                                        true => ui.weak(text),
-                                        false => ui.label(text),
-                                    };
-                                });
-                            });
-                        }
-                        let resp = row.response();
-                        if resp.clicked() {
-                            clicked = Some(r.component);
-                        }
-                        resp.on_hover_ui(|ui| hover(ui, r, run, lib));
-                    });
-                });
-        });
+        let clicked = table(ui, &mut self.sort, &rows, &order, run, lib).or(selected);
         if let Some(k) = clicked {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
@@ -223,6 +153,101 @@ impl Results {
             }
         });
         clicked
+    }
+}
+
+/// Rows of the active run; the RI comes from the calibration the identification was made with.
+fn build_rows(run: &Run) -> Vec<ResultRow> {
+    let Some(((lib, ..), id, shifted)) = &run.ident else {
+        return Vec::new();
+    };
+    let times = &run.data.scan_times_s;
+    let ris = (shifted.as_ref())
+        .or(run.ident.as_ref().and_then(|i| i.0.1.as_deref()))
+        .map(|c| c.component_ris(times, &run.components));
+    result_rows(
+        &run.components,
+        times,
+        ris.as_deref(),
+        &run.peak_masses,
+        id,
+        &lib.compounds,
+    )
+}
+
+/// Click order of a column header: ascending, descending, off.
+fn next_sort(sort: Option<(usize, bool)>, col: usize) -> Option<(usize, bool)> {
+    match sort {
+        Some((s, false)) if s == col => Some((col, true)),
+        Some((s, true)) if s == col => None,
+        _ => Some((col, false)),
+    }
+}
+
+/// The table of `order` (indices into `rows`); returns the component clicked in it.
+fn table(
+    ui: &mut egui::Ui,
+    sort: &mut Option<(usize, bool)>,
+    rows: &[ResultRow],
+    order: &[usize],
+    run: &Run,
+    lib: &Library,
+) -> Option<usize> {
+    let mut clicked = None;
+    ui.scope(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        TableBuilder::new(ui)
+            .id_salt("results table")
+            .striped(true)
+            .sense(egui::Sense::click())
+            .column(Column::auto().at_least(180.0))
+            .columns(Column::auto(), 6)
+            .column(Column::remainder())
+            .header(20.0, |mut h| {
+                for (c, title) in HEAD.iter().enumerate() {
+                    h.col(|ui| {
+                        ui.with_layout(align(c), |ui| header_cell(ui, sort, c, title));
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(18.0, order.len(), |mut row| {
+                    let r = &rows[order[row.index()]];
+                    row.set_selected(run.component == Some(r.component));
+                    for (c, text) in cells(r).into_iter().enumerate() {
+                        row.col(|ui| {
+                            ui.with_layout(align(c), |ui| {
+                                // An unmatched component reads as a placeholder.
+                                match r.compound.is_none() && c == 0 {
+                                    true => ui.weak(text),
+                                    false => ui.label(text),
+                                };
+                            });
+                        });
+                    }
+                    let resp = row.response();
+                    if resp.clicked() {
+                        clicked = Some(r.component);
+                    }
+                    resp.on_hover_ui(|ui| hover(ui, r, run, lib));
+                });
+            });
+    });
+    clicked
+}
+
+fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(usize, bool)>, col: usize, title: &str) {
+    let arrow = match *sort {
+        Some((s, d)) if s == col => [" ▲", " ▼"][d as usize],
+        _ => "",
+    };
+    let t = egui::RichText::new(format!("{title}{arrow}")).strong();
+    let resp = ui
+        .add(egui::Label::new(t).sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Click to sort: ascending, descending, off");
+    if resp.clicked() {
+        *sort = next_sort(*sort, col);
     }
 }
 
