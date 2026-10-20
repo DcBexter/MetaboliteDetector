@@ -4,6 +4,7 @@ use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::TimeUnit;
 
+use crate::identify::score_color;
 use crate::{App, Run};
 
 pub struct View {
@@ -15,6 +16,12 @@ pub struct View {
     /// Show names with score ≤ 0.7, > 0.7 and > 0.9 (old label switches); a name shows if any matching switch is on.
     pub score_filter: [bool; 3],
     pub info_open: bool,
+    /// Draw a crosshair at the pointer in the chromatogram plots.
+    pub crosshair: bool,
+    /// Toolbar press for the chromatogram plots, applied in the frame it was made.
+    pub nav: Option<Nav>,
+    /// The same for the spectrum plot.
+    pub spectrum_nav: Option<Nav>,
 }
 
 impl Default for View {
@@ -26,8 +33,73 @@ impl Default for View {
             auto_y: true,
             score_filter: [true; 3],
             info_open: false,
+            crosshair: true,
+            nav: None,
+            spectrum_nav: None,
         }
     }
+}
+
+/// A toolbar button that moves or scales the visible x range of a plot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Nav {
+    In,
+    Out,
+    /// Back to the whole data; the plot does this itself through `Plot::reset`.
+    All,
+    Left,
+    Right,
+}
+
+impl Nav {
+    /// Zooms around the middle of the visible range or moves it by a quarter of its width.
+    pub fn apply(self, p: &mut egui_plot::PlotUi) {
+        let b = p.plot_bounds();
+        let (lo, hi) = (b.min(), b.max());
+        let mid = egui_plot::PlotPoint::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+        let width = (hi[0] - lo[0]) as f32;
+        match self {
+            Nav::In => p.zoom_bounds(egui::vec2(2.0, 1.0), mid),
+            Nav::Out => p.zoom_bounds(egui::vec2(0.5, 1.0), mid),
+            Nav::Left => p.translate_bounds(egui::vec2(-width / 4.0, 0.0)),
+            Nav::Right => p.translate_bounds(egui::vec2(width / 4.0, 0.0)),
+            Nav::All => {}
+        }
+    }
+}
+
+/// Zoom and move buttons and the "?" with the controls of a plot; `help` is one line per control.
+pub fn nav_buttons(ui: &mut egui::Ui, help: &[&str]) -> Option<Nav> {
+    let mut nav = None;
+    for (n, text, hover) in [
+        (Nav::In, "+", "Zoom in on the middle of the plot"),
+        (Nav::Out, "−", "Zoom out"),
+        (
+            Nav::All,
+            "All",
+            "Show all data again (double-click on the plot does the same)",
+        ),
+        (Nav::Left, "◀", "Move the view to the left"),
+        (Nav::Right, "▶", "Move the view to the right"),
+    ] {
+        if ui.button(text).on_hover_text(hover).clicked() {
+            nav = Some(n);
+        }
+    }
+    let r = ui.button("?").on_hover_text("How to use this plot");
+    egui::Popup::from_toggle_button_response(&r)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_max_width(340.0);
+            for line in help {
+                ui.label(*line);
+            }
+        });
+    if nav.is_some() {
+        // The decimation of the next frame needs the new range.
+        ui.ctx().request_repaint();
+    }
+    nav
 }
 
 /// Large intensities compactly, the same in every chromatogram plot: `12 M`, `1.2 k`, `-3`.
@@ -95,14 +167,26 @@ impl View {
         if self.unit != before {
             self.bounds_in = Some(before);
         }
-        ui.label("Show names with score");
-        for (on, text) in self
+        ui.toggle_value(&mut self.crosshair, "Crosshair")
+            .on_hover_text("Draw cross lines at the pointer in the chromatograms");
+        ui.add(egui::Label::new("Names with score").extend());
+        // The triangles wear the colours of the names they switch.
+        let weak = ui.visuals().weak_text_color();
+        for ((on, text), shade) in self
             .score_filter
             .iter_mut()
             .zip(["≤ 0.7", "> 0.7", "> 0.9"])
+            .zip([0.5, 0.8, 0.95])
         {
-            ui.checkbox(on, text)
-                .on_hover_text("A name is shown if any switch matching its library score is on");
+            let color = if *on { score_color(shade) } else { weak };
+            let label = egui::RichText::new(format!("▲ {text}")).color(color);
+            if ui
+                .button(label)
+                .on_hover_text("A name is shown if any switch matching its library score is on")
+                .clicked()
+            {
+                *on = !*on;
+            }
         }
     }
 }

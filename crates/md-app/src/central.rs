@@ -7,7 +7,26 @@ use crate::plot_export::Area;
 use md_core::decimate;
 use std::sync::Arc;
 
-use crate::{App, Run, Trace, color, detail, export, identify, view::View};
+use crate::view::{self, Nav, View};
+use crate::{App, Run, Trace, color, detail, export, identify};
+
+const CHROMATOGRAM_HELP: &[&str] = &[
+    "Click: show the scan at that time; near a dot or triangle, that component.",
+    "← / →: previous or next scan.",
+    "Drag, or mouse wheel: move the view.",
+    "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
+    "Right mouse button, drag a box: zoom into the box.",
+    "Double-click, or All: show all data.",
+    "The dots and triangles mark the detected components; the triangles are easier to hit.",
+];
+
+const SPECTRUM_HELP: &[&str] = &[
+    "Click a bar: the SIC shows that m/z.",
+    "Drag, or mouse wheel: move the view.",
+    "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
+    "Right mouse button, drag a box: zoom into the box.",
+    "Double-click, or All: show all masses.",
+];
 
 /// Visible x range in minutes (unbounded when auto-fitted); after a unit change it also moves the
 /// zoomed window into the new unit.
@@ -84,6 +103,7 @@ fn trace_plot(
         .y_axis_min_width(90.0)
         .link_axis(link, [true, false])
         .link_cursor(link, [true, false])
+        .show_crosshair(view.crosshair)
         .x_axis_label(format!("Retention time ({})", view.unit.label()))
         .y_axis_label(label)
         .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
@@ -104,18 +124,37 @@ fn trace_plot(
                     p.line(Line::new(run.name.as_str(), points).color(color(i)));
                 }
             }
+            if let Some(nav) = view.nav {
+                nav.apply(p);
+            }
+            let b = p.plot_bounds();
+            // The y range of this frame, so the triangles do not lag behind an auto-fitted axis.
+            let (mut y_lo, mut y_hi) = (b.min()[1], b.max()[1]);
             if view.auto_y
                 && let Some((l, h)) = y_span
             {
                 let pad = ((h - l) * 0.05).max(f64::EPSILON);
-                p.set_plot_bounds_y(l - pad..=h + pad);
+                (y_lo, y_hi) = (l - pad, h + pad);
+                p.set_plot_bounds_y(y_lo..=y_hi);
             }
             if !marks.is_empty() {
-                let marks: Vec<[f64; 2]> = marks.iter().map(|m| [view.time(m[0]), m[1]]).collect();
-                p.points(Points::new("components", marks).radius(3.0));
+                let at = |m: &[f64; 2]| [view.time(m[0]), m[1]];
+                p.points(
+                    Points::new("components", marks.iter().map(at).collect::<Vec<_>>()).radius(3.0),
+                );
+                // Triangles on the x axis: bigger click targets than the dots.
+                let y = y_lo + 8.0 * (y_hi - y_lo) / p.response().rect.height().max(1.0) as f64;
+                let tri = marks
+                    .iter()
+                    .map(|m| [view.time(m[0]), y])
+                    .collect::<Vec<_>>();
+                p.points(
+                    Points::new("components", tri)
+                        .shape(egui_plot::MarkerShape::Up)
+                        .radius(5.0),
+                );
             }
             // Hide overlapping names, best score first (3.3 does the same).
-            let b = p.plot_bounds();
             let px_per_t = p.response().rect.width() as f64 / (b.max()[0] - b.min()[0]).max(1e-9);
             let starts: Vec<f32> = labels
                 .iter()
@@ -210,6 +249,7 @@ impl App {
     fn chromatogram_area(&mut self, ui: &mut egui::Ui) {
         self.trace_controls(ui);
         ui.horizontal_wrapped(|ui| {
+            self.view.nav = view::nav_buttons(ui, CHROMATOGRAM_HELP);
             self.view.controls(ui);
             if ui.button("Run info").clicked() {
                 self.view.info_open = true;
@@ -302,7 +342,8 @@ impl App {
         let run = &self.runs[self.active];
         let cursor = run.minutes[run.scan];
         // A zoom belongs to the run it was made on.
-        let reset = !(self.plotted.as_ref()).is_some_and(|p| p.ptr_eq(&Arc::downgrade(&run.data)));
+        let reset = !(self.plotted.as_ref()).is_some_and(|p| p.ptr_eq(&Arc::downgrade(&run.data)))
+            || self.view.nav == Some(Nav::All);
         if reset {
             self.plotted = Some(Arc::downgrade(&run.data));
         }
@@ -407,6 +448,7 @@ impl App {
             {
                 scan = run.data.scan_at(self.view.minutes(t) * 60.0);
             }
+            self.view.spectrum_nav = view::nav_buttons(ui, SPECTRUM_HELP);
         });
         if let Some(s) = scan {
             (run.scan, run.component) = (s, None);
@@ -460,7 +502,14 @@ impl App {
         if mode != detail::Mode::Normal {
             plot = plot.legend(egui_plot::Legend::default());
         }
+        let nav = self.view.spectrum_nav;
+        if nav == Some(Nav::All) {
+            plot = plot.reset();
+        }
         let shown = plot.show(ui, |p| {
+            if let Some(nav) = nav {
+                nav.apply(p);
+            }
             for chart in charts {
                 p.bar_chart(chart);
             }

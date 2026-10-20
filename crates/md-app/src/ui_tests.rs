@@ -355,3 +355,20 @@ fn tof_calibration_screenshot() {
         shots.save(&mut h, &format!("14-tof-calibration-{tag}"));
     }
 }
+
+/// The view toolbar: a score triangle switches its band, the zoom buttons run, "?" explains the plot.
+#[test]
+fn the_view_toolbar_works_on_a_run() {
+    let mut h = harness(egui::Theme::Dark);
+    h.state_mut().runs.push(crate::results::tests::run());
+    h.run_steps(3);
+    h.get_by_label("▲ ≤ 0.7").click();
+    h.get_all(by().label("+")).next().unwrap().click();
+    h.run_steps(2);
+    h.get_all(by().label("All")).next().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().view.score_filter, [false, true, true]);
+    h.get_all(by().label("?")).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label_contains("Double-click, or All");
+}
