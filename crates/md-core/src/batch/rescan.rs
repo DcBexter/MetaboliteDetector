@@ -214,10 +214,13 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
             .ions
             .iter()
             .filter_map(|m| {
-                let row = traces.masses.binary_search(m).ok()? as u32;
-                let k = by_row
-                    .get(&row)?
-                    .iter()
+                // Every trace of that nominal mass (several on exact-mass runs): the old code keeps
+                // the peaks within ±0.5 of the ion.
+                let rows = traces.masses.partition_point(|x| x < m)
+                    ..traces.masses.partition_point(|x| x <= m);
+                let k = rows
+                    .filter_map(|r| by_row.get(&(r as u32)))
+                    .flatten()
                     .copied()
                     .filter(|k| (t.from_s..=t.to_s).contains(&at(*k)))
                     .min_by(|a, b| (at(*a) - middle).abs().total_cmp(&(at(*b) - middle).abs()))?;
@@ -267,6 +270,40 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
 mod tests {
     use super::*;
     use crate::ri::RiCalibration;
+
+    #[test]
+    fn exact_mass_runs_search_every_trace_of_the_ion() {
+        // Three traces of nominal mass 73; only the first has a peak.
+        let (scans, mz) = (100, [73.047f32, 73.08, 73.09]);
+        let c = Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64).collect(),
+            offsets: (0..=scans).map(|s| s * mz.len()).collect(),
+            mz: (0..scans).flat_map(|_| mz).collect(),
+            intensity: (0..scans * mz.len())
+                .map(|k| {
+                    let (s, i) = ((k / mz.len()) as f32, k % mz.len());
+                    let noise = ((k as u32).wrapping_mul(2_654_435_761) >> 16) % 41;
+                    let peak = if i == 0 {
+                        50000.0 * (-0.5 * ((s - 50.0) / 2.5).powi(2)).exp()
+                    } else {
+                        0.0
+                    };
+                    980.0 + noise as f32 + peak
+                })
+                .collect(),
+            exact_masses: true,
+        };
+        let todo = Todo {
+            compound: 0,
+            ions: vec![73],
+            from_s: 40.0,
+            to_s: 60.0,
+        };
+        let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1[0].mass, 73);
+        assert!((out[0].2 - 50.0).abs() <= 1.0, "{}", out[0].2);
+    }
 
     #[test]
     fn window_follows_the_calibration_of_each_run() {

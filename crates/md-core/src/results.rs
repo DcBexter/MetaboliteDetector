@@ -162,6 +162,7 @@ mod tests {
                     integral,
                 })
                 .collect(),
+            exact_spectrum: Vec::new(),
         }
     }
 

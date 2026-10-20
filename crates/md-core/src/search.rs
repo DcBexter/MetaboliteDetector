@@ -465,6 +465,7 @@ mod tests {
             model: Vec::new(),
             spectrum: spectrum.to_vec(),
             peaks: Vec::new(),
+            exact_spectrum: Vec::new(),
         }
     }
 

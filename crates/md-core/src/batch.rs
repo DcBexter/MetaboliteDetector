@@ -161,7 +161,7 @@ pub fn scan_chromatogram(
     // peak memory per run.
     let times = c.scan_times_s.clone();
     drop(c);
-    let peaks = traces.detect_peaks(&s.peaks);
+    let peaks = traces.detect_all_peaks(&s.peaks);
     let comps = deconvolute(&traces, &peaks, &s.deconv);
     Ok(scan_components(&times, &comps, &peaks, lib, s, |i| {
         traces.masses[peaks[i].row as usize]
@@ -933,6 +933,7 @@ mod tests {
                     980.0 + noise as f32 + peak
                 })
                 .collect(),
+            exact_masses: false,
         }
     }
 

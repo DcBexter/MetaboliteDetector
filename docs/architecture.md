@@ -157,14 +157,17 @@ peaks of the example runs:
 
 - **Traces per nominal mass.** Not a deviation: `IonTraces::new` centroids every scan like the old CDF
   import (§4.1), then sums the centroids per nominal mass. On unit-resolution runs with integer
-  intensities centroiding changes nothing. Exact-mass traces (`IonTraces::exact`) plus `reorder_peaks` (§4.2) are what the old app does
-  for FastFlight runs. The deconvolution still keys spectra by nominal mass, so exact masses merge there
-  (shortcut in `deconv.rs`).
+  intensities centroiding changes nothing. Runs with `Chromatogram::exact_masses` (FastFlight, caches
+  with DataType 0 or 1) get exact-mass traces and `reorder_peaks` (§4.2) through
+  `IonTraces::detect_all_peaks`, like the old app. Components keep the exact masses in
+  `exact_spectrum`; `spectrum`, `.cmp` and the library search still use nominal masses (shortcut in
+  `deconv.rs`).
 - **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
   `DataProvider::getGlobalNoiseFactor` (§2.3). On all 15 example runs the old app logs
   "Error determining nf. Using nf=1", so 1.0 is what it uses there. Data where the old app finds another
-  noise factor would differ. The noise factor and MAD of `analyzeBaseline` are not computed because the
-  detector never reads them.
+  noise factor would differ, e.g. FastFlight caches with DataType 1, whose per-scan
+  `analyzeBaseline(values, 100)` statistics set the noise factor (§2.3). The noise factor and MAD of
+  `analyzeBaseline` are not computed because the detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
   to integers like the old int filters. S/N is not rounded to 8 significant digits.
 - **Precise apex ties round down.** The old app fits the parabola with `gsl_multifit_linear` in absolute
@@ -499,6 +502,8 @@ A third reference, `old-md-3.3-high-resolution.tsv`, covers a synthetic high-res
 To regenerate it, run `make-reference.sh --high-resolution`. The run itself (`example-data/high-resolution/`) is not committed. The test builds the run in memory from eg04, and the script writes it as a CDF for the old app with an ignored test (`write_high_resolution_run`).
 
 The old CDF import centroids such scans to nominal masses (§4.1). The port does the same, so all peaks and components match with no known difference.
+
+A fourth reference, `old-md-3.3-exact-masses.tsv`, takes the same run as a disk-scan cache with DataType 1, as FastFlight writes it. The old app then keeps the exact masses and runs `reorderPeaks`, so 147.047 and 147.089 stay apart in the components. The port matches it with no known difference. The cache carries per-scan statistics with nf = 1 and mean = sd = 0 (§2.3), not the `analyzeBaseline` values of a real FastFlight import. To regenerate it, run `make-reference.sh --exact-masses`; the ignored test `write_exact_mass_run` writes the cache.
 
 The test fails when one of these counts grows.
 

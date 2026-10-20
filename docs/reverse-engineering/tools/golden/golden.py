@@ -9,7 +9,7 @@ Output (tab-separated, one block per run):
 """
 import sys
 
-PEAK_RUNS = {"7235eg04.cdf", "7235eg20.cdf", "7235eg32.cdf", "7235eg04-hr.cdf"}
+PEAK_RUNS = {"7235eg04.cdf", "7235eg20.cdf", "7235eg32.cdf", "7235eg04-hr.cdf", "7235eg04-exact.bin"}
 
 
 def main(lines, settings):

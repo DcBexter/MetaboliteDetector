@@ -94,6 +94,7 @@ calculateBaseline(p):
 - AbstractPeakDetector ctor (MCP 0x6ed4f0): vptr set, nf = 1.0. Observed.
 - Peaks created by MatchedPeakDetector get nf = 0.5 (Observed, Section 3.3).
 - Peaks created by DefaultPeakDetector get nf = getNoiseFactor() (Observed). detectPeaks does NOT write analyzeBaseline's `nf` into this->nf: it has no setNoiseFactor call and no store to this+0x8 (Observed). The only setNoiseFactor caller is the GCMSAnalyzer<int,float> ctor (syms 0x5e88fc, call at 0x5e89bf); it passes a double from analyzer+0x70, filled by an indirect call at 0x5e8995: scan vtbl+0x50, `getNoiseFactor` → `DataProvider::getGlobalNoiseFactor` (Observed). On all 15 example runs it logs "Error determining nf. Using nf=1", so nf = 1 (Observed with the golden driver, `tools/golden/`).
+- `GCMSDiskScan::determineNoiseFactor` (0x6e565a, objdump) fills the global statistics. For DataType 2 it calls `calculateGlobalBaselineStatistics(15, 50)`, which falls back to nf = 1. Otherwise it combines the per-scan `scan2stat` of the cache (file-formats.md §2.2): pooled mean and variance via `collectedMean`/`collectedVariance`, nf = median of the per-scan nf (field 4), n = sum of n; stored as `BaselineStatistics(mean, sqrt(var), 0, nf, n)` and written to the index. With zeroed per-scan statistics nf = 0 and every peak fails "can not calculate noise units" (Observed with the golden driver). With nf = 1 and mean = sd = 1 the old app also moved some peak edges against mean = sd = 0, so the pooled mean or sd feed the detector somewhere (Observed, not analysed).
 
 ## 3. Peak detection
 
@@ -285,6 +286,7 @@ Observed (tail at 0x5e8e99..0x5e8f15). Deconvolution passes 1.0 as the Compound 
 Data type, mass traces and centroiding (Observed):
 
 - Data type 2 = nominal masses. The CDF import (`CdfImporter::scanAdd`, 0x6cd038) always writes type 2. Only `FastFlightImporter::importData` (0x6c4cde) writes type 1 or 0 and keeps exact masses. So reorderPeaks (4.2) runs only for FastFlight runs.
+- `FastFlightImporter::importData(path, drop_first, b)` writes DataType `b ? 1 : 0`; `b` is the user option at `FastFlightBatchImporter`+0x60 (Observed). Type 1 caches are compressed profiles with per-scan baseline statistics (file-formats.md §2.2). `GCMSDiskScan::getChromatogram` reads type 0 through `getProfileChromatogram` (not ported; on our caches it throws "start must be lower than stop"), types 1 and 2 through the ion list below.
 - `scanAdd` per scan:
   - Masses become float (`cvtsd2ss`) and are multiplied by the mass scale factor when it is not 1.
   - Intensities are scaled, then rounded with `(int)(x + 0.5)`.
@@ -303,7 +305,7 @@ Data type, mass traces and centroiding (Observed):
   - A missing mass reads `(int)` of the scan's first baseline statistic (0 for CDF), or 0 when baseline correction is on.
   - A found point is baseline-corrected (vtbl+0x48) when that is on.
 
-Port: `IonTraces::new` centroids like this (`centroided`; skipped when no scan has two points within 0.1, then fractional intensities and m/z in [-0.5, 0) stay as read) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z, with 0 where a scan lacks that mass, for FastFlight-like runs; `reorder_peaks` is 4.2.
+Port: `IonTraces::new` centroids like this (`centroided`; skipped when no scan has two points within 0.1, then fractional intensities and m/z in [-0.5, 0) stay as read) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z, with 0 where a scan lacks that mass; `reorder_peaks` is 4.2. `Chromatogram::exact_masses` marks runs with exact masses (FastFlight, caches with DataType 0 or 1); `IonTraces::new` then builds exact traces and `IonTraces::detect_all_peaks` runs `reorder_peaks(10, 0.05)`, like `detectAllPeaks(true, 10, 0.05)`. Components keep the exact masses in `Component::exact_spectrum` (the old `map<float,int>`). Golden check: `old-md-3.3-exact-masses.tsv`, a type 1 cache of the synthetic high-resolution run with per-scan statistics (0, 0, 0, nf = 1, 100).
 
 ### 4.2 reorderPeaks(scan_dist, ion_dist) (0x5eac2c) - align apexes of split masses
 
@@ -336,7 +338,7 @@ for each profile (each once, `processed` flag):
 delete all profiles
 ```
 
-- `insertIonProfile(bin, bins, dist, p)` (0x5eb972, objdump): `prof = new IonProfile(p)`. Then `lo = (int)(bin - dist) < 0 ? 0 : bin - dist` and `hi = min(bin + dist, bins.size - 1)`. It pushes `prof` into `bins[k]` for k in [lo, hi). The upper bound is exclusive, so bin `hi` is not filled (Observed: `jae` at 0x5eba59).
+- `insertIonProfile(bin, bins, dist, p)` (0x5eb972, objdump): `prof = new IonProfile(p)`. Then `lo = (int)(bin - dist) < 0 ? 0 : bin - dist` and `hi = min(bin + dist, bins.size - 1)`. It pushes `prof` into `bins[k]` for k in [lo, hi). The upper bound is exclusive, so bin `hi` is not filled (Observed: `jae` at 0x5eba59). It appends (`list::push_back`, 0x5eba7b), and reorderPeaks walks `bins[b]` from `begin()` with `operator++` (0x5eaf62..0x5eb1b3). With the strict `d < min_dist`, the profile created first wins a tie (Observed).
 - `IonProfile(p)` (0x649594): processed = false; addPeak(p). `IonProfile::addPeak(p)` (0x648f90): push p; last_ion = p.ion; max_scan = Peak(peaks).maxScan (the apex of the summed profile). Observed.
 
 ### 4.3 Peak(list<Peak*>) - summed peak (0x5f28f8, Observed)

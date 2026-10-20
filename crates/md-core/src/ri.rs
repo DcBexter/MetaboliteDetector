@@ -536,6 +536,7 @@ mod tests {
                 .map(|i| (gauss(i as f64, 100.0) + gauss(i as f64, 300.0)) as f32)
                 .collect(),
             scan_times_s: times,
+            exact_masses: false,
         };
         let peaks = marker_peaks(&c, 57.0, 12, 10);
         assert_eq!(peaks.iter().map(|p| p.0).collect::<Vec<_>>(), [50.0, 150.0]);
