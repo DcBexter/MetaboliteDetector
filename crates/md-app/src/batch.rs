@@ -739,8 +739,15 @@ impl Batch {
     }
 
     /// The guided component detection is the batch that saves the components; it starts with that on.
-    pub fn save_cmp_by_default(&mut self) {
+    /// Returns whether it was off, so a cancelled detection can switch it off again.
+    pub fn save_cmp_by_default(&mut self) -> bool {
+        let off = self.options.save_cmp.is_none();
         (self.options.save_cmp).get_or_insert(md_core::batch::CmpTarget::BesideRun);
+        off
+    }
+
+    pub fn stop_saving_cmp(&mut self) {
+        self.options.save_cmp = None;
     }
 
     /// The `.cmp` choice alone, for the guided component detection.

@@ -231,6 +231,8 @@ pub struct Guided {
     pub ask: bool,
     /// The running flow and its step (from 0).
     pub flow: Option<(Flow, usize)>,
+    /// The detection flow switched ".cmp" saving on; closing it unfinished switches it off again.
+    cmp_switched_on: bool,
 }
 
 fn mode_id() -> egui::Id {
@@ -281,9 +283,7 @@ impl App {
     }
 
     pub fn start_flow(&mut self, f: Flow) {
-        if f == Flow::Detection {
-            self.batch.save_cmp_by_default();
-        }
+        self.guided.cmp_switched_on = f == Flow::Detection && self.batch.save_cmp_by_default();
         self.guided.flow = Some((f, 0));
     }
 
@@ -385,7 +385,12 @@ impl App {
                 });
             });
         self.guided.flow = match go {
-            _ if !open => None,
+            _ if !open => {
+                if self.guided.cmp_switched_on {
+                    self.batch.stop_saving_cmp();
+                }
+                None
+            }
             Some(n) if n == steps.len() => {
                 *flow.window(self).1 = true;
                 None
@@ -416,7 +421,11 @@ impl App {
                 ui.label(text::active_run(name));
             }
             Step::FindAlkanes => self.ri.contents(ui, self.runs.get(self.active)),
-            Step::CheckPoints => self.ri.table(ui),
+            Step::CheckPoints => {
+                // A table edit that fails (times or RIs not rising) keeps the old calibration.
+                self.ri.error_label(ui);
+                self.ri.table(ui);
+            }
             Step::Library => {
                 self.open_library_button(ui);
                 if self.library_job.is_some() {

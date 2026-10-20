@@ -266,11 +266,16 @@ impl Calibration {
         self.open = open;
     }
 
-    pub fn contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>) {
-        // First, so the guided step that finds the alkanes shows why it failed too.
+    /// Why the last search, load or table edit failed.
+    pub fn error_label(&self, ui: &mut egui::Ui) {
         if let Some(e) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
+    }
+
+    pub fn contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>) {
+        // First, so the guided step that finds the alkanes shows why it failed too.
+        self.error_label(ui);
         let was = self.rt_only;
         ui.checkbox(
             &mut self.rt_only,
