@@ -11,8 +11,9 @@ use crate::peaks::{IonTraces, Peak, matched_filter};
 /// The old `AN_*` deconvolution settings; defaults are the old static values (file-formats.md §5.1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeconvSettings {
-    /// `AN_DECONVOLUTION_WIDTH`: width in scans of the matched filter over the apex histogram.
-    pub width: f64,
+    /// `AN_DECONVOLUTION_WIDTH`: width in scans of the matched filter over the apex histogram;
+    /// `None` takes it from the run's scan rate ([`auto_width`]).
+    pub width: Option<f64>,
     /// `AN_NUMBER_BINS`: histogram bins per scan; keep it equal to `PeakSettings::number_bins`.
     pub number_bins: u32,
     /// `AN_MIN_PEAK_NUMBER`: minimum ion peaks per component, before and after the fit.
@@ -29,13 +30,43 @@ pub struct DeconvSettings {
 impl Default for DeconvSettings {
     fn default() -> Self {
         Self {
-            width: 1.0,
+            width: Some(1.0),
             number_bins: 10,
             min_peak_number: 10,
             min_height_bp: 0.0,
             modeled_integration: true,
             excluded_model_ions: Vec::new(),
         }
+    }
+}
+
+impl DeconvSettings {
+    /// The width in scans for a run: the set one, else [`auto_width`].
+    pub fn width_scans(&self, scan_times_s: &[f64]) -> f64 {
+        self.width.unwrap_or_else(|| auto_width(scan_times_s))
+    }
+}
+
+/// Seconds the automatic width spans: the old 1 scan at 2 scans/s, 10 scans at the 20 scans/s of
+/// #242, where 1 scan cut the substances into pieces.
+pub const AUTO_WIDTH_S: f64 = 0.5;
+
+/// Automatic `AN_DECONVOLUTION_WIDTH`: [`AUTO_WIDTH_S`] in scans at the median scan interval (a gap
+/// in the recording does not count), between the old 1 scan and the limit 100. Rounded to 0.1
+/// scans, so 20 scans/s with float noise in the times still gives exactly 10 (the filter length
+/// truncates). 1 scan without a usable interval.
+pub fn auto_width(scan_times_s: &[f64]) -> f64 {
+    let mut steps: Vec<f64> = scan_times_s.windows(2).map(|t| t[1] - t[0]).collect();
+    if steps.is_empty() {
+        return 1.0;
+    }
+    let mid = steps.len() / 2;
+    let (_, dt, _) = steps.select_nth_unstable_by(mid, f64::total_cmp);
+    let w = AUTO_WIDTH_S / *dt;
+    if w.is_finite() && w > 0.0 {
+        (w.clamp(1.0, 100.0) * 10.0).round() / 10.0
+    } else {
+        1.0
     }
 }
 
@@ -70,8 +101,14 @@ pub struct FittedPeak {
 }
 
 /// Old `deconvoluteChromatogram` (§4.6) for the peaks of `traces` (from `IonTraces::detect_peaks`).
-/// Builds the apex histogram once, then fits the components in parallel.
-pub fn deconvolute(traces: &IonTraces, peaks: &[Peak], s: &DeconvSettings) -> Vec<Component> {
+/// Builds the apex histogram once, then fits the components in parallel. `scan_times_s` (of the
+/// run) only matter for an automatic width.
+pub fn deconvolute(
+    traces: &IonTraces,
+    peaks: &[Peak],
+    scan_times_s: &[f64],
+    s: &DeconvSettings,
+) -> Vec<Component> {
     let nb = s.number_bins.max(1) as usize;
     let len = nb * (traces.scan_count() + 1) + 1;
     // §4.4: apex intensities summed per sub-scan bin, with the peaks of each bin (counting sort keeps
@@ -95,7 +132,7 @@ pub fn deconvolute(traces: &IonTraces, peaks: &[Peak], s: &DeconvSettings) -> Ve
             sum[b] += traces.trace(p.row as usize)[p.apex_scan as usize] as f64;
         }
     }
-    let f = matched_filter(&sum, (nb as f64 * s.width) as usize);
+    let f = matched_filter(&sum, (nb as f64 * s.width_scans(scan_times_s)) as usize);
     regions(&f, &start, &members)
         .into_par_iter()
         .filter_map(|t| fit_component(traces, peaks, t, s))
@@ -379,7 +416,7 @@ pub(crate) mod tests {
         let (c, truth) = two_substances();
         let mut traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
-        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         assert_eq!(comps.len(), 2, "{comps:?}");
         for (comp, (apex, ions)) in comps.iter().zip(&truth) {
             assert_eq!(comp.apex_scan as f64, *apex);
@@ -406,7 +443,44 @@ pub(crate) mod tests {
             min_peak_number: 13,
             ..Default::default()
         };
-        assert!(deconvolute(&traces, &peaks, &strict).is_empty());
-        assert!(deconvolute(&traces, &[], &DeconvSettings::default()).is_empty());
+        assert!(deconvolute(&traces, &peaks, &c.scan_times_s, &strict).is_empty());
+        assert!(deconvolute(&traces, &[], &c.scan_times_s, &DeconvSettings::default()).is_empty());
+    }
+
+    #[test]
+    fn auto_width_follows_the_scan_rate() {
+        let times = |rate: f64| {
+            (0..2000)
+                .map(|i| 300.0 + i as f64 / rate)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(auto_width(&times(20.0)), 10.0);
+        assert_eq!(auto_width(&times(5.0)), 2.5);
+        assert_eq!(auto_width(&times(1.0)), 1.0);
+        assert_eq!(auto_width(&times(1e4)), 100.0);
+        // A 10 min gap (solvent delay) does not lower the rate.
+        let mut gap = times(20.0);
+        gap[1000..].iter_mut().for_each(|t| *t += 600.0);
+        assert_eq!(auto_width(&gap), 10.0);
+        for bad in [&[][..], &[5.0], &[5.0, 5.0], &[5.0, 4.0], &[0.0, f64::NAN]] {
+            assert_eq!(auto_width(bad), 1.0, "{bad:?}");
+        }
+        // A set width wins; at 1 scan/s the automatic one is the old 1 scan.
+        let (c, _) = two_substances();
+        let auto = DeconvSettings {
+            width: None,
+            ..Default::default()
+        };
+        let set = DeconvSettings {
+            width: Some(3.0),
+            ..auto.clone()
+        };
+        assert_eq!(set.width_scans(&times(20.0)), 3.0);
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        assert_eq!(
+            deconvolute(&traces, &peaks, &c.scan_times_s, &auto),
+            deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default())
+        );
     }
 }

@@ -32,11 +32,12 @@ From source (any OS with Rust): `cargo run --release -p metabolite-detector`.
 
 On Linux/macOS: `example-data/fetch.sh`. The runs land in `example-data/TargetSearchData/inst/gc-ms-data/`.
 Their library is `library.txt` in the same folder (TargetSearch format, RI on its FAME scale in ms): open it with **File → Open library…** or pass it to `md-cli --library`.
-These runs record 20 scans/s, and the default settings cut most substances into pieces. In **Settings**, set
-**Deconvolution width** to 10 and **Minimum ions per component** to 5. Then 9 of the 12 substances are found
-in at least one run. Search without RI calibration: an alkane calibration does not fit the library's FAME
-scale (a loaded `.calib` on that scale also needs **RI tolerance (sigma)** 2000). For `md-cli`, save these
-settings with **Save…** and pass the file with `--settings`.
+These runs record 20 scans/s. The **Deconvolution width** in **Settings** is on **Auto** and follows the scan
+rate (10 scans here; the old 3.3 always used 1, which cuts most substances into pieces), so 9 of the 12
+substances are found in at least one run; **Minimum ions per component** 5 finds them in more runs. Settings
+imported from 3.3 set the width to 1: tick **Auto** again. Search without RI calibration: an alkane calibration
+does not fit the library's FAME scale (a loaded `.calib` on that scale also needs **RI tolerance (sigma)** 2000).
+For `md-cli`, save these settings with **Save…** while a run is shown and pass the file with `--settings`.
 
 ## Load runs
 

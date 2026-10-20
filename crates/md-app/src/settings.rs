@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
-use md_core::deconv::{Component, DeconvSettings, deconvolute};
+use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width, deconvolute};
 use md_core::peaks::{Detector, IonTraces, Peak, PeakSettings};
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
@@ -93,7 +93,7 @@ impl Analysis {
 pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
     let mut traces = IonTraces::new(data).map_err(|e| e.to_string())?;
     let peaks = traces.detect_all_peaks(&key.0);
-    let mut components = deconvolute(&traces, &peaks, &key.1);
+    let mut components = deconvolute(&traces, &peaks, &data.scan_times_s, &key.1);
     components.sort_by_key(|k| k.apex_scan);
     let masses = peaks
         .iter()
@@ -161,13 +161,14 @@ impl Settings {
         error
     }
 
-    /// The window; `libraries` are the paths of the open compound and NIST library. Returns the
-    /// library the user wants to choose.
+    /// The window; `libraries` are the paths of the open compound and NIST library, `times` the scan
+    /// times of the shown run. Returns the library the user wants to choose.
     pub fn window(
         &mut self,
         ctx: &egui::Context,
         libraries: [Option<&Path>; 2],
         mode: &mut crate::guided::Mode,
+        times: Option<&[f64]>,
     ) -> Option<Pick> {
         let mut open = self.open;
         let mut pick = None;
@@ -182,10 +183,10 @@ impl Settings {
                         ui.strong(crate::guided::text::MODE);
                         crate::guided::switch(ui, mode);
                         ui.add_space(8.0);
-                        crate::guided::advanced(ui, "settings", |ui| self.fields(ui));
+                        crate::guided::advanced(ui, "settings", |ui| self.fields(ui, times));
                     });
                 ui.separator();
-                self.buttons(ui);
+                self.buttons(ui, times);
             });
         self.open = open;
         pick
@@ -235,7 +236,7 @@ impl Settings {
         pick
     }
 
-    fn buttons(&mut self, ui: &mut egui::Ui) {
+    fn buttons(&mut self, ui: &mut egui::Ui, times: Option<&[f64]>) {
         let valid = self.draft.validate();
         let fix = "Fix the value shown in red first (it names the old key)";
         ui.horizontal(|ui| {
@@ -255,7 +256,7 @@ impl Settings {
             }
             if ui
                 .button("Old defaults")
-                .on_hover_text("Fill in the old version's defaults; Apply uses them")
+                .on_hover_text("Fill in the old version's defaults, with the deconvolution width on Auto; Apply uses them")
                 .clicked()
             {
                 self.draft = GcmsSettings::default();
@@ -275,8 +276,11 @@ impl Settings {
                 .clicked()
                 && let Some(path) = dialog().set_file_name("GCMSSettings").save_file()
             {
+                // The old file has no Auto: it gets the width of the shown run.
+                let mut file = self.draft.clone();
+                (file.an_deconvolution_width).get_or_insert_with(|| auto_width(times.unwrap_or_default()));
                 self.note = Some(
-                    std::fs::write(&path, self.draft.to_bytes())
+                    std::fs::write(&path, file.to_bytes())
                         .map(|()| format!("Saved {}", path.display()))
                         .map_err(|e| format!("{}: {e}", path.display())),
                 );
@@ -309,7 +313,7 @@ impl Settings {
         Ok(format!("Loaded {}", path.display()))
     }
 
-    fn fields(&mut self, ui: &mut egui::Ui) {
+    fn fields(&mut self, ui: &mut egui::Ui, times: Option<&[f64]>) {
         let d = &mut self.draft;
         ui.strong("Peak detection and deconvolution");
         egui::Grid::new("an").num_columns(2).show(ui, |ui| {
@@ -377,13 +381,7 @@ impl Settings {
                 "Sub-scan steps for locating the precise apex.",
                 egui::DragValue::new(&mut d.an_number_bins).range(1..=100),
             );
-            row(
-                ui,
-                "Deconvolution width",
-                "AN_DECONVOLUTION_WIDTH",
-                "Width in scans of the matched filter over the apex histogram.",
-                num(&mut d.an_deconvolution_width, 0.1..=100.0),
-            );
+            width_row(ui, &mut d.an_deconvolution_width, times);
             row(
                 ui,
                 "Minimum ions per component",
@@ -641,6 +639,36 @@ pub(crate) fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: i
     ui.end_row();
 }
 
+/// The deconvolution width row: Auto with the scans it gives in the shown run, or a set width.
+fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) {
+    let hint = explain(
+        &format!(
+            "Width in scans of the matched filter over the apex histogram. Auto: {AUTO_WIDTH_S} s at \
+             each run's scan rate, at least 1 scan (3.3 always used 1). A width from a loaded or \
+             imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one)."
+        ),
+        "AN_DECONVOLUTION_WIDTH",
+    );
+    let label = ui.label("Deconvolution width").on_hover_text(&hint);
+    ui.horizontal(|ui| {
+        let mut auto = width.is_none();
+        let check = ui.checkbox(&mut auto, "Auto");
+        if check.labelled_by(label.id).on_hover_text(&hint).changed() {
+            // A set width starts from the automatic one.
+            *width = (!auto).then(|| auto_width(times.unwrap_or_default()));
+        }
+        match width {
+            Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),
+            None => match times {
+                Some(t) => ui.label(format!("{} scans in the shown run", auto_width(t))),
+                None => ui.weak(format!("{AUTO_WIDTH_S} s of each run")),
+            },
+        }
+        .on_hover_text(&hint);
+    });
+    ui.end_row();
+}
+
 fn num<N: egui::emath::Numeric>(v: &mut N, range: RangeInclusive<N>) -> egui::DragValue<'_> {
     egui::DragValue::new(v)
         .range(range)
@@ -691,5 +719,29 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
     }
     if let Some(i) = remove {
         list.remove(i);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// #279: Auto shows the width of the shown run; unticking it sets that width.
+    #[test]
+    fn auto_width_shows_the_scans_and_unticks_to_them() {
+        let times: Vec<f64> = (0..400).map(|i| i as f64 / 20.0).collect();
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut Settings| s.fields(ui, Some(&times)),
+            Settings::default(),
+        );
+        h.run();
+        h.get_by_label("10 scans in the shown run");
+        // The row label names the Auto checkbox.
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Deconvolution width")
+            .click();
+        h.run();
+        assert_eq!(h.state().draft.an_deconvolution_width, Some(10.0));
     }
 }

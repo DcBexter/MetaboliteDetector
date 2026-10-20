@@ -91,7 +91,7 @@ fn main() {
     println!("peaks in all traces ({}): {:?}", peaks.len(), t.elapsed());
 
     let t = Instant::now();
-    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
     println!(
         "deconvolution ({} components): {:?}",
         comps.len(),
@@ -106,7 +106,7 @@ fn main() {
         detector: Detector::MATCHED,
         ..PeakSettings::default()
     });
-    let mc = deconvolute(&matched, &m, &DeconvSettings::default());
+    let mc = deconvolute(&matched, &m, &c.scan_times_s, &DeconvSettings::default());
     println!(
         "matched peaks ({}) + deconvolution ({} components): {:?}",
         m.len(),
@@ -137,7 +137,12 @@ fn main() {
         0.05,
         PeakSettings::default().number_bins,
     );
-    let hc = deconvolute(&hr_traces, &hp, &DeconvSettings::default());
+    let hc = deconvolute(
+        &hr_traces,
+        &hp,
+        &hr.scan_times_s,
+        &DeconvSettings::default(),
+    );
     println!(
         "high resolution: traces ({}) {ht:?}, peaks ({}) + reorder + deconvolution ({} components): {:?}",
         hr_traces.len(),
