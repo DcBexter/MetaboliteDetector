@@ -300,6 +300,7 @@ impl App {
         });
         // A click on the plot sets the SIC to the nearest ion.
         if shown.response.clicked()
+            && !shown.response.double_clicked()
             && let Some(at) = shown.inner
             && let Some(ion) = ions
                 .iter()

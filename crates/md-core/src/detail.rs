@@ -71,8 +71,13 @@ pub struct Comparison {
 }
 
 /// Aligns `found` (nominal mass, height) with the library spectrum (m/z rounded to a nominal mass, equal
-/// masses added up) and normalises each by `norm`.
+/// masses added up) and normalises each by `norm`. Without normalisation the base peak is used: the found
+/// heights are detector counts and the library is scaled to 0..999, so raw values cannot be compared.
 pub fn compare(found: &[(u32, u32)], lib: &LibrarySpectrum, norm: Normalization) -> Comparison {
+    let norm = match norm {
+        Normalization::None => Normalization::BasePeak,
+        n => n,
+    };
     let mut f: Vec<(i64, f64)> = found.iter().map(|&(m, h)| (m.into(), h.into())).collect();
     let mut l: Vec<(i64, f64)> = (lib.masses.iter().zip(&lib.values))
         .map(|(m, v)| (m.round() as i64, f64::from(*v)))
@@ -209,10 +214,12 @@ mod tests {
 
     #[test]
     fn csv_has_both_spectra_and_the_difference() {
-        let c = compare(&[(73, 4)], &library(&[73.0], &[1]), Normalization::None);
+        // "None" compares on the base peak: counts and a 0..999 library are not on one scale.
+        let lib = library(&[73.0], &[999]);
+        let c = compare(&[(73, 4000), (147, 2000)], &lib, Normalization::None);
         assert_eq!(
             c.csv_text().lines().collect::<Vec<_>>(),
-            ["m/z,Found,Library,Difference", "73,4,1,3"]
+            ["m/z,Found,Library,Difference", "73,1,1,0", "147,0.5,0,0.5"]
         );
     }
 }
