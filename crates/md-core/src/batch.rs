@@ -11,11 +11,13 @@ mod detail;
 mod edit;
 mod group_stats;
 mod rescan;
+mod samples;
 mod untargeted;
 
 pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
 pub use group_stats::{GroupStats, group_label, group_names, group_stats_path};
 pub use rescan::rescan_runs;
+pub use samples::{SampleGroups, SampleTable, run_key};
 pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
@@ -505,6 +507,9 @@ pub struct TableSettings {
     /// the file name. Runs without a match form a group of their own; an empty pattern puts all runs
     /// in one group.
     pub replicates: String,
+    /// Groups from a sample table; they win over `replicates` for the runs the table names. A run
+    /// it lacks is grouped by `replicates`.
+    pub sample_groups: SampleGroups,
     /// Keep a substance only if some group quantifies it in at least this fraction of its runs.
     pub min_reproducibility: f64,
     /// A value counts only if at least this many of the substance's quant ions were found (at most
@@ -522,6 +527,7 @@ impl Default for TableSettings {
         Self {
             quant: QuantSettings::default(),
             replicates: String::new(),
+            sample_groups: SampleGroups::new(),
             min_reproducibility: 0.0,
             min_ions: 1,
             min_sn: 0.0,
@@ -709,10 +715,11 @@ pub fn table(
             .to_string_lossy()
             .into_owned()
     };
-    let group = |n: &str| match pattern.captures(n) {
+    let group = |n: &str| match (s.sample_groups.get(&run_key(n)), pattern.captures(n)) {
+        (Some(g), _) => g.clone(),
         _ if s.replicates.is_empty() => String::new(),
-        Some(c) => c.get(1).or(c.get(0)).map_or("", |m| m.as_str()).into(),
-        None => n.into(),
+        (_, Some(c)) => c.get(1).or(c.get(0)).map_or("", |m| m.as_str()).into(),
+        (_, None) => n.into(),
     };
     let mut cols: Vec<(String, String, usize, &RunResult)> = runs
         .iter()
@@ -1019,6 +1026,45 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_sample_table_groups_runs_whose_names_do_not() {
+        // 15 runs as in the example data: five time points of three runs, none in the name.
+        let names: Vec<String> = (1..=15).map(|i| format!("run{i:02}.cdf")).collect();
+        let runs: Vec<RunResult> = names.iter().map(|n| run(n, vec![])).collect();
+        let text = std::iter::once("CDF_FILE\tTIME_POINT".to_owned())
+            .chain(
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| format!("{n}\t{}", i % 5)),
+            )
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tab = SampleTable::parse(&text).unwrap();
+        let s = TableSettings {
+            sample_groups: tab.groups(0, 1).unwrap(),
+            ..Default::default()
+        };
+        let t = table(&runs, &[], &[], &s).unwrap();
+        let mut sizes = BTreeMap::new();
+        t.groups
+            .iter()
+            .for_each(|g| *sizes.entry(g.as_str()).or_insert(0) += 1);
+        assert_eq!(
+            sizes,
+            BTreeMap::from([("0", 3), ("1", 3), ("2", 3), ("3", 3), ("4", 3)])
+        );
+        // A run the table lacks falls back to the pattern.
+        let more = [runs, vec![run("extra_9.cdf", vec![])]].concat();
+        let s = TableSettings {
+            replicates: "^([a-z]+)_".into(),
+            ..s
+        };
+        let t = table(&more, &[], &[], &s).unwrap();
+        assert_eq!(t.groups.iter().filter(|g| *g == "extra").count(), 1);
+        assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 3);
     }
 
     /// Two substances of 12 ions each, apart in time (early at 30 s, late at 70 s).

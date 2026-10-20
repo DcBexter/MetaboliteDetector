@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
-    RunResult, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs, settings_path,
-    table,
+    RunResult, SampleTable, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs,
+    settings_path, table,
 };
 use md_core::library;
 use md_core::ri::RiCalibration;
@@ -29,12 +29,16 @@ Options:
   -l, --library FILE          library (required)
   -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
-  -o, --output FILE           CSV file (default: standard output); with --replicates the group of each
+  -o, --output FILE           CSV file (default: standard output); with groups (--replicates, --sample-table) the group of each
                               run goes to FILE.groups.csv and the statistics of the groups (mean, rel.
                               std. error, hits, p-value against a group BLANK, ANOVA) to FILE.groupstats.csv,
                               the settings used to FILE.settings.csv
   -j, --parallel N            runs in memory at once (default 4)
       --replicates REGEX      replicate group = first capture group of the file name
+      --sample-table FILE     replicate groups from a CSV/TSV table (first line = column names); runs it
+                              lacks are grouped by --replicates
+      --sample-file-column N  column with the run file names (default: the first)
+      --sample-group-column N column with the group (default: the second)
       --min-reproducibility F keep a substance only if a group quantifies it in this share of its runs
       --min-ions N            quant ions that must be found for a value
       --ions N                quant ions per substance (default: QUANT_ION_NUMBER of the settings)
@@ -58,6 +62,9 @@ struct Args {
     output: Option<PathBuf>,
     parallel: usize,
     replicates: String,
+    sample_table: Option<PathBuf>,
+    sample_file_column: Option<String>,
+    sample_group_column: Option<String>,
     min_reproducibility: Option<f64>,
     min_ions: Option<usize>,
     ions: Option<usize>,
@@ -104,6 +111,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         output: None,
         parallel: 4,
         replicates: String::new(),
+        sample_table: None,
+        sample_file_column: None,
+        sample_group_column: None,
         min_reproducibility: None,
         min_ions: None,
         ions: None,
@@ -150,6 +160,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "-o" | "--output" => a.output = Some(value()?.into()),
             "-j" | "--parallel" => a.parallel = num(1.0, 64.0)? as usize,
             "--replicates" => a.replicates = text()?,
+            "--sample-table" => a.sample_table = Some(value()?.into()),
+            "--sample-file-column" => a.sample_file_column = Some(text()?),
+            "--sample-group-column" => a.sample_group_column = Some(text()?),
             "--min-reproducibility" => a.min_reproducibility = Some(num(0.0, 1.0)?),
             "--min-ions" => a.min_ions = Some(num(1.0, 20.0)? as usize),
             "--ions" => a.ions = Some(num(1.0, 20.0)? as usize),
@@ -170,6 +183,11 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
     a.library = library.ok_or("--library is required")?;
     if a.runs.is_empty() {
         return Err("no runs given".into());
+    }
+    if a.sample_table.is_none()
+        && (a.sample_file_column.is_some() || a.sample_group_column.is_some())
+    {
+        return Err("--sample-file-column and --sample-group-column need --sample-table".into());
     }
     if a.ion_integrals && a.output.is_none() {
         return Err("--ion-integrals needs -o".into());
@@ -203,6 +221,21 @@ fn run(a: Args) -> Result<bool, String> {
         replicates: a.replicates,
         ..Default::default()
     };
+    if let Some(p) = &a.sample_table {
+        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let t = SampleTable::parse(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+        let col = |name: &Option<String>, default| match name {
+            Some(n) => t.column(n),
+            None => Ok(default),
+        };
+        let (file, group) = (
+            col(&a.sample_file_column, 0)?,
+            col(&a.sample_group_column, 1)?,
+        );
+        ts.sample_groups = t
+            .groups(file, group)
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+    }
     ts.quant.ion_number = a.ions.unwrap_or(ts.quant.ion_number);
     ts.quant.min_dist = a.min_dist.unwrap_or(ts.quant.min_dist);
     ts.quant.quality_cutoff = a.quality_cutoff.unwrap_or(ts.quant.quality_cutoff);
@@ -487,6 +520,28 @@ mod tests {
         assert!(fails(&calib));
         std::fs::remove_file(dir.join("lib.msl")).unwrap();
         assert!(fails(&line));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_sample_table_sets_the_groups() {
+        let dir = std::env::temp_dir().join(format!("md-cli-samples-{}", std::process::id()));
+        let line = study(&dir);
+        let table = dir.join("samples.txt");
+        std::fs::write(&table, "NOTE\tCDF_FILE\tTIME_POINT\nx\tctrl_1.CDF\t5\n").unwrap();
+        let with = |opts: &str| format!("{line} --sample-table {} {opts}", table.display());
+        // The table wins over --replicates for the runs it names; the columns are chosen by name.
+        let cols = "--sample-file-column cdf_file --sample-group-column TIME_POINT";
+        assert!(run(args(&with(cols)).unwrap().unwrap()).unwrap());
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,5\n");
+        // Without names the first two columns are used; NOTE names no run, so the pattern applies.
+        assert!(run(args(&with("")).unwrap().unwrap()).unwrap());
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,ctrl\n");
+        let err = run(args(&with("--sample-group-column nope")).unwrap().unwrap()).unwrap_err();
+        assert!(err.contains("no column nope"), "{err}");
+        assert!(args(&format!("{line} --sample-group-column x")).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

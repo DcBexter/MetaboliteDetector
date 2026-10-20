@@ -54,7 +54,7 @@ These are the views the old main window shows at all times.
 
 - **RI Calibration Wizard**: introduction → reference chromatogram (alkane mix) / RT-only option → calibration mix from library → advanced settings (calibration compound, required score) → table RT↔RI → chromatogram selection → compound detection (only if needed) → start. New: one window with all the parts; the order of steps is not shown.
 - **Compound Detection Wizard**: chromatogram selection → detection settings → start. New: Batch option "Save components as .cmp".
-- **Batch Quantification Wizard**: replicate groups (manual, auto-regex `_(.*)_`), blanks → targeted / non-targeted → settings → start. New: Batch window; replicate groups only through a regex (#245 covers a sample table).
+- **Batch Quantification Wizard**: replicate groups (manual, auto-regex `_(.*)_`), blanks → targeted / non-targeted → settings → start. New: Batch window; replicate groups through a regex or a sample table.
 - **MID Wizard**: method (sum formula / reference / library / uncorrected) → labeled / unlabeled chromatograms → settings. New: MID window.
 
 ## 5. Not yet covered by any issue

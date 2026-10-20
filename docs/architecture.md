@@ -340,6 +340,8 @@ rescan:
   `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
   cell is the summed integral of the quant ions found in that run.
 - **Replicate groups**: the first capture group (else the whole match) of a regex on the file name.
+  A sample table (`SampleTable`, CSV/TSV; file name → group; extension and case do not matter) wins for the
+  runs it names; the CLI takes it with `--sample-table`, `--sample-file-column` and `--sample-group-column`.
 - **Filters**: minimum quant ions found per cell, minimum reproducibility (share of runs in a group),
   minimum S/N of an ion and maximum discrepancy index (mean peak quality of the ions of a cell). A
   substance without any value left drops out of the table.

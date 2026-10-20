@@ -12,8 +12,8 @@ use crate::settings::row;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    Completed, Found, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
-    scan_runs, table,
+    Completed, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference, Table,
+    TableSettings, complete_scan, run_key, scan_runs, table,
 };
 use md_core::batch::{
     cell_ions, group_label, group_names, group_stats_path, hit_list, ions_path, settings_path,
@@ -199,6 +199,8 @@ pub struct Batch {
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     pub settings: TableSettings,
+    /// The sample table behind `settings.sample_groups`.
+    samples: Option<Samples>,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
     /// Whether the search is by retention time only (Analysis → RI calibration).
@@ -220,6 +222,111 @@ pub struct Batch {
     note: String,
     /// FRAG export being written; its note replaces `note` when done.
     frag_job: Option<mpsc::Receiver<String>>,
+}
+
+/// A loaded sample table and the two columns that give run and group.
+struct Samples {
+    table: SampleTable,
+    file: usize,
+    group: usize,
+    error: Option<String>,
+}
+
+impl Samples {
+    /// Reads the chosen columns into `groups`; a bad table leaves no groups.
+    fn apply(&mut self, groups: &mut SampleGroups) {
+        match self.table.groups(self.file, self.group) {
+            Ok(g) => (*groups, self.error) = (g, None),
+            Err(e) => (*groups, self.error) = (SampleGroups::new(), Some(e)),
+        }
+    }
+}
+
+/// "Groups from table": replicate groups from a CSV/TSV table of file name → group, for runs whose
+/// names do not tell them. Runs the table lacks keep the pattern's group.
+fn samples_row(
+    ui: &mut egui::Ui,
+    samples: &mut Option<Samples>,
+    groups: &mut SampleGroups,
+    paths: &[PathBuf],
+    note: &mut String,
+) {
+    let hint = "Load a CSV, TSV or semicolon table with a column of run file names and a column \
+                with the replicate group (e.g. samples.txt: CDF_FILE, TIME_POINT). It wins over \
+                the pattern for the runs it names; other runs keep the pattern's group.";
+    ui.label("Replicate groups from table").on_hover_text(hint);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Table…").on_hover_text(hint).clicked()
+            && let Some(p) = rfd::FileDialog::new()
+                .add_filter("Sample table", &["txt", "tsv", "csv"])
+                .pick_file()
+        {
+            match std::fs::read_to_string(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|t| SampleTable::parse(&t))
+            {
+                Ok(table) => {
+                    let group = 1.min(table.columns.len() - 1);
+                    let mut s = Samples {
+                        table,
+                        file: 0,
+                        group,
+                        error: None,
+                    };
+                    s.apply(groups);
+                    *samples = Some(s);
+                }
+                Err(e) => *note = format!("{}: {e}", p.display()),
+            }
+        }
+        let Some(s) = samples else { return };
+        let mut changed = false;
+        let cols = [
+            (
+                "File column",
+                "Column with the run file names.",
+                &mut s.file,
+            ),
+            (
+                "Group column",
+                "Column with the replicate group.",
+                &mut s.group,
+            ),
+        ];
+        for (label, hover, col) in cols {
+            egui::ComboBox::from_label(label)
+                .selected_text(&s.table.columns[*col])
+                .show_ui(ui, |ui| {
+                    for (i, c) in s.table.columns.iter().enumerate() {
+                        changed |= ui.selectable_value(col, i, c).changed();
+                    }
+                })
+                .response
+                .on_hover_text(hover);
+        }
+        if changed {
+            s.apply(groups);
+        }
+        match &s.error {
+            Some(e) => {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            None => {
+                let found = (paths.iter())
+                    .filter(|p| groups.contains_key(&run_key(&p.to_string_lossy())))
+                    .count();
+                ui.label(format!("{found} of {} runs in the table", paths.len()));
+            }
+        }
+        if ui
+            .button("Remove")
+            .on_hover_text("Forget the table; the groups come from the pattern again.")
+            .clicked()
+        {
+            (*samples, *groups) = (None, SampleGroups::new());
+        }
+    });
+    ui.end_row();
 }
 
 /// "Save components as .cmp": off, next to each run, or into a chosen folder.
@@ -269,6 +376,7 @@ impl Default for Batch {
                 save_cmp: None,
             },
             settings: TableSettings::default(),
+            samples: None,
             applied: GcmsSettings::default(),
             rt_only: false,
             job: None,
@@ -461,6 +569,13 @@ impl Batch {
                 "Group = first capture group, else the whole match. A file without a match is a \
                  group of its own, so it passes any reproducibility filter. Empty: one group.",
                 egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
+            );
+            samples_row(
+                ui,
+                &mut self.samples,
+                &mut s.sample_groups,
+                &self.paths,
+                &mut self.note,
             );
             row(
                 ui,
