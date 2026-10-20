@@ -4,6 +4,7 @@
 
 use std::io::Read;
 use std::ops::RangeInclusive;
+use std::path::Path;
 use std::sync::mpsc;
 
 use crate::layout::ToolWindow;
@@ -18,12 +19,49 @@ use crate::{Run, spawn};
 /// What the components of a run were computed with.
 pub type Key = (PeakSettings, DeconvSettings);
 
+/// The old Appearance options (QSettings `GUI/axes_label` and `GUI/peak_label`, both on by default).
+/// They only change the drawing, so they apply at once.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Appearance {
+    /// Axis titles of the plots.
+    pub axes_labels: bool,
+    /// The m/z of the highest peaks in view of the spectrum.
+    pub peak_labels: bool,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            axes_labels: true,
+            peak_labels: true,
+        }
+    }
+}
+
+/// How many of the highest peaks in view get a label (old `SpectrumPlot`: 5).
+pub const LABELLED_PEAKS: usize = 5;
+
+/// A library the user wants to choose from the Settings window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pick {
+    Library,
+    Nist,
+}
+
+/// (LS_USE_SPEC, LS_USE_RI) and the name of each score choice of the old dialog.
+const SCORES: [(bool, bool, &str); 3] = [
+    (true, true, "Combined"),
+    (true, false, "Spectrum"),
+    (false, true, "RI"),
+];
+
 #[derive(Default)]
 pub struct Settings {
     /// In use: new runs open with it and open runs are re-analysed to match it.
     pub applied: GcmsSettings,
     /// Being edited in the dialog until "Apply".
     draft: GcmsSettings,
+    pub appearance: Appearance,
     pub open: bool,
     note: Option<Result<String, String>>,
 }
@@ -123,19 +161,70 @@ impl Settings {
         error
     }
 
-    pub fn window(&mut self, ctx: &egui::Context) {
+    /// The window; `libraries` are the paths of the open compound and NIST library. Returns the
+    /// library the user wants to choose.
+    pub fn window(&mut self, ctx: &egui::Context, libraries: [Option<&Path>; 2]) -> Option<Pick> {
         let mut open = self.open;
+        let mut pick = None;
         egui::Window::new("Settings")
             .tool_window(ctx, 0, [560.0, 680.0])
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 60.0)
-                    .show(ui, |ui| self.fields(ui));
+                    .show(ui, |ui| {
+                        pick = self.libraries(ui, libraries);
+                        self.fields(ui);
+                    });
                 ui.separator();
                 self.buttons(ui);
             });
         self.open = open;
+        pick
+    }
+
+    /// Libraries and appearance: they take effect at once, without "Apply".
+    fn libraries(&mut self, ui: &mut egui::Ui, paths: [Option<&Path>; 2]) -> Option<Pick> {
+        let mut pick = None;
+        ui.strong("Libraries");
+        egui::Grid::new("libraries").num_columns(3).show(ui, |ui| {
+            for (name, path, which, hint) in [
+                (
+                    "Compound library",
+                    paths[0],
+                    Pick::Library,
+                    "Components are identified against it. Opened again at the next start.",
+                ),
+                (
+                    "NIST library",
+                    paths[1],
+                    Pick::Nist,
+                    "Used by \"NIST search\" on the selected component. Opened again at the next start.",
+                ),
+            ] {
+                ui.label(name).on_hover_text(hint);
+                match path {
+                    Some(p) => ui.label(p.display().to_string()),
+                    None => ui.weak("none"),
+                };
+                if ui.button("Choose…").on_hover_text(hint).clicked() {
+                    pick = Some(which);
+                }
+                ui.end_row();
+            }
+        });
+        ui.add_space(8.0);
+        ui.strong("Appearance");
+        let a = &mut self.appearance;
+        ui.checkbox(&mut a.axes_labels, "Axes labels").on_hover_text(
+            "Axis titles on the spectrum, the Detected Peaks plot and the y axis of the chromatograms",
+        );
+        ui.checkbox(&mut a.peak_labels, "Label highest peaks")
+            .on_hover_text(format!(
+                "The {LABELLED_PEAKS} highest peaks in view of the spectrum show their m/z"
+            ));
+        ui.add_space(8.0);
+        pick
     }
 
     fn buttons(&mut self, ui: &mut egui::Ui) {
@@ -364,19 +453,34 @@ impl Settings {
                 "Factor for peaks without a partner in the other spectrum.",
                 num(&mut d.ls_scale_factor_no_match, ANY),
             );
-            row(
-                ui,
-                "Use RI score",
-                "LS_USE_RI",
-                "The RI score counts in the overall score.",
-                egui::Checkbox::without_text(&mut d.ls_use_ri),
+            let hint = explain(
+                "What the overall score is made of. Combined: spectrum score^(2/3) × RI score^(1/3).",
+                "LS_USE_SPEC and LS_USE_RI",
             );
+            let label = ui.label("Score").on_hover_text(&hint);
+            let now = (d.ls_use_spec, d.ls_use_ri);
+            // An old file can switch both off: then every hit scores 1.
+            let name = (SCORES.iter().find(|m| (m.0, m.1) == now))
+                .map_or("None (every hit scores 1)", |m| m.2);
+            egui::ComboBox::from_id_salt("score")
+                .selected_text(name)
+                .show_ui(ui, |ui| {
+                    for (spec, ri, name) in SCORES {
+                        if ui.selectable_label(now == (spec, ri), name).clicked() {
+                            (d.ls_use_spec, d.ls_use_ri) = (spec, ri);
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text(hint);
+            ui.end_row();
             row(
                 ui,
-                "Use spectrum score",
-                "LS_USE_SPEC",
-                "The spectrum score counts in the overall score.",
-                egui::Checkbox::without_text(&mut d.ls_use_spec),
+                "Cutoff score",
+                "LS_CUTOFF",
+                "A hit below this overall score counts as no match: in the component list, Find substance and the batch.",
+                num(&mut d.ls_cutoff, 0.0..=1.0),
             );
             row(
                 ui,
@@ -404,10 +508,37 @@ impl Settings {
         );
 
         ui.add_space(8.0);
-        egui::CollapsingHeader::new("Stored in the file, not used yet").show(ui, |ui| {
+        ui.strong("Centroiding (export)");
+        egui::Grid::new("centroid").num_columns(2).show(ui, |ui| {
+            let used = "Finds the peaks of a profile spectrum when it is exported as centroids.";
+            for (name, key, v) in [
+                (
+                    "Centroid: peak start",
+                    "SF_CENTROID_THRESHOLD_BEGIN",
+                    &mut d.sf_centroid_threshold_begin,
+                ),
+                (
+                    "Centroid: peak end",
+                    "SF_CENTROID_THRESHOLD_END",
+                    &mut d.sf_centroid_threshold_end,
+                ),
+                (
+                    "Centroid: baseline deviation",
+                    "SF_CENTROID_MAX_BASE_DEV",
+                    &mut d.sf_centroid_max_base_dev,
+                ),
+            ] {
+                row(ui, name, key, used, num(v, ANY));
+            }
+        });
+
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("Stored in the file, not used").show(ui, |ui| {
             let unused = "Kept in the settings file; this version does not use it.";
+            // RE of 3.3 (docs/reverse-engineering/algorithms.md §4b.4): only saved and shown there too.
+            let dead = "Kept in the settings file; 3.3 does not use it either.";
             egui::Grid::new("stored").num_columns(2).show(ui, |ui| {
-                let stored: [(&str, &str, &mut f64); 10] = [
+                for (name, key, v) in [
                     (
                         "Spectrum filter: peak start",
                         "SF_PEAK_THRESHOLD_BEGIN",
@@ -423,22 +554,17 @@ impl Settings {
                         "SF_MAX_BASE_DEV",
                         &mut d.sf_max_base_dev,
                     ),
-                    ("Spectrum filter: FWHM", "SF_FWHM", &mut d.sf_fwhm),
-                    (
-                        "Centroid: peak start",
-                        "SF_CENTROID_THRESHOLD_BEGIN",
-                        &mut d.sf_centroid_threshold_begin,
-                    ),
-                    (
-                        "Centroid: peak end",
-                        "SF_CENTROID_THRESHOLD_END",
-                        &mut d.sf_centroid_threshold_end,
-                    ),
-                    (
-                        "Centroid: baseline deviation",
-                        "SF_CENTROID_MAX_BASE_DEV",
-                        &mut d.sf_centroid_max_base_dev,
-                    ),
+                ] {
+                    row(ui, name, key, dead, num(v, ANY));
+                }
+                row(
+                    ui,
+                    "Spectrum filter: FWHM",
+                    "SF_FWHM",
+                    "3.3 centroids with the points at or above this share of a peak's maximum; this version always uses 0.5.",
+                    num(&mut d.sf_fwhm, ANY),
+                );
+                let stored: [(&str, &str, &mut f64); 3] = [
                     (
                         "Peak baseline deviation",
                         "AN_MAX_BASE_DEV",
@@ -469,7 +595,7 @@ impl Settings {
                     ui,
                     "Use scaled library",
                     "LS_USE_SCALED_LIB",
-                    unused,
+                    dead,
                     egui::Checkbox::without_text(&mut d.ls_use_scaled_lib),
                 );
                 row(

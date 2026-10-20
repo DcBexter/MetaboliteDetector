@@ -1,7 +1,7 @@
 //! Central panel: trace selection, TIC/SIC plots, scan cursor and the spectrum below them.
 
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
+use egui_plot::{Bar, BarChart, Line, Plot, PlotPoint, Points, Text, VLine};
 
 use crate::plot_export::Area;
 use md_core::decimate;
@@ -361,6 +361,9 @@ impl App {
         let height = ((ui.available_height() - gap) / plots).max(64.0);
         let mut clicked = None;
         let top = ui.cursor().min;
+        // The old "Axes labels" switch hides the y titles of the chromatograms.
+        let axes = self.settings.appearance.axes_labels;
+        let y_title = |label: String| if axes { label } else { String::new() };
         if self.trace != Trace::Sic {
             // Components of the active run as dots on its TIC; not on the derivative, whose y differs.
             let marks: Vec<[f64; 2]> = run
@@ -382,7 +385,7 @@ impl App {
             clicked = trace_plot(
                 ui,
                 ("tic", reset, self.view.nav),
-                &self.derivative_label("TIC".into()),
+                &y_title(self.derivative_label("TIC".into())),
                 height,
                 &self.runs,
                 &self.view,
@@ -394,7 +397,7 @@ impl App {
         }
         if self.trace != Trace::Tic {
             let label = format!("SIC m/z {} ± {}", self.mz, self.tolerance);
-            let label = self.derivative_label(label);
+            let label = y_title(self.derivative_label(label));
             let sic = trace_plot(
                 ui,
                 (
@@ -509,9 +512,21 @@ impl App {
                 (mz.clone(), vec![chart])
             }
         };
-        let mut plot = Plot::new("spectrum")
-            .x_axis_label("m/z")
-            .y_axis_label(format!("{label} — {}", run.name));
+        let look = self.settings.appearance;
+        let mut plot = Plot::new("spectrum");
+        if look.axes_labels {
+            plot = plot
+                .x_axis_label("m/z")
+                .y_axis_label(format!("{label} — {}", run.name));
+        }
+        // The old caption marks the found spectrum only, also when the library one is drawn below it.
+        let labelled: Vec<(f64, f64)> = match (&cmp, mode) {
+            (_, detail::Mode::Difference) => Vec::new(),
+            (Some((c, _)), detail::Mode::Split) => {
+                c.mz.iter().copied().zip(c.found.clone()).collect()
+            }
+            _ => mz.iter().copied().zip(y.iter().copied()).collect(),
+        };
         if mode != detail::Mode::Normal {
             plot = plot.legend(egui_plot::Legend::default());
         }
@@ -525,6 +540,15 @@ impl App {
             }
             for chart in charts {
                 p.bar_chart(chart);
+            }
+            if look.peak_labels {
+                let b = p.plot_bounds();
+                for (m, v) in highest_in_view(&labelled, b.min()[0], b.max()[0]) {
+                    // No name: a named item would get a legend row. The f32 masses print without widening noise.
+                    let text = Text::new("", PlotPoint::new(m, v), format!("{}", m as f32))
+                        .anchor(egui::Align2::CENTER_BOTTOM);
+                    p.text(text);
+                }
             }
             p.pointer_coordinate()
         });
@@ -544,9 +568,35 @@ impl App {
     }
 }
 
+/// Old `SpectrumPlot::plotPeakLabels`: the `LABELLED_PEAKS` highest peaks with m/z in `lo..=hi`,
+/// as (m/z, intensity).
+fn highest_in_view(peaks: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
+    let mut shown: Vec<(f64, f64)> = (peaks.iter().copied())
+        .filter(|(m, v)| (lo..=hi).contains(m) && *v > 0.0)
+        .collect();
+    shown.sort_by(|a, b| b.1.total_cmp(&a.1));
+    shown.truncate(crate::settings::LABELLED_PEAKS);
+    shown
+}
+
 #[cfg(test)]
 mod tests {
     use crate::App;
+
+    #[test]
+    fn labels_go_to_the_highest_peaks_in_view() {
+        let peaks = [(73.0, 50.0), (147.0, 90.0), (200.0, 10.0), (300.0, 99.0)];
+        assert_eq!(
+            super::highest_in_view(&peaks, 0.0, 250.0),
+            [(147.0, 90.0), (73.0, 50.0), (200.0, 10.0)]
+        );
+        let many: Vec<(f64, f64)> = (1..=8).map(|i| (f64::from(i), f64::from(i))).collect();
+        let top = super::highest_in_view(&many, 0.0, 100.0);
+        assert_eq!(
+            top.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [8.0, 7.0, 6.0, 5.0, 4.0]
+        );
+    }
 
     #[test]
     fn a_click_snaps_to_the_nearest_component_within_the_radius() {

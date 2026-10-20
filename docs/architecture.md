@@ -326,7 +326,7 @@ Conscious deviations:
   no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
   yields the same assignments above it, because the greedy assignment takes pairs in descending score.
 - **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
-- `LS_USE_SCALED_LIB` and the Wave score variants are not ported (semantics unknown, §5.9).
+- The Wave score variants are not ported (§5.9). `LS_USE_SCALED_LIB` is only stored: 3.3 reads it nowhere either (§4b.4).
   `LS_IDENTIFICATION_ALGORITHM` is not ported either: the old app never writes it, so only algorithm 0 (the
   ported one) runs there (file-formats.md §5).
 - **Settings are not kept between sessions.** The old app stores the NIST path (`rc_lib_nist_file`) and the
@@ -741,9 +741,13 @@ file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because 
 one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
 every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
 (not decoded). `LS_CUTOFF`, `AN_MIN_HEIGHT_BP`, `AN_MODELED_VALUES_FOR_INTEGRATION` and `LS_MASS_FILTER`
-are not in the old file; loading keeps their current value. `SF_*`, `AN_MAX_BASE_DEV`, `LS_RESOLUTION`,
-`LS_USE_SCALED_LIB` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are stored and shown, but
-no step reads them yet. The GUI searches with cutoff 0 (§5.8), so `LS_CUTOFF` has no effect there.
+are not in the old file; loading keeps their current value. `SF_CENTROID_*` steer the centroid export.
+`SF_PEAK_*`, `SF_MAX_BASE_DEV` and `LS_USE_SCALED_LIB` are dead in 3.3 too (algorithms.md §4b.4); they and
+`SF_FWHM`, `AN_MAX_BASE_DEV`, `LS_RESOLUTION` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are
+stored and shown, but no step reads them yet. The search runs with cutoff 0 like the old GUI (§5.8);
+`LS_CUTOFF` then decides which assigned hit counts as a match in the component list, Find substance and the
+batch. The Settings window also chooses the two libraries and holds the old Appearance switches (axis
+titles, m/z labels on the 5 highest peaks in view), which apply at once.
 
 In the app (`crates/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
 Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
@@ -774,8 +778,8 @@ First start (no `app.ron`): the old 3.3 settings are imported once and the Setti
 20). `AN_BP_HEIGHT` and `MASS_FILTER` are read as `AN_MIN_HEIGHT_BP` and `LS_MASS_FILTER` (Inferred: same
 meaning and default); non-empty old range lists are not decoded. `rc_lib_file`, `rc_lib_nist_file` and
 `rc_open_file` become the libraries and the first recent run, `[GUI] size` the window size; other
-`[Algorithm]` keys (`LS_CUTOFF`, `baseline_correction`, `rc_*`) are kept for later versions, the
-`[GUI]` window state blobs are not.
+`[Algorithm]` keys (`baseline_correction`, `rc_*`) are kept for later versions, `LS_CUTOFF` and
+`[GUI] axes_label`/`peak_label` are read, the `[GUI]` window state blobs are not.
 
 ## Updates
 

@@ -546,12 +546,12 @@ fn result_table_of_a_real_run() {
         .collect();
     let s = SearchSettings::default();
     let id = map_compounds_to_library(&comps, None, &PreparedLibrary::new(&lib, &s), &s);
-    let rows = result_rows(&comps, &c.scan_times_s, None, &masses, &id, &lib);
+    let rows = result_rows(&comps, &c.scan_times_s, None, &masses, &id, &lib, s.cutoff);
     assert_eq!(rows.len(), comps.len());
     for (i, r) in rows.iter().take(3).enumerate() {
         assert_eq!(r.name, format!("Substance {i}"));
         assert!(r.overall.unwrap() > 0.99 && r.area.unwrap() > 0.0, "{r:?}");
-        assert_eq!(find_substance(&id, &lib, i)[0].0, i);
+        assert_eq!(find_substance(&id, &lib, i, s.cutoff)[0].0, i);
     }
     let mut csv = Vec::new();
     write_csv(&mut csv, &rows).unwrap();

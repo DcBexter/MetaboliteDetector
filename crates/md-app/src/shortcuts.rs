@@ -62,7 +62,8 @@ impl App {
             }
             Action::ExportCsv => {
                 if let Some(run) = self.runs.get(self.active) {
-                    self.results.export_csv(run, self.ri.for_run(run));
+                    let cutoff = self.settings.applied.ls_cutoff;
+                    self.results.export_csv(run, self.ri.for_run(run), cutoff);
                 }
             }
             Action::AddToLibrary => self.add_component_to_library(ctx),

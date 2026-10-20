@@ -560,6 +560,35 @@ The export uses width 1. An empty spectrum gives an empty spectrum ("Creating em
 - `Spectrum::getCentroidSpectrum(type)` (0x600ffc) chooses between these two by `CentroidIntensityType` and data type: data that is already centroid (DataType 2) is copied. The rewrite has no data type, so a centroid export of such a run centroids it again.
 - The old export also takes `reorderPeaks` for non-CDF runs (§4.2, `IonTraces::exact`); that is a separate analysis step, not part of the export.
 
+### 4b.4 Which of the Settings dialog's spectrum and appearance options 3.3 reads (objdump + c++filt; Observed)
+
+Every reader of the setting's global (data addresses in `.data`/`.bss`), found by its address in the disassembly (#254):
+
+| Setting | Global | Read by |
+|---|---|---|
+| `SF_PEAK_THRESHOLD_BEGIN/END`, `SF_MAX_BASE_DEV` | 0xcc20a8.. | `MainWindow::saveSettings/readSettings`, `GCMSSettings::toStream/fromStream/getGCMSSettingsObject` only; not even `SettingsDialog`. Dead. |
+| `SF_FWHM` | 0xcc20c0.. | `SettingsDialog`; every `Spectrum<..>::getCentroidSpectrum` (0x600ffc ..) and `SpectrumFunctions::determineCentroid<..>` (0x5dfeb6, 0x6421bc, 0x6424e6, 0x65ad6c): the share of the peak maximum the centroid points must reach (§4b.1 uses 0.5, the default); `TOFCalibrationWindow::on_b_centroid_clicked`; `CalibrationSetter`. |
+| `SF_CENTROID_THRESHOLD_BEGIN/END/MAX_BASE_DEV` | ..0xcc20d8 | `NetCDFExporter::startExport` (0x3e41de), `CSVChromatogramExporter::startExport` (0x4c705e), `FastFlightImporter` ctor (0x6c47f0), `CalibrationSetter::on_b_cdf_convert_clicked`, `SettingsDialog`. |
+| `LS_USE_SCALED_LIB` | 0xcc2154 | save/read/toStream/fromStream/getGCMSSettingsObject/`SettingsDialog` only. Dead: the `LibrarySearch` ctor flag of §5.6 does not come from it. |
+| `LS_CUTOFF` | 0xcc2130 | `DataTableModel::getData` (0x4c88a2), `CompoundMapper::findCompound` (0x4b6ca0), `BatchQuantificator::startAnalysis/createLibrary`, `SQLLibrary::getLibraryHits`, `SettingsDialog` (§5.8). |
+| `baseline_correction` (QSettings key, no file field) | 0xccbdb0 (`.bss`, so false until read) | `GCMSScanLoader::loadGCMSDiskScan` (0x4e0d94) passes it to the `GCMSMemoryScan(path, listener, bool)` and `GCMSDiskScan(path, bool, bool, listener*)` ctors; `showSettingsDialog` sets it on the open scan (virtual call). |
+
+Baseline correction: `DataProvider<int,float>::baselineCorrection` (0x642af0) subtracts `(int)` of the scan's first
+`BaselineStatistics` field (its mean) from every value of the scan. Only type-1 caches (FastFlight compressed profile) store
+non-zero statistics; CDF and type-2 caches store zeros, so the switch does nothing for them. The rewrite's `diskscan.rs`
+skips the per-scan statistics, so it differs only for type-1 caches with a non-zero mean.
+
+Appearance (`MainWindow::showSettingsDialog` 0x3c0b46; `readSettings`, QSettings group `GUI`, keys `axes_label` and
+`peak_label`, both default true):
+- `axesLabelsEnabled()` goes to `SpectrumPlot::setAxesLabelsEnabled` (axis titles "m/z"/"Intensity" or empty),
+  `ChromatogramPlot::setYAxisLabelEnabled` (both plots) and `CompoundPanel::setAxesLabelsEnabled`.
+- `labelPeaks()` goes to `SpectrumPlot::setPlotPeakCaptionEnabled` and `CompoundPanel::setPeakLabelsEnabled`. On, the plot
+  stores 5 at +0x110, and `plotPeakLabels` writes `QString::number(mz, 'f', 4)` over the 5 highest peaks whose m/z is in
+  the visible x range.
+
+Port (#254): `SF_CENTROID_*`, `LS_CUTOFF` and the two appearance switches are wired; `SF_FWHM` (needs the centroid code of
+`peaks.rs`/`centroid.rs`/`library.rs`) and baseline correction (needs the per-scan mean and trace filling) are follow-ups.
+
 ## 5. Library search and scoring
 
 Template instance `<int,float>`. vtable `LibrarySearch<int,float>` at 0xcb7258 (Observed):
@@ -679,7 +708,7 @@ std::sort(hits) by overall ascending (LibraryHit::operator< 0x62dcbe); std::reve
 - If neither score is enabled, every hit has overall = 1.0 (0xa96c48). If only RI is enabled, overall = ri.
 - When either RI is missing, the "RI" comparison uses corrected RT / 1000 with the same sigma (Observed). The time unit is Inferred to be ms, so the comparison is in seconds.
 - The bin-width branch at 0x626800..0x626a80 has three cases: lib coarser than compound, lib finer than compound, and equal. Their outcome is summarised above (Inferred intent). The exact branch conditions are in the Ghidra output and were not re-verified in objdump.
-- The `LibrarySearch(vector, bool)` ctor builds the pre-scaled cache (createScaledLib 0x62d10c → add2ScaledLib for every entry). The role of LS_USE_SCALED_LIB in that choice is Unknown.
+- The `LibrarySearch(vector, bool)` ctor builds the pre-scaled cache (createScaledLib 0x62d10c → add2ScaledLib for every entry). `LS_USE_SCALED_LIB` does not choose it: no analysis code reads that setting (§4b.4).
 - `AMSLibrary<int,float>::getLibraryHits` (0x62e8f4) is a variant: no rebinning or scaling, filter `ri >= 0` (always true), `overall = s * ri` with no cube root (Observed).
 
 ### 5.7 mapCompoundsToLibrary(comps, cutoff, alternatives*) (0x629526, Ghidra; Observed)
@@ -723,8 +752,8 @@ Ties are broken by pointer order (first strictly greater wins), so tie results a
 - Defaults of all LS_* settings.
 - The exact `Spectrum::getBinnedSpectrum` / `getCentroidCompound` algorithms (0x6019d6, 0x60e212). These were not decompiled.
 - The Wave score variants (vtbl 4/5) and `calculateScore_frag` (vtbl 6): when they are used.
-- `LS_USE_SCALED_LIB` semantics. (`LS_IDENTIFICATION_ALGORITHM` is always 0: file-formats.md §5.)
-- SQLLibrary::getLibraryHits (0x6e306c) reads LS_CUTOFF directly. Not read.
+- `LS_IDENTIFICATION_ALGORITHM` is always 0: file-formats.md §5. (`LS_USE_SCALED_LIB` is dead, §4b.4.)
+- SQLLibrary::getLibraryHits (0x6e306c) reads LS_CUTOFF directly; its use there was not analysed (no SQL library in the rewrite).
 - Whether spectra are guaranteed sorted by ion before 5.3/5.4. They are built from std::map in 4.6, so deconvoluted spectra are sorted (Observed); library spectra are Unknown.
 
 ## 6. RI calibration and RT shift correction
