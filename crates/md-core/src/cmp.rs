@@ -80,6 +80,33 @@ impl CmpCompound {
     }
 }
 
+/// Components saved next to a run (`<run>.cmp`), ordered by apex like `deconvolute`'s callers use
+/// them. None without a file; an error when a component lies outside the run's `scans` scans.
+pub fn saved_components(run: &Path, scans: usize) -> Result<Option<Vec<Component>>, LibraryError> {
+    let path = run.with_extension("cmp");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let mut components: Vec<_> = read_cmp(&path)?
+        .iter()
+        .map(CmpCompound::component)
+        .collect();
+    if let Some(k) = components.iter().find(|k| {
+        k.last_scan as usize >= scans
+            || k.first_scan > k.apex_scan
+            || k.apex_scan > k.last_scan
+            || k.model.len() != (k.last_scan - k.first_scan) as usize + 1
+    }) {
+        return Err(LibraryError::Unsupported(format!(
+            "{}: component at scan {} does not fit a run of {scans} scans",
+            path.display(),
+            k.apex_scan
+        )));
+    }
+    components.sort_by_key(|k| k.apex_scan);
+    Ok(Some(components))
+}
+
 const VERSION: u32 = 4;
 const PEAK_BYTES: usize = 68;
 /// Size of a compound whose lists and strings are all empty: a lower bound per compound.
@@ -362,6 +389,22 @@ mod tests {
         assert_eq!((k.first_scan, k.apex_scan, k.last_scan), (10, 12, 15));
         assert_eq!(k.spectrum, vec![(73, 900), (147, 120)]);
         assert_eq!((k.peaks[1].peak, k.peaks[1].integral), (1, 1234.5));
+    }
+
+    #[test]
+    fn saved_components_next_to_a_run() {
+        let dir = std::env::temp_dir().join(format!("md-core-saved-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = dir.join("run.cdf");
+        assert!(saved_components(&run, 20).unwrap().is_none());
+        write_cmp(dir.join("run.cmp"), &sample()).unwrap();
+        let k = saved_components(&run, 20).unwrap().unwrap();
+        assert_eq!(k.len(), 2);
+        assert!(
+            saved_components(&run, 15).is_err(),
+            "last scan 15 needs 16 scans"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

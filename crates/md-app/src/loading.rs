@@ -18,7 +18,16 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let components = settings::analyze(&data, &key)?;
+                        // Results the old program saved next to the run replace the analysis
+                        // until the settings change.
+                        let saved = md_core::cmp::saved_components(&p, data.scan_count())
+                            .map_err(|e| e.to_string())?;
+                        let components = match saved {
+                            Some(c) => c,
+                            None => settings::analyze(&data, &key)?,
+                        };
+                        let saved_calibration =
+                            md_core::ri::saved_calibration(&p).map_err(|e| e.to_string())?;
                         Ok(Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
@@ -29,6 +38,7 @@ impl App {
                             sic_for: None,
                             sic_job: None,
                             components,
+                            saved_calibration,
                             analysis: settings::Analysis::new(key),
                             scan: 0,
                             component: None,
@@ -51,7 +61,12 @@ impl App {
         );
         self.loading.retain(|(_, rx)| {
             match rx.try_recv() {
-                Ok(Ok(run)) => self.runs.push(run),
+                Ok(Ok(mut run)) => {
+                    if let Some(cal) = run.saved_calibration.take() {
+                        self.ri.set_own(run.path.clone(), cal);
+                    }
+                    self.runs.push(run);
+                }
                 Ok(Err(e)) => self.error = Some(e),
                 Err(mpsc::TryRecvError::Empty) => return true,
                 Err(mpsc::TryRecvError::Disconnected) => self.error = Some("loader crashed".into()),

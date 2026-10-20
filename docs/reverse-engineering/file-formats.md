@@ -41,7 +41,7 @@ Order as implemented by `parse_lbr.py` (validated on all 27 sample compounds, ev
 | # | Type | Meaning | Tag |
 |---|---|---|---|
 | 1 | Spectrum | reference spectrum (see 1.4) | Observed (Spectrum::toStream 0x7027a2, verified by parser) |
-| 2 | Compound | compound header (see section 3) | Observed (Compound::toStream 0x70fcba, verified by parser) |
+| 2 | Compound | compound fields of section 3.2 from #2 on; version 2 has no model peak (#3, reader branch §3.4) and 0 peaks in the sample | Observed (Compound::toStream 0x70fcba, verified by parser) |
 | 3 | u32 count + (f32 mz, i32 intensity)[count] | `comb_spec` (combined spectrum) | Observed (LibraryCompound::toStream 0x71f832, element types Inferred from parser) |
 | 4 | u32 count + (f32, u32)[count] | `ion_freq` (ion frequency map) | Observed (toStream 0x71f832); element types Inferred |
 | 5 | u32 | `spec_count` | Observed (toStream 0x71f832) |
@@ -179,7 +179,7 @@ sample files match the reader).
 | feature count | u32 | then per feature: u32 length + key bytes, u32 length + value bytes. The CDF import writes the 11 ANDI attributes it looks for (`acq_time`, `experiment_type`, `number_of_scans`, ...); missing ones as " " |
 | TOF polynomial | u32 count + f64[count] | `FilteredDataProvider` applies it to the masses; the CDF import writes count 0 |
 | global baseline statistics | 4 x f64 + i64 | zero in the samples; order follows `BaselineStatistics(double, double, double, double, long long)` |
-| RI calibration | `RICalculator::fromStream` (section 4.1) | samples: 0 entries, drt 0.0, name "not calibrated" |
+| RI calibration | `RICalculator::fromStream` (section 4.1) | the run's calibration from the RI wizard; samples: 0 entries, drt 0.0, source "not calibrated" |
 | ion count | u32 | then `ion count * mass size` bytes of distinct masses; the reader skips them with `seekg` |
 | per-scan entries | scan count x 84 bytes | see below |
 
@@ -216,65 +216,80 @@ does that and checks each record header against its index entry.
 
 ## 3. Detected compounds (.cmp)
 
-Symbols: `Compound<int,float>` (header), `Peak<int,float>`, `PeakEssential<float>`, `Peak<double,short>`,
-`PeakEssential<short>`.
+Symbols: `Compound<int,float>`, `Spectrum<int,float>`, `PeakEssential<float>`, `Peak<double,short>`,
+`PeakEssential<short>`, `Peak<int,float>`.
+
+Verified on 15 reference files the old 3.3 binary wrote itself (`tools/golden/make-reference.sh` with
+`MD_RESULTS`, never committed): every field below decodes, every value matches the old program's own
+getters (`raw.tsv`, 9 digits) and `md_core::cmp` writes the payload back byte for byte. The old program
+reads files written by `md_core::cmp` (`make-reference.sh --reread`): rewriting them gives the same payload
+except `time_stamp`, which it also changes when it rereads its own files (Observed).
 
 ### 3.1 File container
 
-- `Compound<int,float>::toDisk(vector<Compound*>, file)` 0x711332 (Observed): opens an `ogzstream`
-  (gzip), calls `compoundsToStream`, closes. So `.cmp` is gzip-compressed.
-- `compoundsToStream(vector<const Compound*>, ostream)` 0x7111d4 (Observed): `u32 version = 4`, `u32 count`,
-  then `Compound::toStream` for each entry. The version is 4 for `.cmp` (the library writer uses 5).
+- `Compound<int,float>::toDisk(vector<Compound*>, file)` 0x711332 (Observed): `ogzstream` (gzip) around
+  `compoundsToStream` 0x7111d4: `u32 version = 4`, `u32 count`, then `Compound::toStream` per compound.
+- No file-level checksum; each spectrum, model peak and compound ends with a u32 check value.
 
-| Offset | Type | Meaning | Tag |
-|---|---|---|---|
-| 0 | u32 | version = 4 | Observed (0x7111d4) |
-| 4 | u32 | compound count | Observed (0x7111d4) |
-| 8 | Compound record x count | | Observed (0x7111d4) |
+### 3.2 Compound record (`Compound<int,float>::toStream` 0x70fcba)
 
-Checksum: there is no file-level checksum. Each compound record ends with a u32 check value (3.2).
+Order from the disassembly (Observed) and byte-verified (Verified):
 
-### 3.2 Compound record (Compound<int,float>::toStream 0x70fcba)
+| # | Type | Meaning |
+|---|---|---|
+| 1 | Spectrum record | `Spectrum<int,float>::toStream` as in `.lbr` (§1.2): u32 scan, f64 rt (ms), f64 ri (-1 without calibration), f32 bin width, u32 n + f32 masses, u32 n + i32 values, u32 check = scan + n |
+| 2 | u32 n + PeakEssential<float>[n] | ion peaks behind the spectrum (`std::map<float, PeakEssential*>`, ascending ion), 68 bytes each (3.3) |
+| 3 | Peak<double,short> | model peak (`unique_ptr`, written unconditionally), 3.3 |
+| 4 | u32 length + bytes | name (no terminator, no encoding) |
+| 5 | i32 n + f64[n] | fwhm list; n = -1 for null |
+| 6 | i32 n + f64[n] | integrals list; n = -1 for null |
+| 7 | u32 n + f32[n] | quant_ions (`std::set<float>`) |
+| 8 | u32 n + f32[n] | auto_quant_ions (`std::set<float>`) |
+| 9 | u32 n + (string, string)[n] | features (`std::map<string,string>`) |
+| 10 | f64 | drt |
+| 11 | i64 | time_stamp (`time_t`) |
+| 12 | i64 | id |
+| 13 | u32 | check = len(quant_ions) + len(features) + len(name bytes) + n peaks (mod 2^32) |
 
-Observed in the earlier decompile of `toStream` (0x70fcba) and cross-checked against all 27 sample
-compounds by `parse_lbr.py` (`read_compound`). The same record appears inside LibraryCompound (section 1.2 #2).
+### 3.3 Peak records
 
-| # | Type | Meaning | Tag |
-|---|---|---|---|
-| 1 | u32 | n_peaks (count of PeakEssential<float> records that follow; 0 in the sample) | Observed (sample), Inferred (layout of n>0) |
-| 2 | string | name | Observed (sample) |
-| 3 | i32 count + f64[count] | fwhm list; count -1 = null | Observed (sample) |
-| 4 | i32 count + f64[count] | integrals list; count -1 = null | Observed (sample) |
-| 5 | u32 count + f32[count] | quant_ions (`std::set<float>`, sorted) | Observed (sample) |
-| 6 | u32 count + f32[count] | auto_quant_ions (`std::set<float>`) | Observed (sample) |
-| 7 | u32 count + (string, string)[count] | features (`std::map<string,string>`) | Observed (sample) |
-| 8 | f64 | drt (`Compound::drt`, offset 376 in DWARF) | Observed (sample), name from DWARF |
-| 9 | i64 | time_stamp (`time_t`, DWARF offset 360) | Observed (sample), name from DWARF |
-| 10 | i64 | id (DWARF offset 368) | Observed (sample), name from DWARF |
-| 11 | u32 | check = (len(quant_ions) + len(features) + len(name bytes) + n_peaks) mod 2^32 | Observed (sample, all 27 match) |
+`PeakEssential<float>::toStream` 0x6f994c (Observed write sizes; field meaning Verified against the getters):
 
-Note: `Compound` members (DWARF): name@120 std::string, features@312 map, time_stamp@360, id@368, drt@376.
+| Offset | Type | Meaning |
+|---|---|---|
+| 0 | f32 | ion (m/z) |
+| 4 | f64 | sharpness |
+| 12 | f64 | integral |
+| 20 | f64 | quality |
+| 28 | f64 | signal to noise |
+| 36 | u32 | count (meaning not recovered; 1 in every sample) |
+| 40 | u32 | first scan |
+| 44 | u32 | last scan |
+| 48 | f64 | model parameter (share of the model peak in the trace) |
+| 56 | u32 | apex scan |
+| 60 | f64 | interpolated (precise) apex scan |
 
-### 3.3 Peak records (only when n_peaks > 0)
+`PeakEssential<short>::toStream` 0x6facfe: the same fields, but the ion is an i16 (66 bytes). The model
+peak's ion is 1 in the samples.
 
-- `Peak<double,short>::toStream` 0x6f66e2 (Observed, earlier pass): `PeakEssential<short>::toStream`, then
-  `i32 nf`, `u32 n`, `f64[n]`, then `u32 check = n + getFirstScan + getLastScan + getMaxScan`.
-- `PeakEssential<short>::toStream` 0x6facfe (Observed, earlier pass): fields in order `ion`, `sharpness`,
-  `integral`, `quality`, `sn`, `count` (uint), `begin`, `end`, `model_parameter`, `max_scan`,
-  `interpolated_max_scan`. Types were not re-checked in this pass.
-- `PeakEssential<float>::toStream` (nm 0x5f994c, Ghidra 0x6f994c) and `Peak<int,float>::toStream` (nm 0x5f3036,
-  Ghidra 0x6f3036): **not decoded**. The `.cmp` peak layout for float peaks is Unknown.
+`Peak<double,short>::toStream` 0x6f66e2: `PeakEssential<short>`, f64 noise factor (`setNoiseFactor`
+writes the same member, offset 0x58), u32 n + f64[n] model values (one per scan from first to last
+scan), u32 check = n + first scan + last scan + apex scan.
 
-### 3.4 Reader
+`Peak<int,float>::toStream` 0x6f3036 (not used by 3.3 `.cmp` files): `PeakEssential<float>`, f64,
+u32 n + i32[n], u32 check = n + first + last + apex scan.
 
-`Compound<int,float>::fromStream(istream&, size_t* version)` 0x7103cc: Ghidra decompile truncated at
-`operator new(0x180)` (Observed: object size 0x180 bytes). `Compound::fromDisk` 0x711896 and
-`compoundsFromStream` 0x711596 are not decoded. The reader order is Inferred to mirror 3.1 and 3.2.
+### 3.4 Reader and versions
+
+`Compound<int,float>::fromStream(istream&, Compound&, version)` 0x712ece (Observed branches): after the
+spectrum it reads the peak count; version > 3 reads `PeakEssential<float>` records and the
+`Peak<double,short>` model peak, version <= 3 reads `Peak<int,float>::fromStream(version)` records and no
+model peak. `md_core::cmp` reads version 4 only and reports other versions as unsupported.
 
 ### Unknowns (section 3)
-- Layout of PeakEssential<float> and Peak<int,float> (needed for n_peaks > 0).
-- Whether the reader checks the version or accepts only version 4.
-- Fields between fwhm and features in the reader if they differ from the writer (not recovered).
+- Layout of `.cmp` versions 1 to 3 (older MetaboliteDetector releases); no sample file.
+- Meaning of the `count` field and of the model peak's ion code.
+- Where the reader sets `time_stamp` to the load time (seen only in its effect).
 
 ---
 
@@ -282,37 +297,29 @@ Note: `Compound` members (DWARF): name@120 std::string, features@312 map, time_s
 
 ### 4.1 RI calibration (.calib): `gcms::RICalculator`
 
-Members: `rt2ri` (`std::map<double,double>`), `drt` (f64), and a `std::string` (name not recovered;
-DWARF lookup not completed).
+Members: `rt2ri` (`std::map<double,double>`), `drt` (f64) and `source` (`std::string`, `getSource`).
+Verified with a calibration the harness built through `RICalculator(name)` and `addCalibrationPair(rt, ri)`
+and saved with `toDisk` and `toStream` (`tools/golden/make-reference.sh`, `MD_RESULTS`): the values are
+stored as given, so the unit is the caller's. The GUI passes spectrum retention times, which are ms.
 
-Binary form, `RICalculator::toStream` 0x7d2fd2 (Observed):
+Binary form, `RICalculator::toStream` 0x7d2fd2 (Verified):
 
 | Offset | Type | Meaning |
 |---|---|---|
 | 0 | u32 | entry count (`rt2ri.size()`) |
-| 4 | f64 rt, f64 ri | repeated count times, in ascending rt order (std::map iteration) |
-| 4 + 16n | f64 | drt |
-| ... | u32 | string length |
-| ... | bytes | string data (raw, no terminator) |
+| 4 | f64 rt (ms), f64 ri | repeated count times, ascending rt (std::map order) |
+| 4 + 16n | f64 | drt (ms) |
+| ... | u32 + bytes | source (no terminator); "not calibrated" in uncalibrated runs |
 
-Text form (the `.calib` file), `RICalculator::toDisk(file)` 0x7d28f0 (Observed for format, Inferred for loop):
-- Opens the file with `ofstream(trunc)`, writes each entry as `<rt>` TAB `<ri>` followed by `endl`.
-- Values are written with the default ostream precision (6 significant digits, Observed: no `setprecision`).
-  The text form is therefore lossy compared with the binary form.
-- The decompile shows only one iteration because Ghidra cut the loop after the no-return `endl` call (Inferred).
-- Throws if the file cannot be opened (Observed: `__cxa_allocate_exception` on failure).
+The binary form is not a file of its own: it sits in the run's `.idx` (§2.3). The RI wizard and the
+calibration setter store a run's calibration there (`CalibrationPage::setDataToChromatogram`,
+`RISetter::recalibrateChromatograms`, `CalibrationSetter::on_b_start_ri_clicked`: `setRICalculator`, then
+`writeIndexFile`; Observed calls). `md_core::diskscan::read_calibration` reads it.
 
-Reader, `RICalculator::fromDisk(file)` 0x7d22ac: clears `rt2ri`, opens the file, reads the first line
-with `getline`, and splits it with `boost::regex("\\s+")` into rt and ri (Observed). The rest of the loop
-is truncated (Inferred: one line per entry, whitespace-separated, blank lines handled by the regex).
-Note: `toDisk` writes TAB, `fromDisk` splits on any whitespace, so both work.
-
-Field table for the text file:
-
-| Column | Type (text) | Meaning |
-|---|---|---|
-| 1 | decimal (6 significant digits) | rt (unit Inferred: min or ms, see unknowns) |
-| 2 | decimal (6 significant digits) | ri |
+Text form (the `.calib` file), `RICalculator::toDisk(file)` 0x7d28f0 (Verified): one line per entry,
+`<rt>` TAB `<ri>` and a newline, default ostream precision (6 significant digits, so `612345.678901`
+becomes `612346` and `1500000` becomes `1.5e+06`). drt and source are not stored. The text form is lossy.
+`fromDisk` 0x7d22ac splits lines on `\s+` (Observed) and reads the harness file back to the same text.
 
 ### 4.2 TOF calibration (.mzcalib)
 
@@ -343,12 +350,9 @@ suggest a line-based `ifstream` reader that parses the keys above (Inferred).
 size in `QSettings("TU-Braunschweig", "TOFCalib")`, group "GUI", key "size" (Observed).
 
 ### Unknowns (section 4)
-- RI unit of rt in `.calib` (min or ms; Inferred from the GUI label "Retention time of displayed spectrum (ms)"
-  and the RI table labels, not verified).
-- Name and meaning of the `std::string` member of RICalculator (DWARF lookup not completed).
 - Exact precision in `.mzcalib` (setRealNumberPrecision argument not recovered).
-- Encoding of both text files.
-- The complete reader for `.mzcalib` and `.calib` (both truncated).
+- Encoding of the text files (ASCII numbers only in `.calib`).
+- The complete reader for `.mzcalib` (truncated).
 
 ---
 
@@ -546,8 +550,8 @@ Unknown; probably the display/export of a compound, not the MSP reader).
 ## Unknowns and gaps (summary)
 
 1. .bin/.idx: DataType enum names; compression thresholds; TOF polynomial use (layout decoded, section 2).
-2. .cmp: PeakEssential<float> and Peak<int,float> layouts; reader details.
-3. .calib: rt unit; RICalculator string member; loop structure of toDisk (Inferred).
+2. .cmp: versions 1 to 3 (no sample); meaning of `count` and of the model peak's ion code.
+3. .calib: encoding only (layout, unit and members verified, section 4.1).
 4. .mzcalib: reader; precision; encoding.
 5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF and SQL_* fields.
 6. LBR: block list meaning (1.3); formulas and mid_sizes; version 5 peak/model layout.

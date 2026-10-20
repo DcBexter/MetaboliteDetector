@@ -230,6 +230,25 @@ impl StoredCalibration {
     }
 }
 
+/// The run's own calibration as the old program left it: `<run>.calib` next to the run, else the one
+/// the old RI wizard stored in `<run>.idx`. None when there is neither or the run is not calibrated.
+pub fn saved_calibration(run: &Path) -> Result<Option<RiCalibration>, CalibError> {
+    let calib = run.with_extension("calib");
+    if calib.is_file() {
+        return RiCalibration::read_calib(calib).map(Some);
+    }
+    let idx = run.with_extension("idx");
+    if !idx.is_file() {
+        return Ok(None);
+    }
+    let stored =
+        crate::diskscan::read_calibration(&idx).map_err(|e| CalibError::Invalid(e.to_string()))?;
+    match stored.points_ms.len() {
+        0 | 1 => Ok(None),
+        _ => stored.calibration().map(Some),
+    }
+}
+
 /// Piecewise linear `y(x)` through `points` (ascending in x after `xy`), extrapolated with the first
 /// or last segment. The old code dereferenced `end()` above the last point (§6.2); here that case
 /// uses the last segment, as the old code does for every other point above the range.
@@ -444,6 +463,17 @@ mod tests {
         let uncalibrated = StoredCalibration::parse(&[0; 16]).unwrap().0;
         assert!(uncalibrated.calibration().is_err());
         assert!(StoredCalibration::parse(&[0xff; 16]).is_err());
+    }
+
+    #[test]
+    fn saved_calibration_next_to_a_run() {
+        let dir = std::env::temp_dir().join(format!("md-core-saved-cal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = dir.join("run.cdf");
+        assert!(saved_calibration(&run).unwrap().is_none());
+        std::fs::write(dir.join("run.calib"), alkanes().to_calib()).unwrap();
+        assert_eq!(saved_calibration(&run).unwrap(), Some(alkanes()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -120,6 +120,8 @@ struct Run {
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
     /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
+    /// Calibration saved with the run by the old program, handed to the calibration window on load.
+    saved_calibration: Option<md_core::ri::RiCalibration>,
     analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
