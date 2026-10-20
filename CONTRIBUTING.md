@@ -12,3 +12,5 @@ New crates go under `crates/` and inherit versions, dependencies and lints from 
 Code analysis runs in CI ([docs/architecture.md](docs/architecture.md#code-analysis)). A maintainer sets it up
 once: switch off Automatic Analysis in SonarQube Cloud (Administration → Analysis Method) and add a
 SonarQube Cloud token as the repository secret `SONAR_TOKEN`.
+
+Open Sonar issues of main, or of pull request N: `scripts/sonar-open.sh [N]` (needs Node, no token).
