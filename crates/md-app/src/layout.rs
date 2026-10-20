@@ -98,7 +98,7 @@ mod tests {
         let mut run = results::tests::run();
         (run.name, run.component) = ("a_long_run_name_from_the_lab_01".into(), Some(0));
         run.analysis = settings::Analysis::new(app.settings.key());
-        let lib = run.ident.as_ref().unwrap().0.0.clone();
+        let settings = md_core::search::SearchSettings::default();
         app.runs.push(run);
         // Enough runs that the run list scrolls.
         for i in 0..80 {
@@ -106,27 +106,44 @@ mod tests {
             more.name = format!("run_{i:02}");
             app.runs.push(more);
         }
+        // Enough substances that the statistics table scrolls too.
+        let compounds: Vec<_> = (0..40)
+            .map(|i| md_core::library::LibraryCompound::new(&format!("Substance {i}")))
+            .collect();
+        let lib = Arc::new(identify::Library {
+            path: "lib.mdlib".into(),
+            name: "lib.mdlib".into(),
+            prepared: md_core::search::PreparedLibrary::new(&compounds, &settings),
+            compounds,
+            settings,
+        });
         let found = |rt_s| md_core::batch::RunResult {
             path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
-            found: vec![md_core::batch::Found {
-                compound: 0,
-                score: 0.9,
-                rt_s,
-                ions: [(73, 900.0), (147, 400.0)]
-                    .map(|(mass, integral)| md_core::batch::IonPeak {
-                        mass,
-                        integral,
-                        quality: 0.1,
-                        signal_to_noise: 10.0,
-                    })
-                    .into(),
-                rescanned: false,
-                rescued: Vec::new(),
-                alternatives: Vec::new(),
-            }],
+            found: (0..40)
+                .map(|compound| md_core::batch::Found {
+                    compound,
+                    score: 0.9,
+                    rt_s,
+                    ions: [(73, 900.0 + compound as f64), (147, 400.0)]
+                        .map(|(mass, integral)| md_core::batch::IonPeak {
+                            mass,
+                            integral,
+                            quality: 0.1,
+                            signal_to_noise: 10.0,
+                        })
+                        .into(),
+                    rescanned: false,
+                    rescued: Vec::new(),
+                    alternatives: Vec::new(),
+                })
+                .collect(),
             ..Default::default()
         };
-        app.batch.finished(lib, vec![found(60.0), found(61.0)]);
+        // Two replicate groups, by the last digit of the file name, for the statistics table.
+        app.batch.settings.replicates = r"_\d(\d)\.cdf$".into();
+        app.statistics.compare("0", "1");
+        app.batch
+            .finished(lib, [60.0, 61.0, 70.0, 71.0].map(found).into());
         app
     }
 
@@ -267,6 +284,7 @@ mod tests {
             "Copy retention times",
             "Results",
             "Biomarker statistics",
+            "Substance 0",
             "Mass isotopomer distributions",
             "Library hits",
             "a_long_run_name_from_the_lab_60.cdf",
@@ -337,5 +355,92 @@ mod tests {
             let found = overlaps(size);
             assert!(found.is_empty(), "{size:?}:\n{}", found.join("\n"));
         }
+    }
+
+    /// The statistics table has more rows than fit and is wider than its window: dragging the
+    /// vertical scroll bar at the window's right edge must scroll the rows.
+    #[test]
+    fn the_statistics_table_scrolls_by_its_bar() {
+        let size = [1280.0, 800.0];
+        let mut app = app_with_every_window();
+        let (ctx, nodes) = draw(&mut app, size);
+        // Once the table exists, close the other windows: they sit on top of the bar and take
+        // the mouse.
+        (
+            app.ri.open,
+            app.settings.open,
+            app.batch.open,
+            app.isotopes.open,
+        ) = (false, false, false, false);
+        (
+            app.editor.open,
+            app.view.info_open,
+            app.results.open,
+            app.mid.open,
+        ) = (false, false, false, false);
+        app.tof.open = false;
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut step = |app: &mut App, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+            out.textures_delta.clear();
+        };
+        for _ in 0..3 {
+            step(&mut app, vec![]);
+        }
+        let named = |w: &egui::WidgetRect, text: &str| {
+            (nodes.names.get(&w.id.accesskit_id())).is_some_and(|n| n.1 == text)
+        };
+        let rows_drawn = |ctx: &egui::Context| {
+            ctx.viewport(|v| {
+                (v.prev_pass.widgets.layers())
+                    .flat_map(|(_, ws)| ws)
+                    .any(|w| named(w, "Substance 0") && w.interact_rect.is_positive())
+            })
+        };
+        // The bar is the tall thin scroll bar in the window with the title.
+        let bar = ctx
+            .viewport(|v| {
+                let (_, widgets) = (v.prev_pass.widgets.layers())
+                    .find(|(_, ws)| ws.iter().any(|w| named(w, "Biomarker statistics")))
+                    .unwrap();
+                let bars = widgets.iter().filter(|w| {
+                    (nodes.names.get(&w.id.accesskit_id())).is_some_and(|n| n.0 == "ScrollBar")
+                });
+                bars.map(|w| w.interact_rect)
+                    .find(|r| r.width() < r.height() && r.is_positive())
+            })
+            .expect("no vertical scroll bar in the statistics window");
+        assert!(rows_drawn(&ctx), "the first row is not shown to begin with");
+        let (from, to) = (
+            bar.center_top() + egui::vec2(0.0, 10.0),
+            bar.center_bottom(),
+        );
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        step(&mut app, vec![egui::Event::PointerMoved(from)]);
+        step(&mut app, vec![button(from, true)]);
+        // The drag needs several moves before egui counts it as one.
+        for k in 1..=8 {
+            let y = from.y + (to.y - from.y) * k as f32 / 8.0;
+            step(
+                &mut app,
+                vec![egui::Event::PointerMoved(egui::pos2(from.x, y))],
+            );
+        }
+        step(&mut app, vec![button(to, false)]);
+        step(&mut app, vec![]);
+        assert!(
+            !rows_drawn(&ctx),
+            "dragging the bar did not scroll the table"
+        );
     }
 }
