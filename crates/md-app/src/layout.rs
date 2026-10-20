@@ -149,6 +149,13 @@ mod tests {
         ctx.enable_accesskit();
         let mut frame = eframe::Frame::_new_kittest();
         app.open_editor_dialogs(&ctx);
+        // A stale run starts a background analysis; one finishing between frames changes the
+        // status line and other text late, so the frames would depend on timing (#200).
+        let key = Some(app.settings.key());
+        assert!(
+            app.runs.iter().all(|r| r.analysis.key == key),
+            "a run would be re-analysed in the background"
+        );
         let mut nodes = Nodes::default();
         for _ in 0..8 {
             let input = egui::RawInput {
@@ -167,11 +174,6 @@ mod tests {
                 }
             }
         }
-        // A job finishing between frames changes the status line and other text late (#200).
-        assert!(
-            !app.runs.iter().any(|r| r.analysis.busy()),
-            "background analysis makes the drawn frames depend on timing"
-        );
         (ctx, nodes)
     }
 

@@ -22,7 +22,11 @@ impl App {
                     if ui.small_button("×").on_hover_text("Dismiss").clicked() {
                         self.error = None;
                     }
-                    ui.colored_label(ui.visuals().error_fg_color, e);
+                    let text = egui::RichText::new(&e).color(ui.visuals().error_fg_color);
+                    let label = egui::Label::new(text)
+                        .truncate()
+                        .show_tooltip_when_elided(false);
+                    ui.add(label).on_hover_text(e);
                 });
             } else if let Some(r) = self.runs.get(self.active) {
                 // One line: a wrapped status changes the bar's height, which egui applies a frame
