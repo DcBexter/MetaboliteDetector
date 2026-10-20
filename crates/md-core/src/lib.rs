@@ -142,16 +142,6 @@ impl TimeUnit {
     }
 }
 
-/// Min and max of `ys` over the scans whose `xs` lie in `[x_min, x_max]` (x-sorted), for Y auto-scaling.
-pub fn y_range(xs: &[f64], ys: &[f64], x_min: f64, x_max: f64) -> Option<(f64, f64)> {
-    let lo = xs.partition_point(|x| *x < x_min);
-    let hi = xs.partition_point(|x| *x <= x_max);
-    ys.get(lo..hi)?.iter().fold(None, |r, y| match r {
-        None => Some((*y, *y)),
-        Some((a, b)) => Some((a.min(*y), b.max(*y))),
-    })
-}
-
 /// Min/max decimation of an x-sorted series to at most `2 * buckets` points within `[x_min, x_max]`.
 /// Keeps every peak visible while plotting cost stays proportional to screen width, not data size.
 pub fn decimate(xs: &[f64], ys: &[f64], x_min: f64, x_max: f64, buckets: usize) -> Vec<[f64; 2]> {
@@ -199,13 +189,6 @@ mod tests {
             assert!((u.to_seconds(u.from_seconds(90.0)) - 90.0).abs() < 1e-9);
         }
         assert_eq!(TimeUnit::Minutes.from_seconds(90.0), 1.5);
-    }
-
-    #[test]
-    fn y_range_covers_only_visible_scans() {
-        let (xs, ys) = ([0.0, 1.0, 2.0, 3.0], [5.0, 1.0, 9.0, 7.0]);
-        assert_eq!(y_range(&xs, &ys, 1.0, 2.0), Some((1.0, 9.0)));
-        assert_eq!(y_range(&xs, &ys, 4.0, 5.0), None);
     }
 
     #[test]
