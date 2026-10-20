@@ -427,6 +427,91 @@ fn mona_msp_finds_the_targets_with_ri() {
     }
 }
 
+/// #242: TargetSearch's own `library.txt` against the example runs (FAME calibration from the markers).
+/// These runs have 20 scans/s: the ion apexes of one substance spread over several scans, so the default
+/// deconvolution width of 1 scan cuts it into pieces below 10 ions and a run keeps ~15 components,
+/// mostly the FAME markers (the old 3.3 gives the same, `old-results/`). A width of 10 scans and 5 ions
+/// find the targets; the RI sigma is on the library's FAME scale (2 s), not the alkane 20.
+#[test]
+fn targetsearch_library_finds_its_targets() {
+    use md_core::ri::{RiCalibration, marker_peaks, window_points};
+    use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+    let runs = runs();
+    let Some(dir) = runs.first().and_then(|p| p.parent()) else {
+        return;
+    };
+    let lib = md_core::library::import_targetsearch(dir.join("library.txt")).unwrap();
+    let windows: Vec<(f64, f64, f64)> = table(&dir.join("rimLimits.txt"))
+        .iter()
+        .map(|r| {
+            (
+                r[0].parse().unwrap(),
+                r[1].parse().unwrap(),
+                r[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    let s = SearchSettings {
+        ri_diff: 2000.0,
+        cutoff: 0.0,
+        ..Default::default()
+    };
+    let prepared = PreparedLibrary::new(&lib, &s);
+    let tuned = DeconvSettings {
+        width: 10.0,
+        min_peak_number: 5,
+        ..Default::default()
+    };
+    // Runs in which each target is assigned with at least the batch cutoff 0.8, for [default
+    // deconvolution, tuned]. 0.8 needs an RI score above 0.51, i.e. within 2.3 s of the library RI.
+    let mut found = [vec![0usize; lib.len()], vec![0usize; lib.len()]];
+    for path in &runs {
+        let c = md_core::andi::read(path).unwrap();
+        let cal = RiCalibration::new(window_points(
+            &marker_peaks(&c, 87.0, DENSITY, THRESHOLD),
+            &windows,
+        ))
+        .unwrap();
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        for (n, d) in [DeconvSettings::default(), tuned.clone()]
+            .iter()
+            .enumerate()
+        {
+            let comps = deconvolute(&traces, &peaks, d);
+            let ris = cal.component_ris(&c.scan_times_s, &comps);
+            let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+            for (i, h) in id.assigned.iter().enumerate() {
+                let Some(h) = h.filter(|h| h.overall >= 0.8) else {
+                    continue;
+                };
+                found[n][h.compound] += 1;
+                // A clear hit is also the first of the component's hit list.
+                if n == 1 {
+                    assert_eq!(id.hits[i][0].compound, h.compound, "{}", name(path));
+                }
+            }
+        }
+    }
+    let per_target = |f: &[usize]| {
+        lib.iter()
+            .map(|c| c.name.as_str())
+            .zip(f.to_vec())
+            .collect::<Vec<_>>()
+    };
+    eprintln!(
+        "runs per target, default deconvolution: {:?}",
+        per_target(&found[0])
+    );
+    eprintln!(
+        "runs per target, width 10, 5 ions: {:?}",
+        per_target(&found[1])
+    );
+    let targets_found = |f: &[usize]| f.iter().filter(|n| **n > 0).count();
+    assert!(targets_found(&found[1]) >= 9, "{:?}", found[1]);
+    assert!(targets_found(&found[0]) < targets_found(&found[1]));
+}
+
 /// Result table of a real run: components whose own spectra form the library are found again, with
 /// their quant-ion area, and the CSV has one line per component.
 #[test]
