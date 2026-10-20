@@ -441,12 +441,6 @@ fn targetsearch_library_finds_its_targets() {
         return;
     };
     let lib = md_core::library::import_targetsearch(dir.join("library.txt")).unwrap();
-    // (RI, window) per target, in library order.
-    let targets: Vec<(f64, f64)> = table(&dir.join("library.txt"))
-        .iter()
-        .map(|r| (r[1].parse().unwrap(), r[2].parse().unwrap()))
-        .collect();
-    assert_eq!(targets.len(), lib.len());
     let windows: Vec<(f64, f64, f64)> = table(&dir.join("rimLimits.txt"))
         .iter()
         .map(|r| {
@@ -468,8 +462,8 @@ fn targetsearch_library_finds_its_targets() {
         min_peak_number: 5,
         ..Default::default()
     };
-    // Runs in which each target is assigned inside its window with at least the batch cutoff 0.8,
-    // for [default deconvolution, tuned].
+    // Runs in which each target is assigned with at least the batch cutoff 0.8, for [default
+    // deconvolution, tuned]. 0.8 needs an RI score above 0.51, i.e. within 2.3 s of the library RI.
     let mut found = [vec![0usize; lib.len()], vec![0usize; lib.len()]];
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();

@@ -388,14 +388,16 @@ pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
     }
 }
 
-/// Why the name on the peak and the compared spectrum are not the first hit (#242): each library
-/// compound goes to one component only, the one with the highest score.
+/// Why the peak has no name, or a name other than the first hit (#242): each library compound goes
+/// to one component only, the one with the highest score (ties: the lower index).
 fn assignment_note(hits: &[LibraryHit], assigned: Option<usize>) -> Option<&'static str> {
     match assigned {
-        None => Some("Not assigned: each compound went to a component that scores higher."),
-        Some(a) if hits.first().is_some_and(|h| h.compound != a) => {
-            Some("Assigned to a lower hit: the better ones went to components that score higher.")
+        None => {
+            Some("Not assigned: each compound went to a component that scores as high or higher.")
         }
+        Some(a) if hits.first().is_some_and(|h| h.compound != a) => Some(
+            "Assigned to a lower hit: the better ones went to components that score as high or higher.",
+        ),
         Some(_) => None,
     }
 }
