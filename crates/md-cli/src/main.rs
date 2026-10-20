@@ -25,7 +25,8 @@ Options:
   -l, --library FILE          library (required)
   -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
-  -o, --output FILE           CSV file (default: standard output)
+  -o, --output FILE           CSV file (default: standard output); with --replicates the group of each
+                              run goes to FILE.groups.csv
   -j, --parallel N            runs in memory at once (default 4)
       --replicates REGEX      replicate group = first capture group of the file name
       --min-reproducibility F keep a substance only if a group quantifies it in this share of its runs
@@ -232,6 +233,10 @@ fn run(a: Args) -> Result<bool, String> {
     for e in &errors {
         eprintln!("error: {e}");
     }
+    // The replicate groups go next to a CSV file; standard output has no room for a second table.
+    if let Some(p) = &a.output {
+        table.write_groups_file(p).map_err(io)?;
+    }
     eprintln!(
         "{} runs scanned in {:.2?} ({} failed): {} substances",
         runs.len(),
@@ -364,7 +369,9 @@ mod tests {
         assert!(run(args(&line).unwrap().unwrap()).unwrap());
         let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
         let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines[0], "Substance,RT_s,Quant_ions,ctrl_1.cdf");
+        assert_eq!(lines[0], "\u{feff}Substance,RT_s,Quant_ions,ctrl_1.cdf");
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,ctrl\n");
         assert!(lines[1].starts_with("early,"), "{csv}");
         assert!(lines[2].starts_with("\"late, \"\"x\"\"\","), "{csv}");
         assert_eq!(lines.len(), 3);

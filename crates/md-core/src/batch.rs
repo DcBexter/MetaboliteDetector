@@ -435,12 +435,33 @@ pub struct Row {
     pub values: Vec<Option<f64>>,
 }
 
+/// UTF-8 byte order mark: Excel needs it to read umlauts in a CSV (R: `fileEncoding = "UTF-8-BOM"`).
+const BOM: &str = "\u{feff}";
+
+/// A text cell: RFC 4180 quoting, and a leading `'` where a spreadsheet would read a formula
+/// (`=`, `+`, `-`, `@`, tab or CR first); `scripts/r/load_results.R` takes that `'` off again.
+fn text_cell(s: &str) -> String {
+    let formula = s.starts_with(['=', '+', '-', '@', '\t', '\r']);
+    crate::csv::quote(&if formula {
+        format!("'{s}")
+    } else {
+        s.to_owned()
+    })
+}
+
+/// Where the replicate groups of a results CSV go: `results.csv` → `results.groups.csv`.
+pub fn groups_path(csv: &Path) -> PathBuf {
+    csv.with_extension("groups.csv")
+}
+
 impl Table {
-    /// RFC 4180 CSV with `.` decimals and `,` separators, readable by R (`read.csv`); in Excel use Data → From Text/CSV (UTF-8, comma):
-    /// `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are space-separated; a value
-    /// that was not found is an empty cell, which R reads as `NA`.
+    /// UTF-8 CSV with a byte order mark, `.` decimals and `,` separators (RFC 4180), readable by R
+    /// (`read.csv`) and Excel: `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are
+    /// space-separated; a value that was not found is an empty cell, which R reads as `NA`. Names
+    /// that a spreadsheet would read as a formula get a leading `'`.
     pub fn write_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
-        use crate::csv::quote as field;
+        use text_cell as field;
+        w.write_all(BOM.as_bytes())?;
         let head = ["Substance", "RT_s", "Quant_ions"].map(String::from);
         let head: Vec<String> = head
             .into_iter()
@@ -457,6 +478,37 @@ impl Table {
                         .map(|v| v.map(|v| v.to_string()).unwrap_or_default()),
                 );
             writeln!(w, "{}", cells.collect::<Vec<_>>().join(","))?;
+        }
+        w.flush()
+    }
+
+    /// Whether any run belongs to a replicate group.
+    pub fn has_groups(&self) -> bool {
+        self.groups.iter().any(|g| !g.is_empty())
+    }
+
+    /// Writes the groups next to the results CSV `csv` (`groups_path`) and returns that file; if no
+    /// run has a group, an old groups file of the same name is removed (a script would read it) and
+    /// there is none to return.
+    pub fn write_groups_file(&self, csv: &Path) -> std::io::Result<Option<PathBuf>> {
+        let path = groups_path(csv);
+        if !self.has_groups() {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(None),
+            };
+        }
+        self.write_groups_csv(std::io::BufWriter::new(std::fs::File::create(&path)?))?;
+        Ok(Some(path))
+    }
+
+    /// The replicate group of each run, as `Run,Group` (same encoding as `write_csv`; a run without
+    /// group has an empty cell), so a script can join it to the columns of the results CSV.
+    pub fn write_groups_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(BOM.as_bytes())?;
+        writeln!(w, "Run,Group")?;
+        for (run, group) in self.runs.iter().zip(&self.groups) {
+            writeln!(w, "{},{}", text_cell(run), text_cell(group))?;
         }
         w.flush()
     }
@@ -634,10 +686,61 @@ mod tests {
         t.write_csv(&mut out).unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "Substance,RT_s,Quant_ions,\"a,1.cdf\",b.cdf
+            "\u{feff}Substance,RT_s,Quant_ions,\"a,1.cdf\",b.cdf
 \"Glucose \"\"1\"\"\",12.5,73 147,1500,
 "
         );
+    }
+
+    #[test]
+    fn csv_protects_formulas_and_lists_the_groups() {
+        let t = Table {
+            runs: vec!["=cmd.cdf".into(), "ctrl_1.cdf".into(), "x.cdf".into()],
+            groups: vec!["+a".into(), "ctrl".into(), String::new()],
+            rows: vec![Row {
+                compound: 0,
+                name: "-Pinene".into(),
+                rt_s: 1.0,
+                ions: vec![93],
+                values: vec![Some(-2.0), None, None],
+            }],
+        };
+        let (mut csv, mut groups) = (Vec::new(), Vec::new());
+        t.write_csv(&mut csv).unwrap();
+        t.write_groups_csv(&mut groups).unwrap();
+        // Text is guarded; a negative number is still a number.
+        assert_eq!(
+            String::from_utf8(csv).unwrap(),
+            "\u{feff}Substance,RT_s,Quant_ions,'=cmd.cdf,ctrl_1.cdf,x.cdf\n'-Pinene,1,93,-2,,\n"
+        );
+        assert_eq!(
+            String::from_utf8(groups).unwrap(),
+            "\u{feff}Run,Group\n'=cmd.cdf,'+a\nctrl_1.cdf,ctrl\nx.cdf,\n"
+        );
+        assert!(t.has_groups());
+        assert_eq!(
+            groups_path(Path::new("dir/results.csv")),
+            Path::new("dir/results.groups.csv")
+        );
+    }
+
+    #[test]
+    fn an_old_groups_file_is_removed_when_there_are_no_groups() {
+        let dir = std::env::temp_dir().join(format!("md-groups-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("results.csv");
+        let mut t = Table {
+            runs: vec!["a.cdf".into()],
+            groups: vec!["ctrl".into()],
+            rows: vec![],
+        };
+        let written = t.write_groups_file(&csv).unwrap().unwrap();
+        assert!(written.exists());
+        t.groups = vec![String::new()];
+        assert_eq!(t.write_groups_file(&csv).unwrap(), None);
+        assert!(!written.exists());
+        // Nothing to remove is not an error.
+        assert_eq!(t.write_groups_file(&csv).unwrap(), None);
     }
 
     #[test]
