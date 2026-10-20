@@ -52,6 +52,8 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
+  src/style.rs          app-wide look egui lacks (symbol font fallback); rules in DESIGN.md
+  src/ui_tests.rs       glyph check for UI strings; ignored headless screenshot test (docs/ui-quality.md)
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
   src/main.rs           options, settings/library/calibration loading, CSV output
   tests/                runs the binary on the 15 example runs
