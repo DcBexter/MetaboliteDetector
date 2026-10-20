@@ -123,7 +123,7 @@ pub fn panel(ui: &mut egui::Ui, run: &Run, mz: &mut f32, trace: &mut Trace) {
     let Some(k) = run.component else {
         return;
     };
-    crate::layout::side_panel(ui, egui::Panel::right("hits"), |ui| {
+    crate::layout::side_panel(ui, egui::Panel::right, "hits", |ui| {
         body(ui, run, k, mz, trace);
     });
 }

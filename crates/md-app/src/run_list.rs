@@ -9,7 +9,7 @@ impl App {
         if self.runs.is_empty() {
             return;
         }
-        crate::layout::side_panel(ui, egui::Panel::left("runs"), |ui| {
+        crate::layout::side_panel(ui, egui::Panel::left, "runs", |ui| {
             let mut close = None;
             for (i, run) in self.runs.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
