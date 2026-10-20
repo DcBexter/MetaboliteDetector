@@ -551,21 +551,37 @@ pub fn import_targetsearch(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound
     Ok(compounds)
 }
 
-/// True for a TSV whose header starts with TargetSearch's `Name<TAB>RI` columns.
+const TARGETSEARCH_HEADER: &str = "Name\tRI\tWin_1\tSEL_MASS\tSPECTRUM";
+
+/// True for a `.txt` file with TargetSearch's header line.
 pub fn is_targetsearch(path: impl AsRef<Path>) -> bool {
     use std::io::Read;
+    let path = path.as_ref();
     let mut head = Vec::new();
     // Only the first bytes: this also runs on dropped run files.
-    std::fs::File::open(path)
-        .and_then(|f| f.take(16).read_to_end(&mut head))
-        .is_ok_and(|_| head.starts_with(b"Name\tRI\t"))
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("txt"))
+        && std::fs::File::open(path)
+            .and_then(|f| f.take(64).read_to_end(&mut head))
+            .is_ok_and(|_| {
+                text(&head)
+                    .trim_start_matches('\u{feff}')
+                    .starts_with(TARGETSEARCH_HEADER)
+            })
 }
 
-/// Parses TargetSearch's `library.txt`: a header line, then one line per compound with the tab-separated
-/// columns `Name`, `RI` (on the FAME scale of the file, kept as is), `Win_1` (kept as feature `WIN_1`),
-/// `SEL_MASS` (`;`-separated, the quantification ions) and `SPECTRUM` (`mz:intensity` pairs). It is
-/// rewritten as MSL and parsed by [`parse_msl`], so line numbers in errors count compounds + 1 header.
+/// Parses TargetSearch's `library.txt`: the header line [`TARGETSEARCH_HEADER`], then one line per compound
+/// with those tab-separated columns: `RI` is on the FAME scale of the file and kept as is, `Win_1` is kept
+/// as feature `WIN_1`, `SEL_MASS` (`;`-separated) gives the quantification ions, `SPECTRUM` is `mz:intensity`
+/// pairs. It is rewritten as MSL and parsed by [`parse_msl`], so errors in values report that MSL's line.
 pub fn parse_targetsearch(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let text = text.trim_start_matches('\u{feff}');
+    if text.lines().next().map(str::trim_end) != Some(TARGETSEARCH_HEADER) {
+        return Err(LibraryError::Msl {
+            line: 1,
+            reason: format!("expected the header `{TARGETSEARCH_HEADER}`"),
+        });
+    }
     let mut msl = String::new();
     for (i, line) in text.lines().enumerate().skip(1) {
         if line.trim().is_empty() {
@@ -1349,6 +1365,10 @@ mod tests {
         assert_eq!(c.spectrum.masses, [86.0, 102.0]);
         assert_eq!(c.features["WIN_1"], "4000");
         assert!(super::parse_targetsearch("Name\tRI\nx\t1\n").is_err());
+        let swapped = "Name\tRI\tSEL_MASS\tWin_1\tSPECTRUM\nx\t1\t86\t4000\t86:1\n";
+        assert!(super::parse_targetsearch(swapped).is_err());
+        let bom = "\u{feff}Name\tRI\tWin_1\tSEL_MASS\tSPECTRUM\nx\t1\t4000\t86\t86:1\n";
+        assert_eq!(super::parse_targetsearch(bom).unwrap().len(), 1);
     }
 
     #[test]
