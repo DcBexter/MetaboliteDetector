@@ -53,7 +53,7 @@ impl Results {
             return;
         };
         let Some(((lib, ..), _, _)) = &run.ident else {
-            ui.horizontal(|ui| self.saved_buttons(ui, run));
+            ui.horizontal_wrapped(|ui| self.saved_buttons(ui, run));
             if !self.note.is_empty() {
                 ui.label(&self.note);
             }
@@ -70,7 +70,7 @@ impl Results {
         let (stamp, rows) = cache.expect("filled above");
 
         let mut loaded = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("{} — library {}", run.name, lib.name));
             if ui.button("Export CSV…").clicked() {
                 self.note = export(&run.name, &rows);
