@@ -465,15 +465,15 @@ fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
         .add_filter("CSV", &["csv"])
         .set_file_name("results.csv")
         .save_file()?;
-    Some(
-        match std::fs::File::create(&p)
-            .map(std::io::BufWriter::new)
-            .and_then(|f| t.write_csv(f))
-        {
-            Ok(()) => format!("Saved {}", p.display()),
-            Err(e) => format!("Export failed: {e}"),
-        },
-    )
+    let saved = std::fs::File::create(&p)
+        .map(std::io::BufWriter::new)
+        .and_then(|f| t.write_csv(f))
+        .and_then(|()| t.write_groups_file(&p));
+    Some(match saved {
+        Ok(None) => format!("Saved {}", p.display()),
+        Ok(Some(g)) => format!("Saved {} and {}", p.display(), g.display()),
+        Err(e) => format!("Export failed: {e}"),
+    })
 }
 
 /// Rows are virtualised, so only the visible ones are laid out each frame.
