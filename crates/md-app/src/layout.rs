@@ -270,11 +270,21 @@ mod tests {
                 let own_label = nodes.combo_labels.contains(&(*ia, *ib))
                     || nodes.combo_labels.contains(&(*ib, *ia));
                 // A bar floats over the edge of the scroll area, so it lies over a row that the
-                // area clips; that row is half hidden by design, not covered by mistake.
-                let clipped = |bar: &(String, String), other: &egui::Rect, full: &egui::Rect| {
-                    bar.0 == "ScrollBar" && other != full
+                // area clips at that edge; that row is half hidden by design, not covered by mistake.
+                let slack = egui::style::ScrollStyle::solid().allocated_width() + 1.0;
+                let clipped = |bar: &(String, String),
+                               r: &egui::Rect,
+                               other: &egui::Rect,
+                               full: &egui::Rect| {
+                    bar.0 == "ScrollBar"
+                        && ((r.width() > r.height()
+                            && other.max.y < full.max.y - 0.5
+                            && (other.max.y - r.min.y).abs() <= slack)
+                            || (r.width() < r.height()
+                                && other.max.x < full.max.x - 0.5
+                                && (other.max.x - r.min.x).abs() <= slack))
                 };
-                let under_bar = clipped(a, rb, fb) || clipped(b, ra, fa);
+                let under_bar = clipped(a, ra, rb, fb) || clipped(b, rb, ra, fa);
                 if !own_label && !under_bar && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
                     found.push(format!("{a:?} {ra:?} overlaps {b:?} {rb:?}"));
                 }
