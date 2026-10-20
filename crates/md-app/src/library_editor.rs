@@ -134,8 +134,20 @@ impl LibraryEditor {
             .filter(|c| !check(c).is_empty())
             .map(|c| c.name.as_str())
             .collect();
-        (!names.is_empty())
-            .then(|| format!("Incomplete entries were written: {}.", names.join(", ")))
+        const SHOWN: usize = 3;
+        let more = names.len().saturating_sub(SHOWN);
+        (!names.is_empty()).then(|| {
+            let tail = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            format!(
+                "{} incomplete entries were written: {}{tail} (filter the list to find them).",
+                names.len(),
+                names[..names.len().min(SHOWN)].join(", ")
+            )
+        })
     }
 
     fn save(&mut self, path: PathBuf) -> Option<PathBuf> {
@@ -684,6 +696,11 @@ mod tests {
         let mut ed = LibraryEditor::default();
         ed.compounds.push(LibraryCompound::new("Test"));
         assert!(ed.incomplete().is_some_and(|w| w.contains("Test")));
+        for i in 0..5 {
+            ed.compounds.push(LibraryCompound::new(&format!("N{i}")));
+        }
+        let w = ed.incomplete().unwrap();
+        assert!(w.starts_with("6 incomplete") && w.contains("and 3 more") && !w.contains("N4"));
         ed.compounds.clear();
         assert_eq!(ed.incomplete(), None);
     }
