@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use eframe::egui;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{Queryable, by};
+use egui_kittest::kittest::{NodeT, Queryable, by};
 use md_core::library::LibraryCompound;
 use md_core::search::PreparedLibrary;
 
@@ -192,13 +192,14 @@ fn screenshots() {
     wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
 
     type Toggle = fn(&mut App) -> &mut bool;
-    let windows: [(&str, Toggle); 6] = [
+    let windows: [(&str, Toggle); 7] = [
         ("07-settings", |a| &mut a.settings.open),
         ("08-calibration", |a| &mut a.ri.open),
         ("09-batch", |a| &mut a.batch.open),
         ("10-isotopes", |a| &mut a.isotopes.open),
         ("11-library-editor", |a| &mut a.editor.open),
         ("12-results", |a| &mut a.results.open),
+        ("13-run-info", |a| &mut a.view.info_open),
     ];
     for (name, open) in windows {
         *open(h.state_mut()) = true;
@@ -231,7 +232,7 @@ fn screenshots() {
     h.state_mut().mid.demo(paths[..4].to_vec());
     h.state_mut().mid.open = true;
     h.run_steps(3);
-    shots.save(&mut h, "12-mid-settings");
+    shots.save(&mut h, "14-mid-settings");
     h.get_by_label("Start").click();
     h.run_steps(2);
     wait(&mut h, |a| !a.mid.busy());
@@ -240,5 +241,72 @@ fn screenshots() {
         .unwrap()
         .click();
     h.run_steps(3);
-    shots.save(&mut h, "13-mid-results");
+    shots.save(&mut h, "15-mid-results");
+    h.state_mut().mid.open = false;
+
+    // A batch of made-up quantities over the open runs, in groups of ten by file name, so the
+    // table and the statistics have something to show without a real batch run.
+    let lib = h.state().library.clone().unwrap();
+    let found: Vec<_> = (paths.iter().enumerate())
+        .map(|(i, p)| md_core::batch::RunResult {
+            path: p.clone(),
+            found: (0..lib.compounds.len().min(12))
+                .map(|k| md_core::batch::Found {
+                    compound: k,
+                    score: 0.9,
+                    rt_s: 300.0 + 30.0 * k as f64,
+                    ions: [(73, 1.0), (147, 0.4)]
+                        .map(|(mass, share)| md_core::batch::IonPeak {
+                            mass,
+                            integral: share * fake_integral(p, i, k),
+                            quality: 0.1,
+                            signal_to_noise: 10.0,
+                        })
+                        .into(),
+                    rescanned: false,
+                    rescued: Vec::new(),
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .collect();
+    let batch = &mut h.state_mut().batch;
+    batch.finished(lib, found);
+    batch.settings.replicates = r"eg(\d)\d".into();
+    batch.open = true;
+    h.run_steps(3);
+    shots.save(&mut h, "16-batch-table");
+    h.state_mut().batch.open = false;
+    h.state_mut().statistics.open = true;
+    h.run_steps(3);
+    // Group 0 (runs 04 to 09) against group 2 (runs 20 to 26): the side check boxes have no name,
+    // so take them in reading order, two per replicate group.
+    for pick in [0, 5] {
+        let win = h.get_by_label("Biomarker statistics").rect();
+        let mut sides: Vec<_> = (h.get_all(by().role(egui::accesskit::Role::CheckBox)))
+            .filter(|n| win.contains_rect(n.rect()) && n.accesskit_node().label().is_none())
+            .collect();
+        sides.sort_by(|a, b| {
+            let (a, b) = (a.rect().min, b.rect().min);
+            (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap()
+        });
+        assert!(
+            sides.len() > pick,
+            "statistics shows {} side check boxes",
+            sides.len()
+        );
+        sides[pick].click();
+        h.run_steps(2);
+    }
+    h.run_steps(3);
+    shots.save(&mut h, "17-statistics");
+}
+
+/// A quantity that differs by substance, a little by run and more by the run's group (the tens
+/// digit of its file name, as the replicate regex above takes it).
+fn fake_integral(path: &Path, run: usize, compound: usize) -> f64 {
+    let name = path.file_stem().unwrap().to_string_lossy();
+    let group = f64::from(name.as_bytes()[name.len() - 2] - b'0');
+    let noise = ((run * 7 + compound * 3) % 5) as f64;
+    1000.0 * (compound + 1) as f64 * (1.0 + 0.4 * group + 0.05 * noise)
 }

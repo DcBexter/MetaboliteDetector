@@ -165,7 +165,7 @@ pub struct Batch {
     options: ScanOptions,
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
-    settings: TableSettings,
+    pub settings: TableSettings,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
     /// Whether the search is by retention time only (Analysis → RI calibration).
