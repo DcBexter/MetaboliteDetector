@@ -15,7 +15,8 @@ This test needs the example data (`example-data/fetch.*`) and a GPU. It writes `
   quantities (`Batch::finished`);
 - one `*.unnamed.txt` per PNG, listing the inputs a screen reader cannot name.
 
-Pixels differ between GPUs and operating systems, so the images are never committed. Compare them by eye
+Pixels differ between GPUs and operating systems, so the images are never committed, except the copies the
+README shows in `docs/images/` (dark set; recopy them when a shown screen changes). Compare them by eye
 before and after a change.
 
 `every_ui_symbol_has_a_glyph` runs in CI. It fails when a UI string uses a symbol that no bundled font
