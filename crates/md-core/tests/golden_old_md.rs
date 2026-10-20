@@ -1,5 +1,5 @@
 //! Golden test: peaks and deconvolution against the old MetaboliteDetector 3.3 on the example runs,
-//! with the default and the matched peak detector. The references `tests/data/old-md-3.3*.tsv` come
+//! with the default and the matched peak detector, and on a high-resolution run made from 7235eg04. The references `tests/data/old-md-3.3*.tsv` come
 //! from the old binary itself
 //! (docs/reverse-engineering/tools/golden/make-reference.sh); tolerances are explained in
 //! docs/architecture.md ("Golden test"). Passes without checking anything when example-data/ is
@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use md_core::Chromatogram;
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::peaks::{Detector, IonTraces, PeakSettings};
 
@@ -30,14 +31,14 @@ struct Known {
 struct RefRun {
     name: String,
     /// (ion, first, apex, last, S/N)
-    peaks: Vec<(u32, u32, u32, u32, f64)>,
+    peaks: Vec<(f32, u32, u32, u32, f64)>,
     comps: Vec<RefComp>,
 }
 
 struct RefComp {
     scan: u32,
-    /// (mass, height, integral)
-    ions: Vec<(u32, u32, f64)>,
+    /// (exact mass, height, integral)
+    ions: Vec<(f32, u32, f64)>,
 }
 
 fn reference(text: &str) -> Vec<RefRun> {
@@ -46,6 +47,7 @@ fn reference(text: &str) -> Vec<RefRun> {
         let f: Vec<&str> = line.split('\t').collect();
         let u = |i: usize| f[i].parse::<u32>().unwrap();
         let x = |i: usize| f[i].parse::<f64>().unwrap();
+        let m = |i: usize| f[i].parse::<f32>().unwrap();
         match f[0] {
             "run" => runs.push(RefRun {
                 name: f[1].into(),
@@ -55,14 +57,14 @@ fn reference(text: &str) -> Vec<RefRun> {
                 .last_mut()
                 .unwrap()
                 .peaks
-                .push((u(1), u(2), u(3), u(4), x(5))),
+                .push((m(1), u(2), u(3), u(4), x(5))),
             "component" => runs.last_mut().unwrap().comps.push(RefComp {
                 scan: u(1),
                 ions: Vec::new(),
             }),
             "ion" => {
                 let c = runs.last_mut().unwrap().comps.last_mut().unwrap();
-                c.ions.push((u(1), u(2), x(3)));
+                c.ions.push((m(1), u(2), x(3)));
             }
             other => panic!("unknown record {other}"),
         }
@@ -112,9 +114,70 @@ fn matches_old_version_with_matched_filtering() {
     compare(include_str!("data/old-md-3.3-matched.tsv"), &peaks, known);
 }
 
+/// The high-resolution run of `matches_old_version_on_a_high_resolution_run`, made from 7235eg04:
+/// every m/z moves up by 0.047, and a second fragment at 147.089 repeats the 147 trace 5 scans later.
+/// The old CDF import centroids such scans to nominal masses (algorithms.md §4.1).
+const HIGH_RESOLUTION_RUN: &str = "7235eg04-hr.cdf";
+
+fn high_resolution_run(c: &Chromatogram) -> Chromatogram {
+    let mut out = Chromatogram {
+        scan_times_s: c.scan_times_s.clone(),
+        offsets: vec![0],
+        mz: Vec::new(),
+        intensity: Vec::new(),
+    };
+    let at_147 = |s: usize| {
+        let (m, i) = c.spectrum(s);
+        m.iter().position(|x| *x == 147.0).map_or(0.0, |k| i[k])
+    };
+    for s in 0..c.scan_count() {
+        let (m, i) = c.spectrum(s);
+        let mut points: Vec<(f32, f32)> =
+            m.iter().map(|x| x + 0.047).zip(i.iter().copied()).collect();
+        points.push((147.089, s.checked_sub(5).map_or(0.0, at_147)));
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.mz.extend(points.iter().map(|p| p.0));
+        out.intensity.extend(points.iter().map(|p| p.1));
+        out.offsets.push(out.mz.len());
+    }
+    out
+}
+
+/// Writes the high-resolution run for make-reference.sh to `$MD_HIGH_RESOLUTION_OUT`.
+#[test]
+#[ignore]
+fn write_high_resolution_run() {
+    let out = std::env::var("MD_HIGH_RESOLUTION_OUT").expect("MD_HIGH_RESOLUTION_OUT");
+    let c = md_core::andi::read(example_dir().join("7235eg04.cdf")).unwrap();
+    md_core::andi::write(
+        Path::new(&out).join(HIGH_RESOLUTION_RUN),
+        &high_resolution_run(&c),
+    )
+    .unwrap();
+}
+
+#[test]
+fn matches_old_version_on_a_high_resolution_run() {
+    let known = Known {
+        missing: 0,
+        extra: 0,
+        other_ions: 0,
+        other_values: 0,
+    };
+    compare(
+        include_str!("data/old-md-3.3-high-resolution.tsv"),
+        &PeakSettings::default(),
+        known,
+    );
+}
+
+fn example_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../example-data/TargetSearchData/inst/gc-ms-data")
+}
+
 fn compare(text: &str, settings: &PeakSettings, known: Known) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../example-data/TargetSearchData/inst/gc-ms-data");
+    let dir = example_dir();
     if !dir.is_dir() {
         eprintln!(
             "skipped: {} not found, run example-data/fetch.*",
@@ -123,26 +186,53 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
         return;
     }
     let runs = reference(text);
-    assert_eq!(runs.len(), 15);
+    assert!(runs.len() == 15 || runs[0].name == HIGH_RESOLUTION_RUN);
     let (mut peak_runs, mut total) = (0, Count::default());
     for r in &runs {
-        let c = md_core::andi::read(dir.join(&r.name)).unwrap();
+        let c = if r.name == HIGH_RESOLUTION_RUN {
+            high_resolution_run(&md_core::andi::read(dir.join("7235eg04.cdf")).unwrap())
+        } else {
+            md_core::andi::read(dir.join(&r.name)).unwrap()
+        };
         let mut traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(settings);
         let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
-        let mass = |row: u32| traces.masses[row as usize];
+        let mass = |row: u32| traces.mz[row as usize];
 
         // Peaks: the same peaks with the same bounds and S/N.
         if !r.peaks.is_empty() {
             peak_runs += 1;
             let mut new: Vec<_> = peaks
                 .iter()
-                .map(|p| (mass(p.row), p.first_scan, p.apex_scan, p.last_scan))
+                .map(|p| {
+                    (
+                        mass(p.row).to_bits(),
+                        p.first_scan,
+                        p.apex_scan,
+                        p.last_scan,
+                    )
+                })
                 .collect();
-            let mut old: Vec<_> = r.peaks.iter().map(|p| (p.0, p.1, p.2, p.3)).collect();
+            let mut old: Vec<_> = r
+                .peaks
+                .iter()
+                .map(|p| (p.0.to_bits(), p.1, p.2, p.3))
+                .collect();
             new.sort();
             old.sort();
-            assert_eq!(old, new, "{}: peaks (ion, first, apex, last)", r.name);
+            let only = |a: &[(u32, u32, u32, u32)], b: &[(u32, u32, u32, u32)]| -> Vec<_> {
+                a.iter()
+                    .filter(|p| b.binary_search(p).is_err())
+                    .map(|p| (f32::from_bits(p.0), p.1, p.2, p.3))
+                    .collect()
+            };
+            assert!(
+                old == new,
+                "{}: peaks (ion, first, apex, last) only old {:?}, only new {:?}",
+                r.name,
+                only(&old, &new),
+                only(&new, &old)
+            );
             for &(ion, _, apex, _, sn) in &r.peaks {
                 let p = peaks
                     .iter()
@@ -163,7 +253,9 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
         let mut used = vec![false; comps.len()];
         let mut n = Count::default();
         for o in &r.comps {
-            let old_ions: BTreeSet<u32> = o.ions.iter().map(|i| i.0).collect();
+            // The spectra are keyed by nominal mass; the old one keeps each exact mass.
+            let old_ions: BTreeSet<u32> =
+                o.ions.iter().map(|i| (i.0 + 0.5).floor() as u32).collect();
             let best = (0..comps.len())
                 .filter(|j| !used[*j] && comps[*j].apex_scan.abs_diff(o.scan) <= 2)
                 .map(|j| {
@@ -194,13 +286,19 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
                 );
                 continue;
             }
-            // Both spectra are sorted by mass, so they pair up ion by ion.
-            let off: Vec<String> = o
-                .ions
+            // Each new mass against the old entry of the exact mass behind it (its sharpest peak).
+            let off: Vec<String> = k
+                .spectrum
                 .iter()
-                .zip(&k.spectrum)
-                .filter_map(|(&(ion, h, integral), &(_, nh))| {
-                    let f = k.peaks.iter().find(|f| mass(peaks[f.peak].row) == ion)?;
+                .filter_map(|&(m, nh)| {
+                    let f = k
+                        .peaks
+                        .iter()
+                        .find(|f| traces.masses[peaks[f.peak].row as usize] == m)?;
+                    let ion = mass(peaks[f.peak].row);
+                    let Some(&(_, h, integral)) = o.ions.iter().find(|i| i.0 == ion) else {
+                        return Some(format!("{ion}: no old ion of this exact mass"));
+                    };
                     let di = (f.integral - integral).abs() / integral.abs().max(1.0);
                     (h.abs_diff(nh) > HEIGHT_TOLERANCE || di > INTEGRAL_TOLERANCE).then(|| {
                         format!(
@@ -226,7 +324,7 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
         total.other_values += n.other_values;
     }
     eprintln!("total: {total:?}");
-    assert_eq!(peak_runs, 3);
+    assert_eq!(peak_runs, runs.len().min(3));
     assert!(
         total.extra <= known.extra,
         "new components without an old partner: {total:?}"

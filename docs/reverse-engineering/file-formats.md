@@ -155,6 +155,7 @@ File naming (Observed)
   0x6e7d00 appends ".idx" to `cache_file` and opens `out|trunc|binary`.
 - `CdfImporter::importData` 0x7cc4cc creates the writer with `DataType = 2` (Observed: `mov $0x2,%edx`
   before the `GCMSDiskScanWriter(char const*, DataType)` call at 0x7cc512).
+- Every scan is centroided before it is written (`CdfImporter::scanAdd`, algorithms.md §4.1). The stored masses are nominal: on a synthetic run with exact masses all 4400 scans hold the centroids rounded to whole numbers.
 
 ### 2.1 Scan record (data file)
 
@@ -244,7 +245,7 @@ seeks to the record offset for the intensities and to `masses_ptr` for the masse
 does that and checks each record header against its index entry.
 
 ### Unknowns (section 2)
-- `DataType` enum names for the values (2 is what `CdfImporter` writes).
+- `DataType` enum names for the values. 2 is what `CdfImporter` writes (nominal masses); `FastFlightImporter` writes 1 or 0 (exact masses), algorithms.md §4.1.
 - `setCompressionParameter` default thresholds and the meaning of the BaselineStatistics fields.
 - Whether `writeIndexFile` can write another magic or other type sizes (only the reader was disassembled).
 - How `FilteredDataProvider` applies the TOF polynomial (`md_core::diskscan` rejects caches that have one).

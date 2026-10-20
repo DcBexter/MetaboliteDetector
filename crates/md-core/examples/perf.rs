@@ -8,7 +8,7 @@ use std::time::Instant;
 use md_core::batch::{ScanSettings, scan_chromatogram};
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::library::{LibraryCompound, parse_msl};
-use md_core::peaks::{Detector, IonTraces, PeakSettings};
+use md_core::peaks::{Detector, IonTraces, PeakSettings, reorder_peaks};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 use md_core::{Chromatogram, decimate};
 
@@ -104,6 +104,38 @@ fn main() {
         "matched peaks ({}) + deconvolution ({} components): {:?}",
         m.len(),
         mc.len(),
+        t.elapsed()
+    );
+
+    // The same run at high resolution: two exact masses 0.04 apart per nominal mass.
+    let hr = Chromatogram {
+        mz: c
+            .mz
+            .iter()
+            .map(|m| {
+                let i = *m - 50.0;
+                50.0 + (i / 2.0).floor() + 0.04 * (i % 2.0)
+            })
+            .collect(),
+        ..c.clone()
+    };
+    let t = Instant::now();
+    let mut hr_traces = IonTraces::exact(&hr).unwrap();
+    let ht = t.elapsed();
+    let mut hp = hr_traces.detect_peaks(&PeakSettings::default());
+    reorder_peaks(
+        &mut hp,
+        &hr_traces,
+        10.0,
+        0.05,
+        PeakSettings::default().number_bins,
+    );
+    let hc = deconvolute(&hr_traces, &hp, &DeconvSettings::default());
+    println!(
+        "high resolution: traces ({}) {ht:?}, peaks ({}) + reorder + deconvolution ({} components): {:?}",
+        hr_traces.len(),
+        hp.len(),
+        hc.len(),
         t.elapsed()
     );
 

@@ -57,7 +57,7 @@ impl Default for PeakSettings {
 /// `IonTraces::trace(row)[first_scan..=last_scan]` (filtered values after a matched detection).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Peak {
-    /// Row in `IonTraces` (`IonTraces::masses[row]` is the nominal mass).
+    /// Row in `IonTraces` (`IonTraces::masses[row]` is the nominal mass, `IonTraces::mz[row]` the exact one).
     pub row: u32,
     pub first_scan: u32,
     /// First scan with the highest intensity.
@@ -73,24 +73,164 @@ pub struct Peak {
     pub sharpness: f32,
 }
 
-/// Ion-major copy of a run, built once: one intensity trace per nominal mass, so peak detection
-/// reads contiguous memory instead of searching every spectrum per ion.
+/// Ion-major copy of a run, built once: one intensity trace per mass, so peak detection reads
+/// contiguous memory instead of searching every spectrum per ion.
+///
+/// `new` makes one trace per nominal mass, like the old CDF import, which centroids every scan to
+/// nominal masses. `exact` makes one trace per distinct m/z, like the old `GCMSDiskScan` for runs
+/// that keep their exact masses (FastFlight); algorithms.md §4.1.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IonTraces {
-    /// Nominal mass (m/z rounded) of each row, ascending.
+    /// Nominal mass (m/z rounded) of each row, ascending. Repeats in a high-resolution run.
     pub masses: Vec<u32>,
+    /// Exact mass of each row, ascending: the distinct m/z of a high-resolution run, else the
+    /// nominal mass.
+    pub mz: Vec<f32>,
     scans: usize,
     values: Vec<f32>,
 }
 
-// shortcut: m/z is rounded to nominal mass (unit-resolution data, like the example runs);
-// high-resolution runs need exact-mass traces plus the old `reorderPeaks` merge (algorithms.md §4.2).
 const MASS_LIMIT: usize = 1 << 16;
 
 /// Nominal mass `k` for m/z in `[k - 0.5, k + 0.5)`, the same intervals `IonTraces::new` scans.
 fn nominal(mz: f32) -> Option<usize> {
     let m = (mz + 0.5).floor();
     (m >= 0.0 && m < MASS_LIMIT as f32).then_some(m as usize)
+}
+
+/// Distinct m/z of the run within the nominal mass range, ascending.
+fn exact_masses(c: &Chromatogram) -> Vec<f32> {
+    let mut mz: Vec<f32> =
+        c.mz.par_chunks(1 << 20)
+            .flat_map_iter(|chunk| {
+                let mut v: Vec<f32> = chunk
+                    .iter()
+                    .copied()
+                    .filter(|m| nominal(*m).is_some())
+                    .collect();
+                v.sort_unstable_by(f32::total_cmp);
+                v.dedup();
+                v
+            })
+            .collect();
+    mz.par_sort_unstable_by(f32::total_cmp);
+    mz.dedup();
+    mz
+}
+
+/// Nominal masses present in the run, ascending.
+fn nominal_masses(c: &Chromatogram) -> Vec<u32> {
+    let present =
+        c.mz.par_chunks(1 << 20)
+            .map(|chunk| {
+                let mut p = vec![false; MASS_LIMIT];
+                chunk
+                    .iter()
+                    .filter_map(|m| nominal(*m))
+                    .for_each(|m| p[m] = true);
+                p
+            })
+            .reduce(
+                || vec![false; MASS_LIMIT],
+                |mut a, b| {
+                    a.iter_mut().zip(b).for_each(|(x, y)| *x |= y);
+                    a
+                },
+            );
+    (0..MASS_LIMIT as u32)
+        .filter(|m| present[*m as usize])
+        .collect()
+}
+
+/// Gap above which the old centroiding starts a new mass peak.
+const CENTROID_GAP: f64 = 0.1;
+
+/// The old `Spectrum::getCentroidSpectrum` of one scan (algorithms.md §4.1): points split at m/z
+/// gaps above 0.1 and at valleys (two falls, then two rises); each part gives the sum of its points
+/// of at least half its maximum, at their intensity-weighted m/z.
+fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
+    let n = m.len();
+    let at = |i: usize, d: usize, missing: f32| if i + d < n { v[i + d] } else { missing };
+    let mut i = 0;
+    while i < n {
+        let start = i;
+        let mut max = f64::MIN;
+        let mut falling = false;
+        while i < n {
+            let (v0, m1) = (v[i], if i + 1 < n { m[i + 1] } else { m[i] });
+            let v1 = at(i, 1, v0);
+            let v2 = at(i, 2, v1);
+            max = max.max(v0 as f64);
+            if (m1 - m[i]) as f64 > CENTROID_GAP {
+                break;
+            }
+            if !falling && v1 < v0 && v2 < v1 {
+                falling = true;
+                continue;
+            }
+            if falling && v1 > v0 && v2 > v1 {
+                break;
+            }
+            i += 1;
+        }
+        let end = i.min(n - 1);
+        let (mz, sum) = if start == end {
+            (m[start] as f64, v[start] as f64)
+        } else {
+            let (mut num, mut sum) = (0.0f64, 0.0f64);
+            for k in start..=end {
+                if v[k] as f64 >= 0.5 * max {
+                    sum += v[k] as f64;
+                    num += (v[k] * m[k]) as f64;
+                }
+            }
+            (
+                if num == 0.0 && sum == 0.0 {
+                    -1.0
+                } else {
+                    num / sum
+                },
+                sum,
+            )
+        };
+        if mz >= 0.0 {
+            out.push((mz as f32, (sum + 0.5).floor() as f32));
+        }
+        i += 1;
+    }
+}
+
+/// The run as the old CDF import stores it: every scan centroided. `None` when no scan has two
+/// points within 0.1 m/z, where centroiding keeps every point as it is.
+fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
+    let close = |s: usize| {
+        let (m, _) = c.spectrum(s);
+        m.windows(2).any(|p| (p[1] - p[0]) as f64 <= CENTROID_GAP)
+    };
+    if !(0..c.scan_count()).into_par_iter().any(close) {
+        return None;
+    }
+    let scans: Vec<Vec<(f32, f32)>> = (0..c.scan_count())
+        .into_par_iter()
+        .map(|s| {
+            let (m, i) = c.spectrum(s);
+            let mut out = Vec::with_capacity(m.len());
+            centroid_scan(m, i, &mut out);
+            out
+        })
+        .collect();
+    let mut offsets = Vec::with_capacity(scans.len() + 1);
+    offsets.push(0);
+    for s in &scans {
+        offsets.push(offsets.last().unwrap() + s.len());
+    }
+    let (mz, intensity) = scans.into_iter().flatten().unzip();
+    Some(Chromatogram {
+        scan_times_s: c.scan_times_s.clone(),
+        offsets,
+        mz,
+        intensity,
+    })
 }
 
 /// Upper bound for the ion-major index (masses × scans × 4 bytes). Real runs need well under 1 GiB;
@@ -105,33 +245,39 @@ pub struct TooLarge {
 }
 
 impl IonTraces {
+    /// One trace per nominal mass of the centroided scans (`centroided`); centroids of one nominal
+    /// mass in a scan are summed.
     pub fn new(c: &Chromatogram) -> Result<Self, TooLarge> {
+        match centroided(c) {
+            Some(cc) => Self::build(&cc, false),
+            None => Self::build(c, false),
+        }
+    }
+
+    /// One trace per distinct m/z (the old `getSignal` takes the point of exactly that mass; a
+    /// missing mass reads 0). Masses outside the nominal mass range are dropped.
+    pub fn exact(c: &Chromatogram) -> Result<Self, TooLarge> {
+        Self::build(c, true)
+    }
+
+    fn build(c: &Chromatogram, exact: bool) -> Result<Self, TooLarge> {
         let scans = c.scan_count();
-        let present =
-            c.mz.par_chunks(1 << 20)
-                .map(|chunk| {
-                    let mut p = vec![false; MASS_LIMIT];
-                    chunk
-                        .iter()
-                        .filter_map(|m| nominal(*m))
-                        .for_each(|m| p[m] = true);
-                    p
-                })
-                .reduce(
-                    || vec![false; MASS_LIMIT],
-                    |mut a, b| {
-                        a.iter_mut().zip(b).for_each(|(x, y)| *x |= y);
-                        a
-                    },
-                );
-        let masses: Vec<u32> = (0..MASS_LIMIT as u32)
-            .filter(|m| present[*m as usize])
-            .collect();
+        let (masses, mz): (Vec<u32>, Vec<f32>) = if exact {
+            let mz = exact_masses(c);
+            (mz.iter().map(|m| nominal(*m).unwrap() as u32).collect(), mz)
+        } else {
+            let masses = nominal_masses(c);
+            let mz = masses.iter().map(|m| *m as f32).collect();
+            (masses, mz)
+        };
+        // Nominal mass -> row (unit resolution only).
         let mut row_of = vec![0; MASS_LIMIT];
-        masses
-            .iter()
-            .enumerate()
-            .for_each(|(r, m)| row_of[*m as usize] = r);
+        if !exact {
+            masses
+                .iter()
+                .enumerate()
+                .for_each(|(r, m)| row_of[*m as usize] = r);
+        }
         let too_large = TooLarge {
             masses: masses.len(),
             scans,
@@ -146,14 +292,27 @@ impl IonTraces {
         if scans > 0 {
             values
                 .par_chunks_mut(scans * BLOCK)
-                .zip(masses.par_chunks(BLOCK))
+                .zip(mz.par_chunks(BLOCK))
                 .for_each(|(rows, block)| {
-                    let first_row = row_of[block[0] as usize];
-                    let (lo, hi) = (block[0] as f32 - 0.5, block[block.len() - 1] as f32 + 0.5);
+                    let (first, last) = (block[0], block[block.len() - 1]);
                     for s in 0..scans {
                         let (m, i) = c.spectrum(s);
-                        let a = m.partition_point(|x| *x < lo);
-                        for (mz, int) in m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x < hi) {
+                        if exact {
+                            let a = m.partition_point(|x| *x < first);
+                            for (mz, int) in
+                                m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last)
+                            {
+                                rows[block.partition_point(|x| x < mz) * scans + s] += *int;
+                            }
+                            continue;
+                        }
+                        let first_row = row_of[first as usize];
+                        let a = m.partition_point(|x| *x < first - 0.5);
+                        for (mz, int) in m[a..]
+                            .iter()
+                            .zip(&i[a..])
+                            .take_while(|(x, _)| **x < last + 0.5)
+                        {
                             let row = row_of[nominal(*mz).unwrap()] - first_row;
                             // Usually one point per nominal mass and scan, so f32 sums stay exact.
                             rows[row * scans + s] += *int;
@@ -163,6 +322,7 @@ impl IonTraces {
         }
         Ok(Self {
             masses,
+            mz,
             scans,
             values,
         })
@@ -180,7 +340,7 @@ impl IonTraces {
         self.scans
     }
 
-    /// Intensity of one nominal mass in every scan.
+    /// Intensity of one mass (row) in every scan.
     pub fn trace(&self, row: usize) -> &[f32] {
         &self.values[row * self.scans..(row + 1) * self.scans]
     }
@@ -462,6 +622,101 @@ fn peak(w: &[f32], first: usize, apex: usize, nf: f64, signal_to_noise: f32, bin
         quality: quality(w, apex),
         sharpness: sharpness(w, apex, (w[apex] as f64).sqrt() * nf),
     }
+}
+
+/// Old `GCMSAnalyzer::reorderPeaks` (algorithms.md §4.2): peaks on neighbouring exact masses at most
+/// `ion_dist` apart whose apexes lie within `scan_dist` scans form one profile, and every member
+/// covering the apex of the summed profile takes that apex. Sorts `peaks` by row, then first scan.
+/// The old code runs it only for runs not imported from CDF (`DataType != 2`), so the CDF path
+/// here never calls it.
+pub fn reorder_peaks(
+    peaks: &mut [Peak],
+    traces: &IonTraces,
+    scan_dist: f32,
+    ion_dist: f32,
+    number_bins: u32,
+) {
+    struct Profile {
+        peaks: Vec<usize>,
+        last_row: usize,
+        apex: u32,
+    }
+    peaks.sort_by_key(|p| (p.row, p.first_scan));
+    let nb = number_bins as usize;
+    let dist = (number_bins as f32 * scan_dist).round() as usize;
+    let len = nb * (traces.scan_count() + 1) + 1;
+    let mut bins: Vec<Vec<usize>> = vec![Vec::new(); len];
+    let mut profiles: Vec<Profile> = Vec::new();
+    for k in 0..peaks.len() {
+        let p = peaks[k];
+        let t = p.precise_apex.unwrap_or(p.apex_scan as f32) as f64;
+        let b = (t * nb as f64 + 0.5) as usize;
+        if b >= len {
+            continue; // the old code throws here; detected peaks never get this far
+        }
+        let next = |r: usize| (r + 1 < traces.len()).then_some(r + 1);
+        let winner = bins[b]
+            .iter()
+            .copied()
+            .filter(|j| {
+                let last = profiles[*j].last_row;
+                next(last).is_some_and(|n| {
+                    p.row as usize == n && (traces.mz[last] - traces.mz[n]).abs() <= ion_dist
+                })
+            })
+            .min_by_key(|j| p.apex_scan.abs_diff(profiles[*j].apex));
+        match winner {
+            None => {
+                // insertIonProfile: the new profile sits in bins [b - dist, b + dist).
+                let j = profiles.len();
+                profiles.push(Profile {
+                    peaks: vec![k],
+                    last_row: p.row as usize,
+                    apex: summed_apex(traces, peaks, &[k], number_bins).0,
+                });
+                (b.saturating_sub(dist)..(b + dist).min(len - 1)).for_each(|i| bins[i].push(j));
+            }
+            Some(j) if p.first_scan < profiles[j].apex && profiles[j].apex < p.last_scan => {
+                let w = &mut profiles[j];
+                w.peaks.push(k);
+                w.last_row = p.row as usize;
+                w.apex = summed_apex(traces, peaks, &w.peaks, number_bins).0;
+            }
+            Some(_) => {}
+        }
+    }
+    for w in profiles.iter().filter(|w| w.peaks.len() >= 2) {
+        let (apex, precise) = summed_apex(traces, peaks, &w.peaks, number_bins);
+        for k in &w.peaks {
+            let q = &mut peaks[*k];
+            if (q.first_scan..=q.last_scan).contains(&apex) {
+                q.apex_scan = apex;
+                q.precise_apex = precise;
+            }
+        }
+    }
+}
+
+/// Apex and precise apex of the old summed `Peak(list)` (§4.3): the members' intensities added
+/// per scan over their joint range.
+fn summed_apex(
+    traces: &IonTraces,
+    peaks: &[Peak],
+    members: &[usize],
+    bins: u32,
+) -> (u32, Option<f32>) {
+    let first = members.iter().map(|k| peaks[*k].first_scan).min().unwrap();
+    let last = members.iter().map(|k| peaks[*k].last_scan).max().unwrap();
+    let mut sum = vec![0.0f32; (last - first + 1) as usize];
+    for p in members.iter().map(|k| &peaks[*k]) {
+        let trace = traces.trace(p.row as usize);
+        for sc in p.first_scan..=p.last_scan {
+            sum[(sc - first) as usize] += trace[sc as usize];
+        }
+    }
+    let apex = argmax(&sum, 0);
+    let precise = precise_apex(&sum, apex, bins).map(|t| t + first as f32);
+    (first + apex as u32, precise)
 }
 
 /// Kernel of the old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): a negative second
@@ -773,12 +1028,90 @@ mod tests {
         let c = Chromatogram {
             scan_times_s: vec![0.0],
             offsets: vec![0, 4],
-            mz: vec![-0.5, -0.4, 0.5, f32::INFINITY],
+            mz: vec![-0.5, 0.3, 0.5, f32::INFINITY],
             intensity: vec![1.0, 2.0, 4.0, 8.0],
         };
         let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
         assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
+    }
+
+    #[test]
+    fn centroiding_follows_the_old_cdf_import() {
+        let mut out = vec![];
+        // Close pairs: both points count when the smaller has half the maximum, else only the
+        // larger (values seen in the old program's cache). 149.0 is its own peak.
+        centroid_scan(
+            &[147.047, 147.089, 148.047, 148.089, 149.0],
+            &[16012.0, 15171.0, 140.0, 339.0, 7.0],
+            &mut out,
+        );
+        assert_eq!(out.len(), 3);
+        assert_eq!((out[0].1, out[1].1, out[2]), (31183.0, 339.0, (149.0, 7.0)));
+        assert!((out[0].0 - 147.0674).abs() < 1e-3 && (out[1].0 - 148.089).abs() < 1e-4);
+        // A valley (two falls, then two rises) splits points closer than 0.1.
+        out.clear();
+        let m: Vec<f32> = (0..7).map(|k| 100.0 + 0.01 * k as f32).collect();
+        centroid_scan(&m, &[5.0, 3.0, 1.0, 2.0, 4.0, 6.0, 1.0], &mut out);
+        assert_eq!(out.iter().map(|p| p.1).collect::<Vec<_>>(), vec![8.0, 10.0]);
+        // Close points of one nominal mass merge in the nominal traces; others stay as they are.
+        let c = Chromatogram {
+            scan_times_s: vec![0.0],
+            offsets: vec![0, 3],
+            mz: vec![73.047, 73.089, 74.0],
+            intensity: vec![10.0, 2.0, 5.0],
+        };
+        let t = IonTraces::new(&c).unwrap();
+        assert_eq!((t.trace(0), t.trace(1)), (&[10.0][..], &[5.0][..]));
+    }
+
+    #[test]
+    fn reorder_peaks_aligns_apexes_of_split_masses() {
+        // 73.047 and 73.089 (0.042 apart) carry one fragment with apexes 3 scans apart; 74.0 is a
+        // whole mass away and keeps its apex.
+        let scans = 200;
+        let mut traces = [noisy(scans), noisy(scans), noisy(scans)];
+        gauss(&mut traces[0], 100.0, 3.0, 20_000.0);
+        gauss(&mut traces[1], 103.0, 3.0, 10_000.0);
+        gauss(&mut traces[2], 103.0, 3.0, 10_000.0);
+        let c = Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64).collect(),
+            offsets: (0..=scans).map(|s| 3 * s).collect(),
+            mz: (0..scans).flat_map(|_| [73.047f32, 73.089, 74.0]).collect(),
+            intensity: (0..scans)
+                .flat_map(|s| [traces[0][s], traces[1][s], traces[2][s]])
+                .collect(),
+        };
+        let mut t = IonTraces::exact(&c).unwrap();
+        let mut p = t.detect_peaks(&PeakSettings::default());
+        let apexes = |p: &[Peak]| p.iter().map(|p| p.apex_scan).collect::<Vec<_>>();
+        assert_eq!(apexes(&p), vec![100, 103, 103]);
+        reorder_peaks(&mut p, &t, 10.0, 0.05, 10);
+        // The summed profile of rows 0 and 1 peaks at scan 101.
+        assert_eq!(apexes(&p), vec![101, 101, 103]);
+        assert_eq!(p[0].precise_apex, p[1].precise_apex);
+        // Apexes further apart than scan_dist stay apart.
+        let mut q = t.detect_peaks(&PeakSettings::default());
+        reorder_peaks(&mut q, &t, 0.2, 0.05, 10);
+        assert_eq!(apexes(&q), vec![100, 103, 103]);
+    }
+
+    #[test]
+    fn exact_traces_keep_close_masses_apart() {
+        // Scan 1 lacks 73.089, which reads 0 there.
+        let c = Chromatogram {
+            scan_times_s: vec![0.0, 1.0],
+            offsets: vec![0, 3, 5],
+            mz: vec![73.047, 73.089, 147.0, 73.047, 147.0],
+            intensity: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        };
+        assert_eq!(IonTraces::new(&c).unwrap().trace(0), &[3.0, 4.0][..]);
+        let t = IonTraces::exact(&c).unwrap();
+        assert_eq!(t.masses, vec![73, 73, 147]);
+        assert_eq!(t.mz, vec![73.047, 73.089, 147.0]);
+        assert_eq!(t.trace(0), &[1.0, 4.0][..]);
+        assert_eq!(t.trace(1), &[2.0, 0.0][..]);
+        assert_eq!(t.trace(2), &[3.0, 5.0][..]);
     }
 
     #[test]
@@ -794,6 +1127,7 @@ mod tests {
         };
         let mut t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
+        assert_eq!(t.mz, vec![73.0, 147.0]);
         assert_eq!(t.trace(0), &big[..]);
         assert_eq!(t.trace(1), &vec![5.0; scans][..]);
         let p = t.detect_peaks(&PeakSettings::default());
