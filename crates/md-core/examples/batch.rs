@@ -6,8 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
-    QuantSettings, RescanSettings, ScanSettings, TableSettings, add_unknowns, rescan_runs,
-    scan_runs, table,
+    QuantSettings, ScanSettings, TableSettings, add_unknowns, rescan_runs, scan_runs, table,
 };
 use md_core::library::{import_msl, read_lbr};
 use md_core::search::PreparedLibrary;
@@ -57,7 +56,6 @@ fn main() {
             &extra,
             &s,
             &QuantSettings::default(),
-            &RescanSettings::default(),
             parallel,
             &cancel,
         )
