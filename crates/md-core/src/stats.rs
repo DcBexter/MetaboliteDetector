@@ -1,5 +1,5 @@
 //! Biomarker statistics, box plot numbers and PCA of the batch table (F14, F15,
-//! `docs/reverse-engineering/algorithms.md` §7e). Pure functions on [`Table`]; the table is the
+//! `docs/reverse-engineering/algorithms.md` §7f). Pure functions on [`Table`]; the table is the
 //! one the user sees, so normalisation (`normalize`) is applied before.
 
 use std::io::Write;

@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7e) are reconstructed. MID is NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID is NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -774,7 +774,7 @@ else: comp2ions[c] = added
 - `QuantIonChecker::detectCompounds2Process`.
 - The source of `ion_number` (Inferred QUANT_ION_NUMBER).
 - The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
-- MID is not analyzed (normalisation: Section 7c, statistics and PCA: Section 7e). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+- MID is not analyzed (normalisation: Section 7c, statistics and PCA: Section 7f). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
 
 ## 7b. Natural isotope calculator (Observed)
 
@@ -826,7 +826,33 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 
 The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of the total signal), `md_core::spectrum::normalize`. A zero norm is not guarded in the old code (division by zero); the rewrite leaves such a spectrum unchanged. The toolbar label strings were not read, so the names Unit/Relative are inferred from the issue. `SplitSpectrumPlot` and `LibrarySpectrumPlot` reuse the same mode.
 
-## 7e. Biomarker statistics, box plots and PCA (Observed; ported in `crates/md-core/src/stats.rs`)
+## 7e. Adding a found compound to a library, copying RTs (Observed; ported in `crates/md-core/src/library_add.rs`)
+
+Read from the disassembly of `DialogAddLib::on_okButton_clicked` (0x4ca1be), `Ui_DialogAddLib::retranslateUi`, `LibrarySearch::addCompoundSpectrum` (0x627f88) and `MainWindow::copyRT` (0x3cacc2).
+
+**Add dialog.** Input is the selected component (`Compound`), the target `LibrarySearch`, a name (editable combo box of the library names) and a comment. Without an open library: error "No compound library opened. Changes can not be saved." The name must not be empty. The dialog copies the compound, sets the name to the combo text and, when the comment is not empty, adds the feature `COMMENT`. If the library does not contain the name, the compound is added (`addCompound(c, "no source")`). Otherwise one of four radio buttons decides, each after a yes/no question:
+
+| Button | Text | Action |
+|---|---|---|
+| `rb_replace` | Replace entry | Removes the entry and adds the found compound (question "replace the existing reference compound?"). |
+| `rb_modify` | Modify entry | `addCompoundSpectrum(c, name, source)`: merges the spectrum into the entry (combined spectrum); not ported. |
+| `rb_keep` | Replace RT/Spec | A new `LibraryCompound(c, ...)` takes the auto quant ions, the quant ions, the features and the formulas of the old entry and replaces it: spectrum, RT, RI new; ions and comments old. |
+| `rb_quant_ions` | Exchange quant. ions | Sets only the auto-detected quant ions of the entry to those of the found compound. |
+
+After a change the library is written with `toDisk()` ("Error saving compound library" on failure). The auto quant ions of the found compound come from `autoQuantificationIonAssignment(n)` (§7.1).
+
+**Copy retention times** (File menu, "Copy Retention Times"): asks for a target library (`.lbr`), maps the components of the run to it with `CompoundMapper::mapCompsToLib` (same search and one-to-one assignment as §5), and shows a table with the columns Compound, RT, Lib RT, RI, Lib RI, Score. Entries with several candidates are set in italics. The write-back after confirmation is in a slot that was not read; the rewrite replaces RT and RI of the assigned entries.
+
+Deviations and gaps of the rewrite:
+
+- "Modify entry" (merge of spectra) is not ported; the combined-spectrum arithmetic (`LibraryCompound::addSpectrum`, virtual call from 0x61cde2) was not read.
+- With "Replace RT/Spec" the old code copies the old features over the new ones, which drops a comment typed in the dialog; the rewrite appends the typed comment (new line) to the old one.
+- The old "Replace RT/Spec" also copies the formulas of the old entry; `LibraryCompound` has no formula field, so they are not copied. "Replace entry" removes the entry and adds the new one at the end; the rewrite replaces it in place. Like the old dialog, the entry gets the source "no source"; the run name is only in the suggested entry name.
+- A found compound without RI (run not calibrated) is stored with RI -1 (no RI); copying RTs then leaves the RI of the entry alone.
+- The result is an entry in the rewrite's `.mdlib` (saved through the library editor), not an `.lbr`.
+- Source string "no source" and the `LibraryCompound(Compound, source)` constructor defaults for the combined spectrum are Inferred from the MSL importer.
+
+## 7f. Biomarker statistics, box plots and PCA (Observed; ported in `crates/md-core/src/stats.rs`)
 
 Addresses are `nm` addresses of the ELF (Ghidra = nm + 0x100000). Found by disassembling `BiomarkerWidget::exportData` (0x4882e6; `createGUI` 0x48a044 repeats the same loop for the table), `BoxPlot::setData` (0x48d42c), `BatchQuantificationResultWidget::showPCA` (0x4557e0) and `tools::PCA` (0x6d7bc2).
 
@@ -874,7 +900,7 @@ Deviations of the rewrite:
 - A missing value is `None` in the rewrite and 0 in the old table; PCA and the two-group test treat it as 0 by default (`missing_as_zero`), or skip it when that option is off. Values that the normalisation could not compute are also `None`.
 - Not ported: PDF/clipboard export of the plots (PNG only).
 
-### 7e.1 Unknowns (statistics)
+### 7f.1 Unknowns (statistics)
 
 - Whether `BiomarkerWidget::createGUI` differs from `exportData` besides the table widget (the same alglib calls appear at 0x48a94a-0x48ab20).
 - The default p-value filter and the dialog defaults for the independent flag.
@@ -892,7 +918,7 @@ Deviations of the rewrite:
 6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
-9. MID: not started. Normalisation (7c), statistics and PCA (7e) are done.
+9. MID: not started. Normalisation (7c), statistics and PCA (7f) are done.
 
 ## 9. Ranked next steps
 
@@ -900,4 +926,4 @@ Deviations of the rewrite:
 - Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
-Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Statistics and PCA reconstructed (Section 7e).
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Statistics and PCA reconstructed (Section 7f).
