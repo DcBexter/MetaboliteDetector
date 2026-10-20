@@ -1,6 +1,23 @@
 # Cases for make-anova.sh: fixed edge cases and seeded random groups ("case NAME", "group V V ...", "end").
-import random
-random.seed(203)
+
+state = 203
+
+
+def uniform():
+    """A fixed linear congruential sequence in [0, 1): the cases must be the same on every run."""
+    global state
+    state = (state * 6364136223846793005 + 1442695040888963407) % 2**64
+    return (state >> 11) / 2**53
+
+
+def below(n):
+    return int(uniform() * n)
+
+
+def normal(mean, sd):
+    return mean + sd * (sum(uniform() for _ in range(12)) - 6)
+
+
 cases = [
   ("hand", [[1, 2, 3], [2, 3, 4], [5, 6, 7]]),
   ("two_groups", [[1, 2, 3, 4], [2, 4, 6, 9]]),
@@ -18,9 +35,9 @@ cases = [
   ("tiny_p", [[1, 1.01, 0.99, 1.02], [5, 5.01, 4.99, 5.02], [9, 9.01, 8.99, 9.02]]),
 ]
 for i in range(60):
-    k = random.randint(2, 6)
-    shift = random.choice([0, 0, 1, 5])
-    groups = [[round(random.gauss(100 + shift * g, 20), 3) for _ in range(random.randint(2, 8))] for g in range(k)]
+    k = 2 + below(5)
+    shift = [0, 0, 1, 5][below(4)]
+    groups = [[round(normal(100 + shift * g, 20), 3) for _ in range(2 + below(7))] for g in range(k)]
     cases.append((f"random{i}", groups))
 for name, groups in cases:
     print("case", name)
