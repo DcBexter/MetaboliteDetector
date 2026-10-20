@@ -245,6 +245,60 @@ pub fn apply_rt_copy(target: &mut [LibraryCompound], plan: &[RtCopy]) -> Result<
     Ok(())
 }
 
+/// Why a library entry is not usable as it stands. The editor still saves such entries (the user may
+/// be half way through), but names them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Issue {
+    /// No spectrum peak with an intensity above zero.
+    NoSpectrum,
+    /// A quant ion outside the mass range of the spectrum.
+    QuantIonOutOfRange(f32),
+    /// A quant ion inside the mass range that has no peak in the spectrum.
+    QuantIonNotInSpectrum(f32),
+}
+
+impl std::fmt::Display for Issue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSpectrum => write!(f, "the spectrum has no peaks"),
+            Self::QuantIonOutOfRange(m) => write!(f, "quant ion {m} is outside the mass range"),
+            Self::QuantIonNotInSpectrum(m) => write!(f, "quant ion {m} is not in the spectrum"),
+        }
+    }
+}
+
+/// The problems of one entry; empty when it is fine. Without a spectrum the quant ions are not
+/// checked, the missing spectrum is the one problem.
+pub fn check(c: &LibraryCompound) -> Vec<Issue> {
+    let s = &c.spectrum;
+    let peaks: Vec<f32> = s
+        .masses
+        .iter()
+        .zip(&s.values)
+        .filter(|(_, v)| **v > 0)
+        .map(|(m, _)| *m)
+        .collect();
+    let (Some(&lo), Some(&hi)) = (
+        peaks.iter().min_by(|a, b| a.total_cmp(b)),
+        peaks.iter().max_by(|a, b| a.total_cmp(b)),
+    ) else {
+        return vec![Issue::NoSpectrum];
+    };
+    let half = s.bin_width.max(1.0) / 2.0;
+    c.quant_ions
+        .iter()
+        .filter_map(|&q| {
+            if !q.is_finite() || q < lo - half || q > hi + half {
+                Some(Issue::QuantIonOutOfRange(q))
+            } else if peaks.iter().all(|m| (m - q).abs() > half) {
+                Some(Issue::QuantIonNotInSpectrum(q))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +524,28 @@ mod tests {
         assert!(id.assigned[0].is_none_or(|h| h.overall < 0.5));
         let hit = id.assigned[1].expect("assigned");
         assert!(hit.overall > 0.99, "{}", hit.overall);
+    }
+
+    #[test]
+    fn check_names_unusable_entries() {
+        let mut c = LibraryCompound::new("Test");
+        c.quant_ions = vec![123566.0];
+        // The reported case: a run-together ion list and no spectrum.
+        assert_eq!(check(&c), [Issue::NoSpectrum]);
+        c.spectrum.masses = vec![73.0, 174.0, 248.0];
+        c.spectrum.values = vec![999, 0, 500];
+        assert_eq!(check(&c), [Issue::QuantIonOutOfRange(123566.0)]);
+        c.quant_ions = vec![74.0, 174.0, 248.0];
+        assert_eq!(
+            check(&c),
+            [
+                Issue::QuantIonNotInSpectrum(74.0),
+                Issue::QuantIonNotInSpectrum(174.0)
+            ]
+        );
+        c.quant_ions = vec![f32::NAN];
+        assert_eq!(check(&c).len(), 1);
+        c.quant_ions = vec![73.0, 248.0];
+        assert!(check(&c).is_empty());
     }
 }
