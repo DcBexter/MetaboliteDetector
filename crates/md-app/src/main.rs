@@ -18,9 +18,13 @@ mod jobs;
 mod library_editor;
 mod loading;
 mod menu;
+mod results;
 mod run_list;
 mod settings;
 mod status;
+mod style;
+#[cfg(test)]
+mod ui_tests;
 mod view;
 
 use jobs::{poll_job, spawn};
@@ -36,6 +40,7 @@ fn main() -> eframe::Result {
         "MetaboliteDetector",
         options,
         Box::new(|cc| {
+            style::apply(&cc.egui_ctx);
             let mut app = App::default();
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
@@ -76,6 +81,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    results: results::Results,
     export: export::Export,
     view: view::View,
 }
@@ -101,6 +107,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
         }
@@ -123,6 +130,8 @@ struct Run {
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
     /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
+    /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
+    peak_masses: Vec<u32>,
     analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
@@ -131,6 +140,8 @@ struct Run {
     /// Library hits of `components` once a library is open.
     ident: Option<identify::Identified>,
     ident_job: Option<identify::IdentJob>,
+    /// Counts every replacement of `components` and `ident`, so caches can tell a new result from the old.
+    rev: u64,
 }
 
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).
@@ -175,6 +186,7 @@ impl App {
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
         self.isotopes.window(ctx);
+        self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);
         self.library_editor(ctx);
     }
