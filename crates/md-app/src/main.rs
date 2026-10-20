@@ -46,7 +46,7 @@ fn main() -> eframe::Result {
             .with_inner_size([1200.0, 800.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "MetaboliteDetector",
         options,
         Box::new(|cc| {
@@ -61,7 +61,16 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(app))
         }),
-    )
+    );
+    // Without a console (release on Windows) a failed start (e.g. no OpenGL) would otherwise say nothing.
+    if let Err(e) = &result {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("MetaboliteDetector")
+            .set_description(format!("The window could not be opened: {e}"))
+            .show();
+    }
+    result
 }
 
 #[derive(Clone, Copy, PartialEq)]

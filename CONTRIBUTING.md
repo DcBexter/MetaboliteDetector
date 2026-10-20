@@ -20,4 +20,4 @@ Open Sonar issues of main, or of pull request N: `scripts/sonar-open.sh [N]` (ne
 Release: raise `version` in the root `Cargo.toml` on main, then tag that commit `vX.Y.Z` and push the tag.
 `.github/workflows/release.yml` builds the portable Windows exe, the MSI (`installer/metabolite-detector.wxs`,
 WiX 6) and the Linux tar.gz, and publishes them as a pre-release. MSI versions are numeric, so `vX.Y.Z-rc1`
-installs as `X.Y.Z`.
+installs as `X.Y.Z` and replaces an installed `X.Y.Z` either way: tag no rc after its final release.
