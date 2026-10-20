@@ -155,8 +155,8 @@ impl Batch {
     pub fn finished(&mut self, lib: Arc<Library>, runs: Vec<RunResult>) {
         self.scan = Some(Scan {
             lib,
-            runs,
-            extra: Vec::new(),
+            runs: Arc::new(runs),
+            extra: Arc::default(),
             rescanned: 0,
             errors: Vec::new(),
             took: Duration::ZERO,
