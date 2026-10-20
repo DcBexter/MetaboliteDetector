@@ -22,6 +22,9 @@ mod results;
 mod run_list;
 mod settings;
 mod status;
+mod style;
+#[cfg(test)]
+mod ui_tests;
 mod view;
 
 use jobs::{poll_job, spawn};
@@ -37,6 +40,7 @@ fn main() -> eframe::Result {
         "MetaboliteDetector",
         options,
         Box::new(|cc| {
+            style::apply(&cc.egui_ctx);
             let mut app = App::default();
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {

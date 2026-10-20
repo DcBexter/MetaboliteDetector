@@ -2,70 +2,26 @@
 //! Layout: `docs/reverse-engineering/file-formats.md` §3. Only version 4 (MetaboliteDetector 3.3)
 //! is decoded; the writer produces the same payload, so the old program opens our files.
 
-use std::collections::BTreeMap;
 use std::io::{Read, Write as _};
 use std::path::Path;
 
 use crate::deconv::{Component, FittedPeak};
-use crate::library::{LibraryError, LibrarySpectrum, Reader, gunzip, read_spectrum, text};
+use crate::library::{
+    LibraryCompound, LibraryError, LibraryModel, LibraryPeak, Reader, gunzip, read_compound_record,
+};
 
-/// Ion peak of a component (`PeakEssential<float>`, ion as m/z) or of its model peak
-/// (`PeakEssential<short>`, ion as an integer code), fields in file order.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PeakEssential<I> {
-    pub ion: I,
-    pub sharpness: f64,
-    pub integral: f64,
-    pub quality: f64,
-    pub signal_to_noise: f64,
-    /// Meaning not recovered; 1 in every sample peak.
-    pub count: u32,
-    pub first_scan: u32,
-    pub last_scan: u32,
-    /// Share of the model peak in this ion trace (`c2` of the fit), 1 for the model peak itself.
-    pub model_parameter: f64,
-    pub apex_scan: u32,
-    pub precise_apex: f64,
-}
-
-/// Model peak of a component (`Peak<double,short>`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelPeak {
-    pub essential: PeakEssential<i16>,
-    pub noise_factor: f64,
-    /// Model intensity of each scan in `first_scan..=last_scan`.
-    pub values: Vec<f64>,
-}
-
-/// One saved component (`Compound<int,float>`), fields in file order.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CmpCompound {
-    /// Deconvoluted spectrum; `rt_ms` is the apex time, `ri` is -1 without a calibration.
-    pub spectrum: LibrarySpectrum,
-    /// Ion peaks behind the spectrum, ascending ion.
-    pub peaks: Vec<PeakEssential<f32>>,
-    pub model: ModelPeak,
-    pub name: String,
-    pub fwhm: Option<Vec<f64>>,
-    pub integrals: Option<Vec<f64>>,
-    pub quant_ions: Vec<f32>,
-    pub auto_quant_ions: Vec<f32>,
-    pub features: BTreeMap<String, String>,
-    pub drt: f64,
-    pub time_stamp: i64,
-    pub id: i64,
-}
-
-impl CmpCompound {
-    /// The component as the deconvolution returns it. Scan range and model come from the model
-    /// peak; `FittedPeak::peak` indexes [`Self::peaks`].
-    pub fn component(&self) -> Component {
-        let m = &self.model.essential;
-        Component {
+impl LibraryCompound {
+    /// The component as the deconvolution returns it; None without a model peak (a library compound
+    /// before version 4). Scan range and model come from the model peak; `FittedPeak::peak` indexes
+    /// [`Self::peaks`].
+    pub fn component(&self) -> Option<Component> {
+        let model = self.model.as_ref()?;
+        let m = &model.peak;
+        Some(Component {
             first_scan: m.first_scan,
-            apex_scan: m.apex_scan,
+            apex_scan: m.max_scan,
             last_scan: m.last_scan,
-            model: self.model.values.clone(),
+            model: model.values.clone(),
             spectrum: (self.spectrum.masses.iter().zip(&self.spectrum.values))
                 .map(|(&mz, &v)| (mz.round() as u32, v.max(0) as u32))
                 .collect(),
@@ -76,7 +32,7 @@ impl CmpCompound {
                     integral: p.integral,
                 })
                 .collect(),
-        }
+        })
     }
 }
 
@@ -109,7 +65,8 @@ pub fn saved_components(
         )));
     }
     let scans = scan_times_s.len();
-    let mut components: Vec<_> = compounds.iter().map(CmpCompound::component).collect();
+    // Version 4 always has a model peak, so every compound gives a component.
+    let mut components: Vec<_> = compounds.iter().filter_map(|c| c.component()).collect();
     if let Some(k) = components.iter().find(|k| {
         k.last_scan as usize >= scans
             || k.first_scan > k.apex_scan
@@ -133,14 +90,13 @@ pub fn saved_components(
 }
 
 const VERSION: u32 = 4;
-const PEAK_BYTES: usize = 68;
 /// Size of a compound whose lists and strings are all empty: a lower bound per compound.
 const MIN_COMPOUND_BYTES: usize = 36 + 4 + (66 + 8 + 4 + 4) + 52;
 // shortcut: whole file in RAM, capped like `.lbr`; a run has a few thousand components at most.
 const MAX_CMP_BYTES: u64 = 1 << 30;
 
 /// Reads a `.cmp` file (gzip, or an already decompressed payload).
-pub fn read_cmp(path: impl AsRef<Path>) -> Result<Vec<CmpCompound>, LibraryError> {
+pub fn read_cmp(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)?
         .take(MAX_CMP_BYTES + 1)
@@ -153,8 +109,9 @@ pub fn read_cmp(path: impl AsRef<Path>) -> Result<Vec<CmpCompound>, LibraryError
     parse_cmp(&bytes)
 }
 
-/// Parses `.cmp` bytes; every length and check value is validated.
-pub fn parse_cmp(bytes: &[u8]) -> Result<Vec<CmpCompound>, LibraryError> {
+/// Parses `.cmp` bytes; every length and check value is validated. The library-only fields of the
+/// compounds keep the defaults of [`LibraryCompound::new`].
+pub fn parse_cmp(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     let unzipped;
     let data = if bytes.starts_with(&[0x1f, 0x8b]) {
         unzipped = gunzip(bytes)?;
@@ -173,93 +130,37 @@ pub fn parse_cmp(bytes: &[u8]) -> Result<Vec<CmpCompound>, LibraryError> {
             )));
         }
     }
-    let compounds = r.list(MIN_COMPOUND_BYTES, read_compound)?;
+    let compounds = r.list(MIN_COMPOUND_BYTES, |r| read_compound_record(r, VERSION))?;
     if r.remaining() != 0 {
         return r.corrupt(format!("{} bytes after the last compound", r.remaining()));
     }
     Ok(compounds)
 }
 
-fn read_essential<I>(
-    r: &mut Reader,
-    ion: impl FnOnce(&mut Reader) -> Result<I, LibraryError>,
-) -> Result<PeakEssential<I>, LibraryError> {
-    Ok(PeakEssential {
-        ion: ion(r)?,
-        sharpness: r.f64()?,
-        integral: r.f64()?,
-        quality: r.f64()?,
-        signal_to_noise: r.f64()?,
-        count: r.u32()?,
-        first_scan: r.u32()?,
-        last_scan: r.u32()?,
-        model_parameter: r.f64()?,
-        apex_scan: r.u32()?,
-        precise_apex: r.f64()?,
-    })
-}
-
-fn model_check(m: &ModelPeak) -> u32 {
-    let e = &m.essential;
+fn model_check(m: &LibraryModel) -> u32 {
+    let p = &m.peak;
     (m.values.len() as u32)
-        .wrapping_add(e.first_scan)
-        .wrapping_add(e.last_scan)
-        .wrapping_add(e.apex_scan)
+        .wrapping_add(p.first_scan)
+        .wrapping_add(p.last_scan)
+        .wrapping_add(p.max_scan)
 }
 
-fn compound_check(c: &CmpCompound) -> u32 {
+fn compound_check(c: &LibraryCompound) -> u32 {
     (c.quant_ions.len() + c.features.len() + c.name.len() + c.peaks.len()) as u32
 }
 
-fn read_compound(r: &mut Reader) -> Result<CmpCompound, LibraryError> {
-    let spectrum = read_spectrum(r)?;
-    let peaks = r.list(PEAK_BYTES, |r| read_essential(r, |r| r.f32()))?;
-    let essential = read_essential(r, |r| r.array().map(i16::from_le_bytes))?;
-    let model = ModelPeak {
-        essential,
-        noise_factor: r.f64()?,
-        values: r.list(8, Reader::f64)?,
-    };
-    if r.u32()? != model_check(&model) {
-        return r.corrupt("model peak check value mismatch");
-    }
-    let name_bytes = r.bytes()?;
-    let fwhm = r.f64_list_or_null()?;
-    let integrals = r.f64_list_or_null()?;
-    let quant_ions = r.list(4, Reader::f32)?;
-    let auto_quant_ions = r.list(4, Reader::f32)?;
-    let feature_list = r.list(8, |r| Ok((r.string()?, r.string()?)))?;
-    let expected = (quant_ions.len() + feature_list.len() + name_bytes.len() + peaks.len()) as u32;
-    let c = CmpCompound {
-        spectrum,
-        peaks,
-        model,
-        name: text(name_bytes),
-        fwhm,
-        integrals,
-        quant_ions,
-        auto_quant_ions,
-        features: feature_list.into_iter().collect(),
-        drt: r.f64()?,
-        time_stamp: r.i64()?,
-        id: r.i64()?,
-    };
-    if r.u32()? != expected {
-        return r.corrupt("compound check value mismatch");
-    }
-    Ok(c)
-}
-
 /// Writes a `.cmp` file (gzip) the old program can open.
-pub fn write_cmp(path: impl AsRef<Path>, compounds: &[CmpCompound]) -> std::io::Result<()> {
+pub fn write_cmp(path: impl AsRef<Path>, compounds: &[LibraryCompound]) -> std::io::Result<()> {
     let mut gz =
         flate2::write::GzEncoder::new(std::fs::File::create(path)?, flate2::Compression::default());
     gz.write_all(&cmp_payload(compounds))?;
     gz.finish()?.sync_all()
 }
 
-/// The uncompressed `.cmp` payload. Names are written as UTF-8 (the old files carry no encoding).
-pub fn cmp_payload(compounds: &[CmpCompound]) -> Vec<u8> {
+/// The uncompressed `.cmp` payload: the compound records only (library-only fields are not part of
+/// a `.cmp`). Names are written as UTF-8 (the old files carry no encoding). The old format always
+/// has a model peak; a compound without one gets an empty model (all fields 0).
+pub fn cmp_payload(compounds: &[LibraryCompound]) -> Vec<u8> {
     let mut w = Vec::new();
     put(&mut w, VERSION.to_le_bytes());
     count(&mut w, compounds.len());
@@ -292,8 +193,12 @@ fn f64_list_or_null(w: &mut Vec<u8>, v: &Option<Vec<f64>>) {
     }
 }
 
-fn write_essential<I: Copy>(w: &mut Vec<u8>, p: &PeakEssential<I>, ion: fn(I) -> Vec<u8>) {
-    w.extend(ion(p.ion));
+fn write_peak(w: &mut Vec<u8>, p: &LibraryPeak, short_ion: bool) {
+    if short_ion {
+        put(w, (p.ion as i16).to_le_bytes());
+    } else {
+        put(w, p.ion.to_le_bytes());
+    }
     for x in [p.sharpness, p.integral, p.quality, p.signal_to_noise] {
         put(w, x.to_le_bytes());
     }
@@ -301,11 +206,11 @@ fn write_essential<I: Copy>(w: &mut Vec<u8>, p: &PeakEssential<I>, ion: fn(I) ->
         put(w, x.to_le_bytes());
     }
     put(w, p.model_parameter.to_le_bytes());
-    put(w, p.apex_scan.to_le_bytes());
-    put(w, p.precise_apex.to_le_bytes());
+    put(w, p.max_scan.to_le_bytes());
+    put(w, p.interpolated_max_scan.to_le_bytes());
 }
 
-fn write_compound(w: &mut Vec<u8>, c: &CmpCompound) {
+fn write_compound(w: &mut Vec<u8>, c: &LibraryCompound) {
     let s = &c.spectrum;
     put(w, s.scan.to_le_bytes());
     put(w, s.rt_ms.to_le_bytes());
@@ -319,13 +224,25 @@ fn write_compound(w: &mut Vec<u8>, c: &CmpCompound) {
 
     count(w, c.peaks.len());
     for p in &c.peaks {
-        write_essential(w, p, |i| i.to_le_bytes().to_vec());
+        write_peak(w, p, false);
     }
-    write_essential(w, &c.model.essential, |i| i.to_le_bytes().to_vec());
-    put(w, c.model.noise_factor.to_le_bytes());
-    count(w, c.model.values.len());
-    c.model.values.iter().for_each(|x| put(w, x.to_le_bytes()));
-    put(w, model_check(&c.model).to_le_bytes());
+    let empty;
+    let model = match &c.model {
+        Some(m) => m,
+        None => {
+            empty = LibraryModel {
+                peak: zero_peak(),
+                noise_factor: 0.0,
+                values: Vec::new(),
+            };
+            &empty
+        }
+    };
+    write_peak(w, &model.peak, true);
+    put(w, model.noise_factor.to_le_bytes());
+    count(w, model.values.len());
+    model.values.iter().for_each(|x| put(w, x.to_le_bytes()));
+    put(w, model_check(model).to_le_bytes());
 
     string(w, &c.name);
     f64_list_or_null(w, &c.fwhm);
@@ -345,12 +262,30 @@ fn write_compound(w: &mut Vec<u8>, c: &CmpCompound) {
     put(w, compound_check(c).to_le_bytes());
 }
 
+fn zero_peak() -> LibraryPeak {
+    LibraryPeak {
+        ion: 0.0,
+        sharpness: 0.0,
+        integral: 0.0,
+        quality: 0.0,
+        signal_to_noise: 0.0,
+        count: 0,
+        first_scan: 0,
+        last_scan: 0,
+        model_parameter: 0.0,
+        max_scan: 0,
+        interpolated_max_scan: 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn peak<I>(ion: I, first: u32, apex: u32, last: u32) -> PeakEssential<I> {
-        PeakEssential {
+    use crate::library::LibrarySpectrum;
+
+    fn peak(ion: f32, first: u32, apex: u32, last: u32) -> LibraryPeak {
+        LibraryPeak {
             ion,
             sharpness: 8.5,
             integral: 1234.5,
@@ -360,13 +295,13 @@ mod tests {
             first_scan: first,
             last_scan: last,
             model_parameter: 0.5,
-            apex_scan: apex,
-            precise_apex: apex as f64 + 0.25,
+            max_scan: apex,
+            interpolated_max_scan: apex as f64 + 0.25,
         }
     }
 
-    fn sample() -> Vec<CmpCompound> {
-        let c = CmpCompound {
+    fn sample() -> Vec<LibraryCompound> {
+        let c = LibraryCompound {
             spectrum: LibrarySpectrum {
                 scan: 12,
                 rt_ms: 247160.0,
@@ -376,11 +311,11 @@ mod tests {
                 values: vec![900, 120],
             },
             peaks: vec![peak(73.0, 10, 12, 15), peak(147.0, 11, 12, 14)],
-            model: ModelPeak {
-                essential: peak(1, 10, 12, 15),
+            model: Some(LibraryModel {
+                peak: peak(1.0, 10, 12, 15),
                 noise_factor: 0.5,
                 values: vec![1.0, 4.0, 9.0, 4.0, 2.0, 1.0],
-            },
+            }),
             name: "Glycine (3TMS) ä".into(),
             fwhm: None,
             integrals: Some(vec![1.5, 2.5]),
@@ -390,10 +325,11 @@ mod tests {
             drt: 0.0,
             time_stamp: 1_600_000_000,
             id: 7,
+            ..LibraryCompound::new("")
         };
         vec![
             c.clone(),
-            CmpCompound {
+            LibraryCompound {
                 name: String::new(),
                 peaks: vec![],
                 ..c
@@ -410,10 +346,17 @@ mod tests {
         assert_eq!(back, sample());
         assert_eq!(cmp_payload(&back), cmp_payload(&sample()));
 
-        let k = back[0].component();
+        let k = back[0].component().unwrap();
         assert_eq!((k.first_scan, k.apex_scan, k.last_scan), (10, 12, 15));
         assert_eq!(k.spectrum, vec![(73, 900), (147, 120)]);
         assert_eq!((k.peaks[1].peak, k.peaks[1].integral), (1, 1234.5));
+
+        // A library compound without model peak is written with an empty one.
+        let bare = LibraryCompound::new("x");
+        assert!(bare.component().is_none());
+        let back = parse_cmp(&cmp_payload(std::slice::from_ref(&bare))).unwrap();
+        assert_eq!(back[0].model.as_ref().unwrap().values, Vec::<f64>::new());
+        assert_eq!(back[0].name, "x");
     }
 
     #[test]

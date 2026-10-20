@@ -84,9 +84,9 @@ fn reads_and_rewrites_old_cmp_files() {
                 let got = [
                     p.ion as f64,
                     p.first_scan as f64,
-                    p.apex_scan as f64,
+                    p.max_scan as f64,
                     p.last_scan as f64,
-                    p.precise_apex,
+                    p.interpolated_max_scan,
                     p.signal_to_noise,
                     p.quality,
                     p.sharpness,
@@ -101,7 +101,7 @@ fn reads_and_rewrites_old_cmp_files() {
                     );
                 }
             }
-            let k = c.component();
+            let k = c.component().unwrap();
             assert!(
                 k.first_scan <= k.apex_scan && k.apex_scan <= k.last_scan,
                 "{name}"

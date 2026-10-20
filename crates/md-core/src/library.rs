@@ -52,9 +52,41 @@ pub struct LibraryCompound {
     pub ion_freq: Vec<(f32, u32)>,
     pub spec_count: u32,
     pub ris: Vec<f64>,
-    /// 40-byte records of unknown meaning (file-formats.md §1.3), kept verbatim.
+    /// Version 2 peak records (`PeakEssential<float>`, file-formats.md §1.3), kept verbatim.
     pub blocks: Vec<[u8; BLOCK_BYTES]>,
     pub sources: Vec<String>,
+    /// Peaks of the compound (version 4 and later); sorted by ion in `.lbr` files.
+    pub peaks: Vec<LibraryPeak>,
+    /// Model peak (version 4 and later).
+    pub model: Option<LibraryModel>,
+    /// Fragment `(begin, end, formula)`, formula trimmed (version 3 and later).
+    pub formulas: Vec<(u32, u32, String)>,
+    /// Fragment `(begin, end, mid_size)` (version 5).
+    pub mid_sizes: Vec<(u32, u32, u32)>,
+}
+
+/// One peak (`PeakEssential`), fields in file order (file-formats.md §1.6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryPeak {
+    pub ion: f32,
+    pub sharpness: f64,
+    pub integral: f64,
+    pub quality: f64,
+    pub signal_to_noise: f64,
+    pub count: u32,
+    pub first_scan: u32,
+    pub last_scan: u32,
+    pub model_parameter: f64,
+    pub max_scan: u32,
+    pub interpolated_max_scan: f64,
+}
+
+/// Model peak of a compound (`Peak<double,short>`); its ion is a 16-bit integer in the file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryModel {
+    pub peak: LibraryPeak,
+    pub noise_factor: f64,
+    pub values: Vec<f64>,
 }
 
 impl LibraryCompound {
@@ -84,11 +116,17 @@ impl LibraryCompound {
             ris: Vec::new(),
             blocks: Vec::new(),
             sources: Vec::new(),
+            peaks: Vec::new(),
+            model: None,
+            formulas: Vec::new(),
+            mid_sizes: Vec::new(),
         }
     }
 }
 
 const BLOCK_BYTES: usize = 40;
+/// `PeakEssential<float>` in versions 4 and 5.
+const PEAK_BYTES: usize = 68;
 /// Size of a record whose lists and strings are all empty: a lower bound per compound.
 const MIN_COMPOUND_BYTES: usize = 36 + 56 + 24;
 // shortcut: whole library in RAM, capped so a gzip bomb cannot exhaust memory; raise it when real
@@ -100,7 +138,8 @@ pub fn read_lbr(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryE
     parse_lbr(&std::fs::read(path)?)
 }
 
-/// Parses `.lbr` bytes. Only version 2 is decoded; every length and check value is validated.
+/// Parses `.lbr` bytes of versions 2 to 5 (the old program writes 5); every length and check value is
+/// validated.
 pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     let unzipped;
     let data = if bytes.starts_with(&[0x1f, 0x8b]) {
@@ -110,16 +149,13 @@ pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
         bytes
     };
     let mut r = Reader::new(data);
-    match r.u32()? {
-        2 => {}
-        5 => {
-            return Err(LibraryError::Unsupported(
-                "library version 5: its layout is unknown until a sample file is available".into(),
-            ));
-        }
-        v => return Err(LibraryError::Unsupported(format!("library version {v}"))),
+    let version = r.u32()?;
+    if !(2..=5).contains(&version) {
+        return Err(LibraryError::Unsupported(format!(
+            "library version {version}"
+        )));
     }
-    let compounds = r.list(MIN_COMPOUND_BYTES, read_compound)?;
+    let compounds = r.list(MIN_COMPOUND_BYTES, |r| read_compound(r, version))?;
     if r.remaining() != 0 {
         return r.corrupt(format!("{} bytes after the last compound", r.remaining()));
     }
@@ -143,8 +179,41 @@ pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
     Ok(out)
 }
 
-/// `Spectrum<int,float>::toStream` record (file-formats.md §1.2), also the start of a `.cmp` compound.
-pub(crate) fn read_spectrum(r: &mut Reader) -> Result<LibrarySpectrum, LibraryError> {
+/// `LibraryCompound::fromStream`; the version gates follow the old reader (file-formats.md §1.2).
+fn read_compound(r: &mut Reader, version: u32) -> Result<LibraryCompound, LibraryError> {
+    let mut c = read_compound_record(r, version)?;
+    c.comb_spec = r.list(8, |r| Ok((r.f32()?, r.i32()?)))?;
+    c.ion_freq = r.list(8, |r| Ok((r.f32()?, r.u32()?)))?;
+    c.spec_count = r.u32()?;
+    c.ris = r.list(8, Reader::f64)?;
+    if version <= 3 {
+        c.blocks = r.list(BLOCK_BYTES, Reader::array)?;
+    }
+    c.sources = r.list(4, Reader::string)?;
+    // The old reader trims each formula (`trimFormulas`, C `isspace`, which includes VT).
+    if version >= 3 {
+        c.formulas = r.list(12, |r| {
+            Ok((
+                r.u32()?,
+                r.u32()?,
+                r.string()?
+                    .trim_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b')
+                    .to_string(),
+            ))
+        })?;
+    }
+    if version >= 5 {
+        c.mid_sizes = r.list(12, |r| Ok((r.u32()?, r.u32()?, r.u32()?)))?;
+    }
+    Ok(c)
+}
+
+/// `Compound<int,float>::fromStream` (file-formats.md §3.2), the part a library compound shares with
+/// a `.cmp` compound; the library-only fields keep the defaults of [`LibraryCompound::new`].
+pub(crate) fn read_compound_record(
+    r: &mut Reader,
+    version: u32,
+) -> Result<LibraryCompound, LibraryError> {
     let scan = r.u32()?;
     let rt_ms = r.f64()?;
     let ri = r.f64()?;
@@ -157,24 +226,30 @@ pub(crate) fn read_spectrum(r: &mut Reader) -> Result<LibrarySpectrum, LibraryEr
     if masses.len() != values.len() {
         return r.corrupt("spectrum has different numbers of masses and values");
     }
-    Ok(LibrarySpectrum {
+    let spectrum = LibrarySpectrum {
         scan,
         rt_ms,
         ri,
         bin_width,
         masses,
         values,
-    })
-}
+    };
 
-fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
-    let spectrum = read_spectrum(r)?;
-
-    if r.u32()? != 0 {
+    let n_peaks = r.u32()?;
+    if n_peaks != 0 && version < 4 {
         return Err(LibraryError::Unsupported(
-            "compounds with peak records (layout unknown)".into(),
+            "version 2 and 3 compounds with peak records (layout unknown)".into(),
         ));
     }
+    let n = r.count(n_peaks as usize, PEAK_BYTES)?;
+    let peaks = (0..n)
+        .map(|_| read_peak(r, false))
+        .collect::<Result<_, _>>()?;
+    let model = if version >= 4 {
+        Some(read_model(r)?)
+    } else {
+        None
+    };
     let name_bytes = r.bytes()?;
     let fwhm = r.f64_list_or_null()?;
     let integrals = r.f64_list_or_null()?;
@@ -185,7 +260,7 @@ fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
     let time_stamp = r.i64()?;
     let id = r.i64()?;
     let expected = (quant_ions.len() + feature_list.len() + name_bytes.len()) as u32;
-    if r.u32()? != expected {
+    if r.u32()? != expected.wrapping_add(n_peaks) {
         return r.corrupt("compound check value mismatch");
     }
 
@@ -200,12 +275,49 @@ fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
         drt,
         time_stamp,
         id,
-        comb_spec: r.list(8, |r| Ok((r.f32()?, r.i32()?)))?,
-        ion_freq: r.list(8, |r| Ok((r.f32()?, r.u32()?)))?,
-        spec_count: r.u32()?,
-        ris: r.list(8, Reader::f64)?,
-        blocks: r.list(BLOCK_BYTES, Reader::array)?,
-        sources: r.list(4, Reader::string)?,
+        peaks,
+        model,
+        ..LibraryCompound::new("")
+    })
+}
+
+/// `PeakEssential<float>` (68 bytes) or, with `short_ion`, `PeakEssential<short>` (66 bytes).
+pub(crate) fn read_peak(r: &mut Reader, short_ion: bool) -> Result<LibraryPeak, LibraryError> {
+    Ok(LibraryPeak {
+        ion: if short_ion {
+            f32::from(i16::from_le_bytes(r.array()?))
+        } else {
+            r.f32()?
+        },
+        sharpness: r.f64()?,
+        integral: r.f64()?,
+        quality: r.f64()?,
+        signal_to_noise: r.f64()?,
+        count: r.u32()?,
+        first_scan: r.u32()?,
+        last_scan: r.u32()?,
+        model_parameter: r.f64()?,
+        max_scan: r.u32()?,
+        interpolated_max_scan: r.f64()?,
+    })
+}
+
+/// `Peak<double,short>`: peak, noise factor, values, check = first + last + max scan + value count.
+pub(crate) fn read_model(r: &mut Reader) -> Result<LibraryModel, LibraryError> {
+    let peak = read_peak(r, true)?;
+    let noise_factor = r.f64()?;
+    let values = r.list(8, Reader::f64)?;
+    let expected = (peak.first_scan)
+        .wrapping_add(peak.last_scan)
+        .wrapping_add(peak.max_scan)
+        .wrapping_add(values.len() as u32);
+    if r.u32()? != expected {
+        return r.corrupt("model peak check value mismatch");
+    }
+    Ok(LibraryModel {
+        peak,
+        noise_factor,
+        values,
     })
 }
 
@@ -263,7 +375,7 @@ impl<'a> Reader<'a> {
 
     /// Reads a count of elements of at least `min_bytes` each; a count that cannot fit in the
     /// remaining bytes is rejected before anything is allocated.
-    fn count(&mut self, n: usize, min_bytes: usize) -> Result<usize, LibraryError> {
+    pub(crate) fn count(&mut self, n: usize, min_bytes: usize) -> Result<usize, LibraryError> {
         if n.checked_mul(min_bytes)
             .is_none_or(|b| b > self.remaining())
         {
@@ -309,7 +421,7 @@ impl<'a> Reader<'a> {
 }
 
 /// The old files carry no encoding: UTF-8 when valid, otherwise Latin-1 (every byte is one char).
-pub(crate) fn text(bytes: &[u8]) -> String {
+fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
@@ -478,7 +590,7 @@ pub fn write_msl(compounds: &[LibraryCompound]) -> String {
 }
 
 /// First line of a `.mdlib` file; the number is the format version.
-const MDLIB_HEADER: &str = "MetaboliteDetector library 1";
+const MDLIB_HEADER: &str = "MetaboliteDetector library 2";
 
 /// Reads a `.mdlib` library file.
 pub fn read_mdlib(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
@@ -559,6 +671,21 @@ pub fn write_mdlib(compounds: &[LibraryCompound]) -> String {
         for src in &c.sources {
             lines.push(("source", escape(src)));
         }
+        for p in &c.peaks {
+            lines.push(("peak", peak_fields(p)));
+        }
+        if let Some(m) = &c.model {
+            let values = join(&m.values);
+            let sep = if values.is_empty() { "" } else { " " };
+            let fields = format!("{} {}{sep}{values}", peak_fields(&m.peak), m.noise_factor);
+            lines.push(("model", fields));
+        }
+        for (begin, end, formula) in &c.formulas {
+            lines.push(("formula", format!("{begin} {end} {}", escape(formula))));
+        }
+        for (begin, end, size) in &c.mid_sizes {
+            lines.push(("mid_size", format!("{begin} {end} {size}")));
+        }
         lines.push(("end", String::new()));
         for (key, value) in lines {
             s.push_str(key);
@@ -572,6 +699,24 @@ pub fn write_mdlib(compounds: &[LibraryCompound]) -> String {
     s
 }
 
+/// The 11 peak fields in file order, space separated.
+fn peak_fields(p: &LibraryPeak) -> String {
+    format!(
+        "{} {} {} {} {} {} {} {} {} {} {}",
+        p.ion,
+        p.sharpness,
+        p.integral,
+        p.quality,
+        p.signal_to_noise,
+        p.count,
+        p.first_scan,
+        p.last_scan,
+        p.model_parameter,
+        p.max_scan,
+        p.interpolated_max_scan
+    )
+}
+
 /// Parses `.mdlib` text. Strict: unknown keys, repeated keys and a newer version are errors.
 pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     // Editors on Windows may put a byte order mark in front.
@@ -582,7 +727,8 @@ pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     let err = |line: usize, reason: String| LibraryError::Mdlib { line, reason };
     const PREFIX: &str = "MetaboliteDetector library ";
     match lines.next() {
-        Some((_, l)) if l.trim_end() == MDLIB_HEADER => {}
+        // Version 2 only added keys (peak, model, formula, mid_size), so version 1 reads unchanged.
+        Some((_, l)) if [MDLIB_HEADER, "MetaboliteDetector library 1"].contains(&l.trim_end()) => {}
         Some((_, l)) if l.starts_with(PREFIX) => {
             return Err(LibraryError::Unsupported(format!(
                 "library text format version {}",
@@ -610,7 +756,10 @@ pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
             (_, None) => return Err(err(n, "expected `compound`".into())),
             ("compound", Some(_)) => return Err(err(n, "`compound` before `end`".into())),
             (key, Some((c, _, seen))) => {
-                if !matches!(key, "feature" | "block" | "source") {
+                if !matches!(
+                    key,
+                    "feature" | "block" | "source" | "peak" | "formula" | "mid_size"
+                ) {
                     if seen.contains(&key) {
                         return Err(err(n, format!("`{key}` given twice")));
                     }
@@ -626,10 +775,11 @@ pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     Ok(out)
 }
 
+fn num<T: std::str::FromStr>(v: &str) -> Result<T, String> {
+    v.parse().map_err(|_| format!("invalid number `{v}`"))
+}
+
 fn set_mdlib_field(c: &mut LibraryCompound, key: &str, v: &str) -> Result<(), String> {
-    fn num<T: std::str::FromStr>(v: &str) -> Result<T, String> {
-        v.parse().map_err(|_| format!("invalid number `{v}`"))
-    }
     fn list<T: std::str::FromStr>(v: &str) -> Result<Vec<T>, String> {
         v.split_whitespace().map(num).collect()
     }
@@ -689,9 +839,56 @@ fn set_mdlib_field(c: &mut LibraryCompound, key: &str, v: &str) -> Result<(), St
             c.blocks.push(b);
         }
         "source" => c.sources.push(unescape(v)?),
+        "peak" => {
+            let f: Vec<&str> = v.split_whitespace().collect();
+            if f.len() != 11 {
+                return Err("peak must have 11 fields".into());
+            }
+            c.peaks.push(parse_peak(&f)?);
+        }
+        "model" => {
+            let f: Vec<&str> = v.split_whitespace().collect();
+            if f.len() < 12 {
+                return Err("model must have at least 12 fields".into());
+            }
+            c.model = Some(LibraryModel {
+                peak: parse_peak(&f[..11])?,
+                noise_factor: num(f[11])?,
+                values: f[12..].iter().map(|x| num(x)).collect::<Result<_, _>>()?,
+            });
+        }
+        "formula" => {
+            let mut f = v.splitn(3, ' ');
+            let (Some(b), Some(e)) = (f.next(), f.next()) else {
+                return Err("expected `begin end formula`".into());
+            };
+            // The formula may be empty.
+            c.formulas
+                .push((num(b)?, num(e)?, unescape(f.next().unwrap_or(""))?));
+        }
+        "mid_size" => match list::<u32>(v)?[..] {
+            [b, e, size] => c.mid_sizes.push((b, e, size)),
+            _ => return Err("expected `begin end size`".into()),
+        },
         _ => return Err(format!("unknown key `{key}`")),
     }
     Ok(())
+}
+
+fn parse_peak(f: &[&str]) -> Result<LibraryPeak, String> {
+    Ok(LibraryPeak {
+        ion: num(f[0])?,
+        sharpness: num(f[1])?,
+        integral: num(f[2])?,
+        quality: num(f[3])?,
+        signal_to_noise: num(f[4])?,
+        count: num(f[5])?,
+        first_scan: num(f[6])?,
+        last_scan: num(f[7])?,
+        model_parameter: num(f[8])?,
+        max_scan: num(f[9])?,
+        interpolated_max_scan: num(f[10])?,
+    })
 }
 
 /// Keeps text values on one line and frees the tab to separate a feature's key from its value.
@@ -751,13 +948,19 @@ mod tests {
 
     /// Version 2 payload with one compound, written like the old `toStream`.
     fn sample_payload() -> Vec<u8> {
+        payload(2)
+    }
+
+    /// One compound as the old writer of `version` lays it out: from version 4 on with one peak and
+    /// a model peak instead of the version 2 block, version 3 adds formulas and version 5 mid sizes.
+    fn payload(version: u32) -> Vec<u8> {
         let mut b = Vec::new();
         let u32 = |b: &mut Vec<u8>, v: u32| b.extend(v.to_le_bytes());
         let string = |b: &mut Vec<u8>, s: &str| {
             b.extend((s.len() as u32).to_le_bytes());
             b.extend(s.as_bytes());
         };
-        u32(&mut b, 2);
+        u32(&mut b, version);
         u32(&mut b, 1);
         // Spectrum: scan 0, rt, ri, bin width, 2 masses, 2 values, check.
         u32(&mut b, 0);
@@ -771,8 +974,31 @@ mod tests {
         b.extend(1000i32.to_le_bytes());
         b.extend(250i32.to_le_bytes());
         u32(&mut b, 2);
-        // Compound: no peaks, name, null fwhm/integrals, 1 quant ion, no auto ions, 1 feature.
-        u32(&mut b, 0);
+        // Compound: peaks and model (v4+), name, null fwhm/integrals, 1 quant ion, no auto ions,
+        // 1 feature.
+        let peak = |b: &mut Vec<u8>, ion: &[u8], first: u32| {
+            b.extend(ion);
+            for v in [14.1, 7558399.3, 0.006, 433.0] {
+                b.extend(f64::to_le_bytes(v));
+            }
+            for v in [1, first, first + 194] {
+                u32(b, v);
+            }
+            b.extend(0.89f64.to_le_bytes());
+            u32(b, first + 54);
+            b.extend(2222.7f64.to_le_bytes());
+        };
+        let n_peaks = u32::from(version >= 4);
+        u32(&mut b, n_peaks);
+        if version >= 4 {
+            peak(&mut b, &87.0f32.to_le_bytes(), 2169);
+            peak(&mut b, &73i16.to_le_bytes(), 10);
+            b.extend(0.5f64.to_le_bytes());
+            u32(&mut b, 2);
+            b.extend(1.5f64.to_le_bytes());
+            b.extend(2.5f64.to_le_bytes());
+            u32(&mut b, 10 + 204 + 64 + 2);
+        }
         string(&mut b, "Serine 3TMS");
         b.extend((-1i32).to_le_bytes());
         b.extend((-1i32).to_le_bytes());
@@ -785,8 +1011,8 @@ mod tests {
         b.extend(0.0f64.to_le_bytes());
         b.extend(1227546843i64.to_le_bytes());
         b.extend(2197790076i64.to_le_bytes());
-        u32(&mut b, 1 + 1 + 11);
-        // comb_spec, ion_freq, spec_count, ris, blocks, sources.
+        u32(&mut b, 1 + 1 + 11 + n_peaks);
+        // comb_spec, ion_freq, spec_count, ris, blocks (v2, v3), sources, formulas, mid sizes.
         u32(&mut b, 1);
         b.extend(73.0f32.to_le_bytes());
         b.extend(1000i32.to_le_bytes());
@@ -796,11 +1022,94 @@ mod tests {
         u32(&mut b, 1);
         u32(&mut b, 1);
         b.extend(1369.0f64.to_le_bytes());
-        u32(&mut b, 1);
-        b.extend([7; BLOCK_BYTES]);
+        if version <= 3 {
+            u32(&mut b, 1);
+            b.extend([7; BLOCK_BYTES]);
+        }
         u32(&mut b, 1);
         string(&mut b, "Initial import from/home/kh/Desktop/test.msl");
+        if version >= 3 {
+            u32(&mut b, 1);
+            u32(&mut b, 73);
+            u32(&mut b, 147);
+            string(&mut b, "\x0b C3H9Si ");
+        }
+        if version >= 5 {
+            u32(&mut b, 1);
+            for v in [73, 147, 2] {
+                u32(&mut b, v);
+            }
+        }
         b
+    }
+
+    #[test]
+    fn reads_versions_3_to_5() {
+        let v2 = parse_lbr(&sample_payload()).unwrap().remove(0);
+        let v3 = parse_lbr(&payload(3)).unwrap().remove(0);
+        assert_eq!(v3.formulas, [(73, 147, "C3H9Si".to_string())]);
+        assert_eq!(
+            LibraryCompound {
+                formulas: Vec::new(),
+                ..v3
+            },
+            v2
+        );
+
+        let v5 = parse_lbr(&payload(5)).unwrap().remove(0);
+        let [p] = &v5.peaks[..] else { panic!() };
+        assert_eq!(
+            (p.ion, p.integral, p.signal_to_noise),
+            (87.0, 7558399.3, 433.0)
+        );
+        assert_eq!((p.first_scan, p.last_scan, p.max_scan), (2169, 2363, 2223));
+        assert_eq!((p.model_parameter, p.interpolated_max_scan), (0.89, 2222.7));
+        let m = v5.model.as_ref().unwrap();
+        assert_eq!(
+            (m.peak.ion, m.peak.first_scan, m.noise_factor),
+            (73.0, 10, 0.5)
+        );
+        assert_eq!(m.values, [1.5, 2.5]);
+        assert_eq!(v5.mid_sizes, [(73, 147, 2)]);
+        assert!(v5.blocks.is_empty());
+        assert_eq!(
+            (&v5.name, &v5.sources, &v5.formulas),
+            (&v2.name, &v2.sources, &v3.formulas)
+        );
+
+        let v4 = parse_lbr(&payload(4)).unwrap().remove(0);
+        assert_eq!(
+            v4,
+            LibraryCompound {
+                mid_sizes: Vec::new(),
+                ..v5
+            }
+        );
+    }
+
+    #[test]
+    fn version_5_checks_counts_and_check_values() {
+        let payload = payload(5);
+        for len in 0..payload.len() {
+            assert!(parse_lbr(&payload[..len]).is_err(), "prefix {len} accepted");
+        }
+        let set = |at: usize, v: u32| {
+            let mut p = payload.clone();
+            p[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            parse_lbr(&p).unwrap_err().to_string()
+        };
+        // Offsets: spectrum ends at 60, the peak count, 68-byte peak, 66-byte model peak.
+        assert!(set(60, u32::MAX).contains("exceeds"), "peak count");
+        let model = 64 + 68;
+        assert!(
+            set(model + 74, u32::MAX).contains("exceeds"),
+            "model values"
+        );
+        assert!(set(model + 94, 0).contains("model peak check"));
+        // The compound check value counts the peaks.
+        // After the model: name, fwhm, integrals, 2 ion sets, 1 feature, drt, time stamp, id.
+        let check = model + 98 + 15 + 4 + 4 + 8 + 4 + 4 + 21 + 24;
+        assert!(set(check, 13).contains("compound check"));
     }
 
     #[test]
@@ -857,7 +1166,7 @@ mod tests {
         assert!(set(32, u32::MAX).contains("exceeds"), "mass count");
         assert!(set(56, 3).contains("check value"), "spectrum check");
         assert!(set(60, 1).contains("peak records"));
-        assert!(set(0, 5).contains("version 5"));
+        assert!(set(0, 6).contains("version 6"));
         assert!(
             parse_lbr(&[0x1f, 0x8b, 0, 0])
                 .unwrap_err()
@@ -928,6 +1237,13 @@ mod tests {
         (odd.spectrum.ri, odd.drt, odd.spectrum.bin_width) = (-1.0, f64::NAN, 0.1);
         odd.sources.clear();
         lib.push(odd);
+        let mut v5 = parse_lbr(&payload(5)).unwrap().remove(0);
+        v5.formulas.push((1, 2, String::new()));
+        v5.formulas.push((3, 4, "a b	c".into()));
+        lib.push(v5);
+        let mut no_values = parse_lbr(&payload(5)).unwrap().remove(0);
+        no_values.model.as_mut().unwrap().values.clear();
+        lib.push(no_values);
         lib.push(LibraryCompound::new("bare"));
         let text = write_mdlib(&lib);
         let again = parse_mdlib(&text).unwrap();
@@ -943,7 +1259,7 @@ mod tests {
             again[1].integrals.as_ref().unwrap()[1].to_bits(),
             (-0.0f64).to_bits()
         );
-        assert_eq!(again[2], lib[2]);
+        assert_eq!(again[2..], lib[2..]);
     }
 
     #[test]
@@ -992,6 +1308,10 @@ mod tests {
             5
         );
         assert_eq!(line("compound\nname a\nblock 00\nend\n"), 4);
+        assert_eq!(line("compound\nname a\npeak 1 2\nend\n"), 4);
+        assert_eq!(line("compound\nname a\nmodel 1 2 3\nend\n"), 4);
+        assert_eq!(line("compound\nname a\nmid_size 1 2\nend\n"), 4);
+        assert_eq!(line("compound\nname a\nformula x 2 N\nend\n"), 4);
         assert_eq!(
             line(&format!(
                 "compound\nname a\nblock +{}\nend\n",
@@ -1005,7 +1325,7 @@ mod tests {
         ));
         assert!(matches!(parse_mdlib(""), Err(LibraryError::Mdlib { .. })));
         assert!(matches!(
-            parse_mdlib("MetaboliteDetector library 2\n"),
+            parse_mdlib("MetaboliteDetector library 3\n"),
             Err(LibraryError::Unsupported(_))
         ));
         // Comments, blank lines and CRLF are fine; missing keys take a new compound's values.
