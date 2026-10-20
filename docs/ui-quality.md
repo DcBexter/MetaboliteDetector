@@ -36,13 +36,13 @@ can draw.
 Second review (#168, 2026-10-20) of results, chromatogram, calibration, isotopes, statistics, library
 editor, MID and window placement. Fixed in #168: Run info wraps a long path in a readable column and
 names the peak settings like the Settings dialog; statistics explains why it needs two replicate groups;
-the status bar shows load times in whole ms. Calibration, isotopes, chromatogram and component detail
-had no findings, and every screen except batch has no unnamed input.
+the status bar shows load times in whole ms. #183 fixed the MID findings (one rescan label, hovers for
+R² and negative values). Calibration, isotopes, chromatogram and component detail had no findings, and
+every screen except batch has no unnamed input.
 
 | Area | Issue | What to check |
 |---|---|---|
 | Results list | #169 | Columns are not cut off; headers in sentence case |
 | Library editor | #170 | No "RT 0.00" or "RI known 0" for compounds without RT/RI (needs a decision on how "unknown" is stored) |
 | Screenshot test | #171 | Run info, Results and Statistics have shots (the editor shot selects a compound since #165) |
-| MID | #183 | "Rescan missing ions" is named once; column headers without `.cdf`; R² and negative values explained on hover |
 | Batch | #175 | Every input has a name and a hover text (8 unnamed) |
