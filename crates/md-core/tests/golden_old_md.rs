@@ -84,12 +84,11 @@ struct Count {
 
 #[test]
 fn matches_old_version() {
-    // Precise-apex ties the old GSL fit rounds up (docs/architecture.md).
     let known = Known {
-        missing: 1,
+        missing: 0,
         extra: 0,
-        other_ions: 3,
-        other_values: 1,
+        other_ions: 0,
+        other_values: 0,
     };
     compare(
         include_str!("data/old-md-3.3.tsv"),
@@ -100,13 +99,11 @@ fn matches_old_version() {
 
 #[test]
 fn matches_old_version_with_matched_filtering() {
-    // The same precise-apex ties, far more often on the integer filtered traces: fed with the old
-    // precise apex values, every component of 7235eg04 matches (docs/architecture.md).
     let known = Known {
-        missing: 43,
-        extra: 38,
-        other_ions: 66,
-        other_values: 41,
+        missing: 0,
+        extra: 0,
+        other_ions: 0,
+        other_values: 0,
     };
     let peaks = PeakSettings {
         detector: Detector::MATCHED,

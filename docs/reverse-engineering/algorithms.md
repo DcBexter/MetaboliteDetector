@@ -226,7 +226,9 @@ else: warn "Timeshift is greater or equal 1"; no interpolated max
 bounds failure: "Strange peak ... Can not calculate precise maximization time!"
 ```
 
-`polynomialRegression(X, Y, 2)` (0x6c3292) builds the Vandermonde matrix `[1, x, x²]` and calls `gsl_multifit_linear` (GSL 2.x: column balancing, SVD, truncation at `DBL_EPSILON`). The rounding is `(int)(t + 0.5)` (`cvttsd2si` at 0x5f3b0b). With integer intensities the exact vertex often lies on a half step. Which way the old code rounds such a tie then depends on the fit's rounding error in absolute bin coordinates. On the 15 example runs it rounds 217 of 267 ties down, and three equal values (flat top) give an arbitrary vertex near the apex. Observed with the golden driver (issue 46).
+`polynomialRegression(X, Y, 2)` (0x6c3292) builds the Vandermonde matrix `[1, x, x^j]` with `std::pow(x, j)` (glibc `pow`) and calls `gsl_multifit_linear` (GSL 2.x: column balancing, SVD, truncation at `DBL_EPSILON`). The rounding is `(int)(t + 0.5)` (`cvttsd2si` at 0x5f3b0b), `t = c1 / (c2 * -2.0)`. With integer intensities the exact vertex often lies on a half step. Which way the old code rounds such a tie then depends on the fit's rounding error in absolute bin coordinates. On the 15 example runs it rounds 217 of 267 ties down, and three equal values (flat top) give the rounding noise of the fit as vertex, often within a scan of the apex. Observed with the golden driver (issue 46). The port rebuilds the fit bit for bit from black-box outputs (`quadfit.rs`, method and limits in [gsl-clean-room.md](gsl-clean-room.md), issue 250).
+
+Where the fit is refused (bounds failure or timeshift), `interpolatedMaxScan` keeps its initial value 0: 62 matched-filter peaks of eg07–eg25 that start at their apex dump 0 (golden driver, issue 250). §4.2 and §4.4 then put the peak into bin 0.
 
 ### 3.7 determinePeakQuality (MCP 0x6f3d28; syms 0x5f3d28)
 

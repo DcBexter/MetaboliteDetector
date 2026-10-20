@@ -94,9 +94,10 @@ Principle: every function of MetaboliteDetector 3.3 can be reached. The look may
 
 ## S6 GSL ties
 
-- A clean-room SVD under MIT, written from documentation only, with no GSL code.
+- A clean-room SVD under MIT, with no GSL code: textbook methods checked against the old binary's GSL as a
+  black box (method and boundary: `docs/reverse-engineering/gsl-clean-room.md`).
 - It reproduces the old rounding on precise-apex ties.
-- **Goal:** default detector 246/246 and matched filter 2807/2807 identical in the golden tests.
+- **Goal:** default detector 246/246 and matched filter 2807/2807 identical in the golden tests. Reached in #250.
 
 ## S7 Guided mode
 

@@ -64,13 +64,22 @@ pub struct Peak {
     pub apex_scan: u32,
     pub last_scan: u32,
     /// Apex of a parabola through `apex_scan ± 1`, in steps of `1 / number_bins` scan.
-    /// `None` where the old code refused it (shift of a whole scan or more, apex at the peak edge).
+    /// `None` where the old code refused it (shift of a whole scan or more, apex at the peak edge);
+    /// see [`Peak::interpolated_max_scan`] for what the old code then uses.
     pub precise_apex: Option<f32>,
     /// Height above the robust baseline divided by the noise units `sqrt(apex) * noise_factor`.
     pub signal_to_noise: f32,
     /// Sum of slopes against the peak shape in percent of those along it (0 = clean peak).
     pub quality: f32,
     pub sharpness: f32,
+}
+
+impl Peak {
+    /// The old `interpolatedMaxScan` field: the precise apex, or 0 where the old code refused it (the
+    /// field keeps its initial 0, so deconvolution and `reorderPeaks` put such a peak into bin 0).
+    pub fn interpolated_max_scan(&self) -> f64 {
+        self.precise_apex.map_or(0.0, f64::from)
+    }
 }
 
 /// Ion-major copy of a run, built once: one intensity trace per mass, so peak detection reads
@@ -640,7 +649,7 @@ fn peak(w: &[f32], first: usize, apex: usize, nf: f64, signal_to_noise: f32, bin
         first_scan: first as u32,
         apex_scan: (first + apex) as u32,
         last_scan: (first + w.len() - 1) as u32,
-        precise_apex: precise_apex(w, apex, bins).map(|t| t + first as f32),
+        precise_apex: precise_apex(w, first, apex, bins),
         signal_to_noise,
         quality: quality(w, apex),
         sharpness: sharpness(w, apex, (w[apex] as f64).sqrt() * nf),
@@ -678,8 +687,7 @@ pub fn reorder_peaks(
     let mut profiles: Vec<Profile> = Vec::new();
     for k in 0..peaks.len() {
         let p = peaks[k];
-        let t = p.precise_apex.unwrap_or(p.apex_scan as f32) as f64;
-        let b = (t * nb as f64 + 0.5) as usize;
+        let b = (p.interpolated_max_scan() * nb as f64 + 0.5) as usize;
         if b >= len {
             continue; // the old code throws here; detected peaks never get this far
         }
@@ -705,7 +713,7 @@ pub fn reorder_peaks(
                 profiles.push(Profile {
                     peaks: vec![k],
                     last_row: p.row as usize,
-                    apex: summed_apex(traces, peaks, &[k], number_bins).0,
+                    apex: summed_apex(traces, peaks, &[k], None).0,
                     lo,
                     hi,
                 });
@@ -714,13 +722,13 @@ pub fn reorder_peaks(
                 let w = &mut profiles[j];
                 w.peaks.push(k);
                 w.last_row = p.row as usize;
-                w.apex = summed_apex(traces, peaks, &w.peaks, number_bins).0;
+                w.apex = summed_apex(traces, peaks, &w.peaks, None).0;
             }
             Some(_) => {}
         }
     }
     for w in profiles.iter().filter(|w| w.peaks.len() >= 2) {
-        let (apex, precise) = summed_apex(traces, peaks, &w.peaks, number_bins);
+        let (apex, precise) = summed_apex(traces, peaks, &w.peaks, Some(number_bins));
         for k in &w.peaks {
             let q = &mut peaks[*k];
             if (q.first_scan..=q.last_scan).contains(&apex) {
@@ -732,12 +740,12 @@ pub fn reorder_peaks(
 }
 
 /// Apex and precise apex of the old summed `Peak(list)` (§4.3): the members' intensities added
-/// per scan over their joint range.
+/// per scan over their joint range. The precise apex only with `bins` (the fit is the costly part).
 fn summed_apex(
     traces: &IonTraces,
     peaks: &[Peak],
     members: &[usize],
-    bins: u32,
+    bins: Option<u32>,
 ) -> (u32, Option<f32>) {
     let first = members.iter().map(|k| peaks[*k].first_scan).min().unwrap();
     let last = members.iter().map(|k| peaks[*k].last_scan).max().unwrap();
@@ -749,7 +757,7 @@ fn summed_apex(
         }
     }
     let apex = argmax(&sum, 0);
-    let precise = precise_apex(&sum, apex, bins).map(|t| t + first as f32);
+    let precise = bins.and_then(|b| precise_apex(&sum, first as usize, apex, b));
     (first + apex as u32, precise)
 }
 
@@ -867,19 +875,27 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
     (my - slope * mx, slope)
 }
 
-/// §3.6: vertex of the parabola through apex − 1, apex, apex + 1 of the peak values, rounded to
-/// `1 / bins` scan, relative to the peak start; `None` at the peak edge, on a flat top or for a shift of
-/// ≥ 1 scan. Exact half-step ties round down: the old SVD fit in absolute bins lands just below the tie in
-/// 217 of 267 ties of the example runs (docs/architecture.md, "Golden test").
-fn precise_apex(v: &[f32], apex: usize, bins: u32) -> Option<f32> {
+/// §3.6, old `determinePreciseMaximizationTime`: vertex of the least-squares parabola through the
+/// values at apex − 1, apex, apex + 1 of `v = trace[first..]`, fitted in absolute bins (`bins` per
+/// scan) like the old program and truncated to `1 / bins` scan after adding half a bin. `None` at
+/// the peak edge or for a vertex ≥ 1 scan from the apex. The fit is the old one bit for bit
+/// ([`crate::quadfit`]), so half-bin ties and flat tops land where the old program puts them.
+fn precise_apex(v: &[f32], first: usize, apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
     }
-    let (a, b, c) = (v[apex - 1] as f64, v[apex] as f64, v[apex + 1] as f64);
-    let shift = 0.5 * (a - c) / (a - 2.0 * b + c);
+    let scan = (first + apex) as f64;
     let bins = bins as f64;
-    let t = ((apex as f64 + shift) * bins - 0.5).ceil() / bins;
-    ((t - apex as f64).abs() < 1.0).then_some(t as f32)
+    let x = [-1.0, 0.0, 1.0].map(|k| bins * (scan + k));
+    let y = [0, 1, 2].map(|k| v[apex - 1 + k] as f64);
+    let c = crate::quadfit::quadratic(x, y);
+    let q = c[1] / (c[2] * -2.0) + 0.5;
+    // C's `(int)q`; outside the int range (or NaN) x86 gives INT_MIN, never within a scan.
+    if q.is_nan() || q.abs() >= 2_147_483_648.0 {
+        return None;
+    }
+    let t = q.trunc() / bins;
+    ((t - scan).abs() < 1.0).then_some(t as f32)
 }
 
 /// §3.7: slopes against the peak shape in percent of slopes along it.
@@ -923,11 +939,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn precise_apex_rounds_ties_down() {
-        // Vertex at 1.25 scans = 12.5 bins: the old fit mostly lands just below the tie.
-        assert_eq!(precise_apex(&[1.0, 4.0, 3.0], 1, 10), Some(1.2));
-        assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 1, 10), Some(0.7));
-        assert_eq!(precise_apex(&[5.0, 5.0, 5.0], 1, 10), None);
+    fn precise_apex_breaks_ties_like_the_old_fit() {
+        // Vertex 0.25 scan right of the apex = a half-bin tie; the old fit rounds it up at scan 1
+        // and 4 and down at scan 2 and 3 (its last bits depend on the absolute bins).
+        let up = [1.0, 4.0, 3.0];
+        assert_eq!(precise_apex(&up, 0, 1, 10), Some(1.3));
+        assert_eq!(precise_apex(&up, 1, 1, 10), Some(2.2));
+        assert_eq!(precise_apex(&up, 2, 1, 10), Some(3.2));
+        assert_eq!(precise_apex(&up, 3, 1, 10), Some(4.3));
+        assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 0, 1, 10), Some(0.8));
+        assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 1, 1, 10), Some(1.7));
+        assert_eq!(precise_apex(&up, 0, 1, 4), Some(1.25));
+        // A flat top gives the rounding noise of the fit, as in the old program; zeros give NaN.
+        assert_eq!(precise_apex(&[5.0, 5.0, 5.0], 0, 1, 10), Some(0.7));
+        assert_eq!(precise_apex(&[0.0, 0.0, 0.0], 0, 1, 10), None);
+        assert_eq!(precise_apex(&up, 0, 0, 10), None);
+        assert_eq!(precise_apex(&up, 0, 2, 10), None);
     }
 
     /// Baseline of 1000 with deterministic noise of about ±20 (sd ≈ 12).

@@ -194,9 +194,7 @@ pub fn compounds_of_components(
                         last_scan: p.last_scan,
                         model_parameter: f.model_share,
                         max_scan: p.apex_scan,
-                        interpolated_max_scan: p
-                            .precise_apex
-                            .map_or(f64::from(p.apex_scan), f64::from),
+                        interpolated_max_scan: p.interpolated_max_scan(),
                     });
                 }
             }
