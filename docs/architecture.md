@@ -359,6 +359,13 @@ the CSV export and the statistics window see the edited table. Old formulas (fro
 "Mean" and "Rel. Std. Err." (sample SD / sqrt(n) / mean, a fraction) use only values that are not 0, NaN or
 infinite; "#" counts values above 0; "P (blank)" is Student's t-test with pooled variance, two-sided, with
 missing values as 0, against the group named `BLANK`.
+The old table gets the internal standard and summed-signal normalisation (`normalizationPerformed` →
+`BatchQuantificationStatisticsTableModel::setNormalizationSeries` → `setNormalizationBySum` /
+`setNormalizationSeries`), never the z-score, which is only a flag of `getTableData`. Its cells are
+`QVariant(double)`, which Qt 5.15 shows with 6 significant digits. So the rewrite shows the mean with 6
+significant digits (`significant`, without exponent) and offers no "Group statistics" while the z-score is
+on (#189). Not checked: whether the old pool normalisation (`ResultSeries::setNormalizer`) reaches the group
+statistics; the rewrite applies it.
 
 **Details behind a cell** (#160): `Found::alternatives` keeps the other library hits of the component
 (`md_core::batch::hit_list`, assigned hit first); the Values view shows them as a tooltip, the assigned one in
