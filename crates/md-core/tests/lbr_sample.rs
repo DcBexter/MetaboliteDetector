@@ -93,6 +93,10 @@ fn reads_sample_library() {
 /// made by `docs/reverse-engineering/tools/golden/make-lbr-v5.sh` (never committed). Run with
 /// `MD_LBR_V5_DIR=OUT_DIR MD_LBR_SAMPLE=lib_aa.lbr cargo test -p md-core --test lbr_sample`.
 #[test]
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "a test of many cases: each assert counts, and Sonar skips tests"
+)]
 fn reads_old_version_5_libraries() {
     let (Ok(dir), Ok(sample)) = (
         std::env::var("MD_LBR_V5_DIR"),
