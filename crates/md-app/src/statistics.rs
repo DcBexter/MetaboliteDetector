@@ -198,13 +198,14 @@ fn samples_picker(ui: &mut egui::Ui, samples: &mut Samples) {
 
 fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
     ui.horizontal(|ui| {
-        ui.label("Show only p ≤");
+        let label = ui.label("Show only p ≤");
         ui.add(
             egui::DragValue::new(p_max)
                 .range(0.0..=1.0)
                 .speed(0.001)
                 .max_decimals(4),
-        );
+        )
+        .labelled_by(label.id);
         ui.checkbox(sort_by_p, "sort by p");
         if c.samples == Samples::Paired && !stats::pairs_match(t, c) {
             ui.colored_label(
