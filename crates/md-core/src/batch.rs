@@ -61,6 +61,11 @@ impl CmpTarget {
         let name = run.with_extension("cmp");
         match self {
             Self::BesideRun => name,
+            // Every FastFlight run is a `MsData.FFT`: in a folder of its own it is named after its run.
+            Self::Dir(dir) if crate::fastflight::is_fastflight(run) => {
+                let folder = run.parent().and_then(Path::file_name).unwrap_or_default();
+                dir.join(folder).with_extension("cmp")
+            }
             Self::Dir(dir) => dir.join(name.file_name().unwrap_or_default()),
         }
     }
@@ -298,10 +303,34 @@ pub fn scan_runs(
                 .map(|t| t.path(p))
         })
         .collect();
+    // Windows and macOS file names ignore case: `X.cmp` and `x.cmp` are one file there.
+    let key = |p: &Path| match cfg!(any(windows, target_os = "macos")) {
+        true => p.to_string_lossy().to_lowercase(),
+        false => p.to_string_lossy().into_owned(),
+    };
+    let inputs: std::collections::HashSet<String> = paths.iter().map(|p| key(p)).collect();
     let mut uses = std::collections::HashMap::new();
     for t in targets.iter().flatten() {
-        *uses.entry(t).or_insert(0) += 1;
+        *uses.entry(key(t)).or_insert(0) += 1;
     }
+    // Two runs saved to one name would overwrite each other, and a target that is an input of this
+    // batch would change under its reader: neither is saved.
+    let clashes: Vec<Option<String>> = (targets.iter())
+        .map(|t| {
+            let t = t.as_deref()?;
+            match (inputs.contains(&key(t)), uses[&key(t)] > 1) {
+                (true, _) => Some(format!(
+                    "not saved: {} is an input of this batch",
+                    t.display()
+                )),
+                (_, true) => Some(format!(
+                    "not saved: another run is also saved as {}",
+                    t.display()
+                )),
+                _ => None,
+            }
+        })
+        .collect();
     let mut out: Vec<(usize, Result<RunResult, String>, Option<String>)> =
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
@@ -311,14 +340,9 @@ pub fn scan_runs(
                         while !cancel.load(Relaxed) {
                             let i = next.fetch_add(1, Relaxed);
                             let Some(path) = paths.get(i) else { break };
-                            // Two runs saved to one name would overwrite each other: neither is saved.
-                            let target = targets[i].as_deref();
-                            let clash = target.filter(|t| uses[&t.to_path_buf()] > 1);
-                            let target = target.filter(|_| clash.is_none());
+                            let mut failed = clashes[i].clone();
+                            let target = targets[i].as_deref().filter(|_| failed.is_none());
                             // A panic in one file becomes its error, so the other files are kept.
-                            let mut failed = clash.map(|t| {
-                                format!("not saved: another run is also saved as {}", t.display())
-                            });
                             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 match crate::cmp::is_cmp(path) {
                                     true => scan_saved(path, lib, s),
@@ -1334,6 +1358,49 @@ NUM PEAKS: 1
         };
         let (scanned, errors) = scan_runs(&runs[..2], &prepared, &s, 1, &done, &cancel).unwrap();
         assert_eq!((scanned.len(), errors.len()), (2, 2));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_cmp_never_overwrites_an_input_or_another_run() {
+        let dir = std::env::temp_dir().join(format!("md-cmp-clash-{}", std::process::id()));
+        let (a, b, out) = (dir.join("a"), dir.join("b"), dir.join("out"));
+        for d in [&a, &b, &out] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let run = two_substances();
+        crate::andi::write(a.join("x.cdf"), &run).unwrap();
+        crate::andi::write(b.join("X.cdf"), &run).unwrap();
+        crate::cmp::write_cmp(a.join("x.cmp"), &[]).unwrap();
+        let lib = two_substances_library();
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::BesideRun),
+            ..Default::default()
+        };
+        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        // The run's .cmp is also an input: it is left as it is.
+        let runs = [a.join("x.cdf"), a.join("x.cmp")];
+        let (scanned, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert_eq!((scanned.len(), errors.len()), (2, 1), "{errors:?}");
+        assert!(crate::cmp::read_cmp(a.join("x.cmp")).unwrap().is_empty());
+        // X.cmp and x.cmp are one file where names ignore case.
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::Dir(out.clone())),
+            ..s
+        };
+        let runs = [a.join("x.cdf"), b.join("X.cdf")];
+        let (_, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        let ignores_case = cfg!(any(windows, target_os = "macos"));
+        assert_eq!(errors.len(), if ignores_case { 2 } else { 0 }, "{errors:?}");
+        // FastFlight runs are all MsData.FFT: in a folder each is named after its run.
+        let target = CmpTarget::Dir(out.clone());
+        assert_eq!(target.path(&a.join("MsData.FFT")), out.join("a.cmp"));
+        assert_eq!(
+            CmpTarget::BesideRun.path(&a.join("MsData.FFT")),
+            a.join("MsData.cmp")
+        );
+        assert!(!out.join("x.cmp.part").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

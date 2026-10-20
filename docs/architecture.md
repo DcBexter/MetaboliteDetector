@@ -448,8 +448,11 @@ components as .cmp", `md-cli --save-cmp DIR`), in place of the old Compound Dete
 `calculateRI` with the run's calibration, then `<base>.cmp` next to the run; a failed run gives "Error
 detecting compounds of file:" and the others go on). The file is written in the scan worker from the
 components and RIs the search used, so it costs no second pass; a failed write, or a name two runs of the
-batch map to (two `x.cdf` into one folder, neither is saved), is an error of that run and keeps its result.
-`.cmp` inputs are not saved again.
+batch map to (two `x.cdf` into one folder, neither is saved; names compared without case on Windows and
+macOS), or a name that is itself an input of the batch, is an error of that run and keeps its result.
+`.cmp` inputs are not saved again. In a folder a FastFlight run (`r1/MsData.FFT`) is saved as `r1.cmp`.
+`write_cmp` writes `<name>.part` and renames it, so a failed write leaves no broken `.cmp`; an existing
+file is replaced, as by the old wizard.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 

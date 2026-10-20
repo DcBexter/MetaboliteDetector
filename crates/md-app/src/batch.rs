@@ -224,7 +224,9 @@ pub struct Batch {
 /// "Save components as .cmp": off, next to each run, or into a chosen folder.
 fn save_cmp_row(ui: &mut egui::Ui, target: &mut Option<md_core::batch::CmpTarget>) {
     use md_core::batch::CmpTarget;
-    let hint = "Also save the components of each run as run.cmp, with the RI of the search,                     like the old Compound Detection Wizard. Saved runs load in \"Results of the                     active run\" and scan faster as batch input. Applies to the next scan.";
+    let hint = "Also save the components of each run as run.cmp, with the RI of the search, \
+                like the old Compound Detection Wizard. Saved runs load in \"Results of the \
+                active run\" and scan faster as batch input. Applies to the next scan.";
     let name = ui.label("Save components as .cmp").on_hover_text(hint);
     ui.horizontal(|ui| {
         let mut on = target.is_some();
