@@ -306,3 +306,49 @@ fn amino_acids_get_ri_score_with_lib_aa() {
         assert!(corrected > 0);
     }
 }
+
+/// Result table of a real run: components whose own spectra form the library are found again, with
+/// their quant-ion area, and the CSV has one line per component.
+#[test]
+fn result_table_of_a_real_run() {
+    use md_core::library::LibraryCompound;
+    use md_core::results::{find_substance, result_rows, write_csv};
+    use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+
+    let Some(path) = runs().into_iter().next() else {
+        return;
+    };
+    let c = md_core::andi::read(&path).unwrap();
+    let mut traces = IonTraces::new(&c).unwrap();
+    let peaks = traces.detect_peaks(&PeakSettings::default());
+    let masses: Vec<u32> = peaks
+        .iter()
+        .map(|p| traces.masses[p.row as usize])
+        .collect();
+    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    assert!(comps.len() > 10);
+    let lib: Vec<LibraryCompound> = comps
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(i, k)| {
+            let mut l = LibraryCompound::new(&format!("Substance {i}"));
+            l.spectrum.ri = -1.0;
+            l.spectrum.masses = k.spectrum.iter().map(|s| s.0 as f32).collect();
+            l.spectrum.values = k.spectrum.iter().map(|s| s.1 as i32).collect();
+            l
+        })
+        .collect();
+    let s = SearchSettings::default();
+    let id = map_compounds_to_library(&comps, None, &PreparedLibrary::new(&lib, &s), &s);
+    let rows = result_rows(&comps, &c.scan_times_s, None, &masses, &id, &lib);
+    assert_eq!(rows.len(), comps.len());
+    for (i, r) in rows.iter().take(3).enumerate() {
+        assert_eq!(r.name, format!("Substance {i}"));
+        assert!(r.overall.unwrap() > 0.99 && r.area.unwrap() > 0.0, "{r:?}");
+        assert_eq!(find_substance(&id, &lib, i)[0].0, i);
+    }
+    let mut csv = Vec::new();
+    write_csv(&mut csv, &rows).unwrap();
+    assert_eq!(csv.iter().filter(|b| **b == b'\n').count(), rows.len() + 1);
+}
