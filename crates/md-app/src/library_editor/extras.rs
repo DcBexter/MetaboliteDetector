@@ -94,6 +94,21 @@ fn ion_field(ui: &mut egui::Ui, value: &mut u32, name: egui::Id) -> bool {
     ui.add(drag).labelled_by(name).changed()
 }
 
+/// Gives fragment `i` a new start and end, moving its MID size along. False, and nothing
+/// changes, when another fragment has that start and end.
+fn rekey(c: &mut LibraryCompound, i: usize, b: u32, e: u32) -> bool {
+    if has_fragment(c, b, e) {
+        return false;
+    }
+    let (b0, e0) = (c.formulas[i].0, c.formulas[i].1);
+    let size = mid_size(c, b0, e0);
+    c.formulas[i].0 = b;
+    c.formulas[i].1 = e;
+    c.mid_sizes.retain(|m| (m.0, m.1) != (b0, e0));
+    set_mid_size(c, b, e, size);
+    true
+}
+
 /// One fragment: changing start or end moves its MID size with it, and a change that would repeat
 /// another fragment's start and end is dropped. `names` are the column header labels.
 fn fragment_row(
@@ -105,17 +120,9 @@ fn fragment_row(
     let (b0, e0) = (c.formulas[i].0, c.formulas[i].1);
     let (mut b, mut e, mut size) = (b0, e0, mid_size(c, b0, e0));
     let mut changed = ion_field(ui, &mut b, names[0]) | ion_field(ui, &mut e, names[1]);
-    if (b, e) != (b0, e0) {
-        if has_fragment(c, b, e) {
-            (b, e) = (b0, e0);
-            changed = false;
-        } else {
-            let size = mid_size(c, b0, e0);
-            c.formulas[i].0 = b;
-            c.formulas[i].1 = e;
-            c.mid_sizes.retain(|m| (m.0, m.1) != (b0, e0));
-            set_mid_size(c, b, e, size);
-        }
+    if (b, e) != (b0, e0) && !rekey(c, i, b, e) {
+        (b, e) = (b0, e0);
+        changed = false;
     }
     let error = formula_error(&c.formulas[i].2);
     let mut edit = egui::TextEdit::singleline(&mut c.formulas[i].2);
@@ -189,7 +196,7 @@ pub fn mid_fragments(ui: &mut egui::Ui, c: &mut LibraryCompound, new: &mut NewFr
         if add.clicked() {
             c.formulas
                 .push((new.begin, new.end, new.formula.trim().to_string()));
-            c.mid_sizes.push((new.begin, new.end, new.size));
+            set_mid_size(c, new.begin, new.end, new.size);
             c.formulas.sort_by_key(|f| (f.0, f.1));
             c.mid_sizes.sort_by_key(|m| (m.0, m.1));
             *new = NewFragment::default();
@@ -312,11 +319,39 @@ mod tests {
     #[test]
     fn mid_sizes_follow_their_fragment() {
         let mut c = LibraryCompound::new("x");
-        c.formulas.push((73, 147, "C3H9Si".into()));
+        c.formulas = vec![(73, 147, "C3H9Si".into()), (200, 210, "C6H12O2".into())];
+        c.mid_sizes = vec![(200, 210, 6)];
         assert_eq!(mid_size(&c, 73, 147), 0);
-        set_mid_size(&mut c, 73, 147, 2);
-        set_mid_size(&mut c, 73, 147, 3);
-        assert_eq!(c.mid_sizes, [(73, 147, 3)]);
-        assert!(has_fragment(&c, 73, 147) && !has_fragment(&c, 73, 148));
+        assert!(!rekey(&mut c, 1, 73, 147), "a repeated key is refused");
+        assert!(rekey(&mut c, 1, 5, 210));
+        assert_eq!(c.formulas[1], (5, 210, "C6H12O2".into()));
+        assert_eq!(c.mid_sizes, [(5, 210, 6)]);
+        set_mid_size(&mut c, 5, 210, 3);
+        assert_eq!(c.mid_sizes, [(5, 210, 3)]);
+    }
+
+    /// A size left without a formula (hand-edited file) is replaced, not doubled.
+    #[test]
+    fn adding_a_fragment_replaces_a_stray_size() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut c = LibraryCompound::new("x");
+        c.mid_sizes = vec![(5, 6, 2)];
+        let new = NewFragment {
+            begin: 5,
+            end: 6,
+            formula: "C2".into(),
+            size: 4,
+        };
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut (LibraryCompound, NewFragment)| {
+                mid_fragments(ui, &mut s.0, &mut s.1);
+            },
+            (c, new),
+        );
+        h.run();
+        h.get_by_label("Add fragment").click();
+        h.run();
+        assert_eq!(h.state().0.mid_sizes, [(5, 6, 4)]);
     }
 }
