@@ -402,6 +402,9 @@ mod tests {
         );
         assert_eq!(ions.lines().count(), 1 + 2 * 2, "{ions}");
         assert!(args("-l lib.msl --ion-integrals a.cdf").is_err());
+        // A later export without the flag removes the ions file, which no longer matches.
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        assert!(!dir.join("out.ions.csv").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
