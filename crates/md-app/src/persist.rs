@@ -23,7 +23,7 @@ const RECENT: usize = 10;
 #[derive(Default)]
 pub struct Saved {
     /// Last opened runs, newest first.
-    pub recent: Vec<PathBuf>,
+    recent: Vec<PathBuf>,
     /// Libraries opened at start; kept while they load, so a quick exit does not forget them.
     library: Option<PathBuf>,
     nist: Option<PathBuf>,
