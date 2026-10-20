@@ -8,6 +8,7 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::batch::{IonPeak, QuantSettings};
 use md_core::deconv::Component;
+use md_core::library::LibraryCompound;
 use md_core::library_add::{
     AddMode, RtCopy, add, apply_rt_copy, component_ions, compound_from_component, find,
     plan_rt_copy,
@@ -68,6 +69,110 @@ pub struct RtDialog {
     plan: Vec<RtCopy>,
 }
 
+impl AddDialog {
+    /// Takes the quant ions of the worker thread once they are there.
+    fn poll(&mut self) {
+        if let Ions::Computing(rx) = &self.ions
+            && let Some(r) = poll_job(rx, "quant ion search")
+        {
+            self.ions = match r {
+                Ok(Ok(Some(ions))) => Ions::Ready(ions),
+                Ok(Ok(None)) => {
+                    Ions::Failed("The component is gone; the run was analysed again.".into())
+                }
+                Ok(Err(e)) | Err(e) => Ions::Failed(e),
+            };
+        }
+    }
+
+    /// Name, the old radio buttons for a name already in the library, and the comment.
+    fn choices(&mut self, ui: &mut egui::Ui, library: &[LibraryCompound], exists: bool) {
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut self.name);
+        });
+        egui::ComboBox::from_label("Existing entry")
+            .selected_text("choose…")
+            .height(300.0)
+            .show_ui(ui, |ui| {
+                for c in library {
+                    if ui.selectable_label(c.name == self.name, &c.name).clicked() {
+                        self.name.clone_from(&c.name);
+                    }
+                }
+            });
+        if exists {
+            ui.separator();
+            ui.label("The library has an entry with this name:");
+            ui.radio_value(&mut self.choice, Choice::Replace, "Replace entry")
+                .on_hover_text("Remove the entry and add the found compound.");
+            ui.radio_value(&mut self.choice, Choice::KeepFeatures, "Replace RT/Spec")
+                .on_hover_text(
+                    "Replace spectrum, retention time and retention index but keep quantification ions and comments.",
+                );
+            ui.radio_value(&mut self.choice, Choice::QuantIons, "Exchange quant. ions")
+                .on_hover_text("Set only the automatic quantification ions of the entry.");
+        } else {
+            ui.label("A new entry is added.");
+        }
+        ui.label("Comment");
+        ui.add(egui::TextEdit::multiline(&mut self.comment).desired_rows(2));
+    }
+
+    /// RT and RI of the component, the state of the quant ion search and the question.
+    fn status(&self, ui: &mut egui::Ui) {
+        ui.label(format!(
+            "RT {:.3} min, RI {}",
+            self.data.scan_times_s[self.comp.apex_scan as usize] / 60.0,
+            self.ri.map_or("unknown".into(), |r| format!("{r:.1}")),
+        ));
+        match &self.ions {
+            Ions::Computing(_) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Choosing quantification ions…");
+                });
+            }
+            Ions::Failed(e) => {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            Ions::Ready(_) => {}
+        }
+        if self.confirm {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                match self.choice {
+                    Choice::Replace => "Do you really want to replace the existing entry?",
+                    Choice::KeepFeatures => {
+                        "Do you really want to replace spectrum, RT and RI of the entry?"
+                    }
+                    Choice::QuantIons => {
+                        "Do you really want to set the detected quantification ions?"
+                    }
+                },
+            );
+        }
+    }
+
+    /// OK (asks first for an existing name) and Cancel; returns (apply, cancel).
+    fn buttons(&mut self, ui: &mut egui::Ui, exists: bool) -> (bool, bool) {
+        let (mut apply, mut cancel) = (false, false);
+        ui.horizontal(|ui| {
+            let ready = matches!(self.ions, Ions::Ready(_)) && !self.name.trim().is_empty();
+            let label = if self.confirm { "Yes" } else { "OK" };
+            if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
+                if exists && !self.confirm {
+                    self.confirm = true;
+                } else {
+                    apply = true;
+                }
+            }
+            cancel = ui.button("Cancel").clicked();
+        });
+        (apply, cancel)
+    }
+}
+
 impl LibraryEditor {
     /// Opens "Add component" for the selected component of the active run.
     pub(super) fn start_add(&mut self, ctx: &egui::Context, src: &Source) {
@@ -117,99 +222,17 @@ impl LibraryEditor {
 
     fn add_window(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.add else { return };
-        if let Ions::Computing(rx) = &d.ions
-            && let Some(r) = poll_job(rx, "quant ion search")
-        {
-            d.ions = match r {
-                Ok(Ok(Some(ions))) => Ions::Ready(ions),
-                Ok(Ok(None)) => {
-                    Ions::Failed("The component is gone; the run was analysed again.".into())
-                }
-                Ok(Err(e)) | Err(e) => Ions::Failed(e),
-            };
-        }
+        d.poll();
         let existing = find(&self.compounds, &d.name);
         let (mut open, mut apply, mut cancel) = (true, false, false);
         egui::Window::new("Add component to library")
             .open(&mut open)
             .collapsible(false)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut d.name);
-                });
-                egui::ComboBox::from_label("Existing entry")
-                    .selected_text("choose…")
-                    .height(300.0)
-                    .show_ui(ui, |ui| {
-                        for c in &self.compounds {
-                            if ui.selectable_label(c.name == d.name, &c.name).clicked() {
-                                d.name.clone_from(&c.name);
-                            }
-                        }
-                    });
-                if existing.is_some() {
-                    ui.separator();
-                    ui.label("The library has an entry with this name:");
-                    ui.radio_value(&mut d.choice, Choice::Replace, "Replace entry")
-                        .on_hover_text("Remove the entry and add the found compound.");
-                    ui.radio_value(&mut d.choice, Choice::KeepFeatures, "Replace RT/Spec")
-                        .on_hover_text(
-                            "Replace spectrum, retention time and retention index but keep quantification ions and comments.",
-                        );
-                    ui.radio_value(&mut d.choice, Choice::QuantIons, "Exchange quant. ions")
-                        .on_hover_text("Set only the automatic quantification ions of the entry.");
-                } else {
-                    ui.label("A new entry is added.");
-                }
-                ui.label("Comment");
-                ui.add(egui::TextEdit::multiline(&mut d.comment).desired_rows(2));
-                ui.label(format!(
-                    "RT {:.3} min, RI {}",
-                    d.data.scan_times_s[d.comp.apex_scan as usize] / 60.0,
-                    d.ri.map_or("unknown".into(), |r| format!("{r:.1}")),
-                ));
-                match &d.ions {
-                    Ions::Computing(_) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Choosing quantification ions…");
-                        });
-                    }
-                    Ions::Failed(e) => {
-                        ui.colored_label(ui.visuals().error_fg_color, e);
-                    }
-                    Ions::Ready(_) => {}
-                }
+                d.choices(ui, &self.compounds, existing.is_some());
+                d.status(ui);
                 ui.separator();
-                if d.confirm {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        match d.choice {
-                            Choice::Replace => "Do you really want to replace the existing entry?",
-                            Choice::KeepFeatures => {
-                                "Do you really want to replace spectrum, RT and RI of the entry?"
-                            }
-                            Choice::QuantIons => {
-                                "Do you really want to set the detected quantification ions?"
-                            }
-                        },
-                    );
-                }
-                ui.horizontal(|ui| {
-                    let ready = matches!(d.ions, Ions::Ready(_)) && !d.name.trim().is_empty();
-                    let label = if d.confirm { "Yes" } else { "OK" };
-                    if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
-                        if existing.is_some() && !d.confirm {
-                            d.confirm = true;
-                        } else {
-                            apply = true;
-                        }
-                    }
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                });
+                (apply, cancel) = d.buttons(ui, existing.is_some());
             });
         if !open || cancel {
             self.add = None;
