@@ -860,7 +860,12 @@ pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
             "NAME:{}\nRI:{:.4}\nRT:{:.4}\n",
             one_line(&c.name),
             sp.ri,
-            sp.rt_ms / 60_000.0
+            // The old program writes `RT:-1.0000` for an unknown RT.
+            if sp.rt_ms < 0.0 {
+                -1.0
+            } else {
+                sp.rt_ms / 60_000.0
+            }
         );
         for (k, v) in &c.features {
             let (k, v) = (one_line(k), one_line(v));
@@ -1556,6 +1561,16 @@ NUM PEAKS: 1
         assert_eq!((lib[1].spectrum.ri, lib[1].spectrum.rt_ms), (0.0, 0.0));
         let new = LibraryCompound::new("n");
         assert_eq!((new.spectrum.ri, new.spectrum.rt_ms), (-1.0, -1.0));
+        // The export writes the unknown values the way the old program does.
+        let out = write_msl_as(&lib[..1], MslType::Profile);
+        assert!(
+            out.contains(
+                "RI:-1.0000
+RT:-1.0000
+"
+            ),
+            "{out}"
+        );
     }
 
     #[test]

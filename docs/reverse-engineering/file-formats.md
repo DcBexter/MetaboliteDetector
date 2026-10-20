@@ -591,6 +591,10 @@ and `MST N` (purpose Unknown). The `Initial import from` string suggests a progr
 Timing fields: `RT:` is minutes and becomes the spectrum rt in ms (Observed: an MSL written by the old
 export and read back by `importMSL` gives the same rt as the source library, `msl_v5.lbr`, 2026-10-20).
 
+A record without `RI:` or `RT:` leaves both at -1 (unknown): the old `importMSL` and `exportMSL` give `RI:-1.0000` and
+`RT:-1.0000` for it, while an explicit `RI:0` and `RT:0` stay 0 (Observed, 2026-10-20; the search takes `RI >= 0` as
+known, §5.6 in `algorithms.md`).
+
 Rewrite choices (`md_core::library`): `RI:` is the spectrum ri, `RT:` is minutes stored as ms (matches the
 old program, checked in `lbr_sample.rs`), `RESOLUTION:` is the spectrum bin width, `NUM PEAKS:` must
 equal the number of pairs. Imported compounds get `comb_spec` = spectrum, `ion_freq` 1 per ion and

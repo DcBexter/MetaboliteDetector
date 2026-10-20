@@ -328,9 +328,16 @@ impl LibraryEditor {
                                         "–".into()
                                     }
                                 };
+                                let rt = |v: f64| {
+                                    if v >= 0.0 {
+                                        format!("{:.3}", v / 60_000.0)
+                                    } else {
+                                        "–".into()
+                                    }
+                                };
                                 ui.label(&p.name);
-                                ui.label(format!("{:.3}", p.rt_ms / 60_000.0));
-                                ui.label(format!("{:.3}", p.old_rt_ms / 60_000.0));
+                                ui.label(rt(p.rt_ms));
+                                ui.label(rt(p.old_rt_ms));
                                 ui.label(p.ri.map_or("–".into(), ri));
                                 ui.label(ri(p.old_ri));
                                 ui.label(format!("{:.3}", p.score));
