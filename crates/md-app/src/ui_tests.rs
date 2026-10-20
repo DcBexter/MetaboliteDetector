@@ -211,7 +211,7 @@ fn screenshots() {
             let win = h.get_by_label_contains("Library editor").rect();
             h.get_all(by().label_contains("Compound at"))
                 .find(|n| win.contains_rect(n.rect()) && n.rect().min.x < win.min.x + 40.0)
-                .unwrap()
+                .expect("no compound in the library editor list")
                 .click();
             h.run_steps(2);
         }
