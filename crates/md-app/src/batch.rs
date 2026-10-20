@@ -16,7 +16,7 @@ use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
-use md_core::search::SearchSettings;
+use md_core::settings::GcmsSettings;
 
 use crate::identify::Library;
 use crate::spawn;
@@ -90,8 +90,8 @@ pub struct Batch {
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     settings: TableSettings,
-    /// Peak detection and deconvolution settings of the app (Analysis → Settings), set every frame.
-    pub analysis: crate::settings::Key,
+    /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
+    applied: GcmsSettings,
     job: Option<Job>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
@@ -121,7 +121,7 @@ impl Default for Batch {
                 rescan_window_s: RescanSettings::default().window_s,
             },
             settings: TableSettings::default(),
-            analysis: Default::default(),
+            applied: GcmsSettings::default(),
             job: None,
             scan: None,
             table: None,
@@ -136,6 +136,17 @@ impl Default for Batch {
 }
 
 impl Batch {
+    /// Takes the applied settings; changed `QUANT_*` values replace those of the window.
+    pub fn use_settings(&mut self, applied: &GcmsSettings) {
+        if self.applied != *applied {
+            let quant = applied.quant();
+            if quant != self.applied.quant() {
+                self.settings.quant = quant;
+            }
+            self.applied = applied.clone();
+        }
+    }
+
     /// The table as shown (normalised) with a number that changes whenever it is rebuilt.
     pub fn shown_table(&self) -> Option<(u64, &Table)> {
         self.shown.as_ref().map(|s| (self.generation, &s.1))
@@ -204,7 +215,14 @@ impl Batch {
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
         );
-        let s = scan_settings(&self.analysis, lib, cal, reference, self.options.untargeted);
+        let s = ScanSettings {
+            // Like the single-run search: only a substance with an RI can be the reference.
+            shift: cal
+                .and(reference)
+                .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
+            untargeted: self.options.untargeted,
+            ..self.applied.scan(cal.cloned())
+        };
         let rescan = self.options.rescan.then(|| RescanSettings {
             window_s: self.options.rescan_window_s,
             ..Default::default()
@@ -318,8 +336,8 @@ impl Batch {
         );
     }
 
-    /// Progress and Cancel while a scan runs, else Start with the library state and the last note.
-    fn run_controls(
+    /// Progress and Cancel while a scan runs, else Start and what it will use.
+    fn job_row(
         &mut self,
         ui: &mut egui::Ui,
         lib: Option<&Arc<Library>>,
@@ -344,7 +362,9 @@ impl Batch {
                 }
             }
             None => {
-                let ready = lib.filter(|_| !self.paths.is_empty());
+                // Not while the library is rebuilt for new search settings: it would be scaled differently.
+                let ready =
+                    lib.filter(|l| !self.paths.is_empty() && l.settings == self.applied.search());
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new("Start"))
                     .clicked()
@@ -364,6 +384,9 @@ impl Batch {
                     )),
                     None => ui.label("Open a library first (File → Open library)."),
                 };
+                if lib.is_some_and(|l| l.settings != self.applied.search()) {
+                    ui.label("Library is being prepared for the new search settings.");
+                }
                 ui.label(&self.note);
             }
         });
@@ -393,7 +416,7 @@ impl Batch {
             ui.label(format!("{} runs", self.paths.len()));
         });
         self.settings_grid(ui);
-        self.run_controls(ui, lib, cal, reference);
+        self.job_row(ui, lib, cal, reference);
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
             let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)
@@ -447,31 +470,6 @@ impl Batch {
             }
             None => {}
         }
-    }
-}
-
-/// Scan settings of the app for `lib`; the MID window scans with the same.
-pub fn scan_settings(
-    analysis: &crate::settings::Key,
-    lib: &Library,
-    cal: Option<&RiCalibration>,
-    reference: Option<(&str, f64)>,
-    untargeted: bool,
-) -> ScanSettings {
-    // The library was prepared with the app's search settings, which differ only in the cutoff.
-    ScanSettings {
-        peaks: analysis.0,
-        deconv: analysis.1.clone(),
-        search: SearchSettings {
-            cutoff: SearchSettings::default().cutoff,
-            ..lib.settings.clone()
-        },
-        calibration: cal.cloned(),
-        // Like the single-run search: only a substance with an RI can be the reference.
-        shift: cal
-            .and(reference)
-            .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
-        untargeted,
     }
 }
 
@@ -716,5 +714,30 @@ fn pool_notes(
     }
     if !t.groups.contains(&n.pool_group) {
         ui.label("No run is in the pool group: every normalised value is empty.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quant_settings_follow_the_applied_ones_but_keep_local_edits() {
+        let mut b = Batch::default();
+        let mut applied = GcmsSettings {
+            quant_ion_number: 5,
+            ..Default::default()
+        };
+        b.use_settings(&applied);
+        assert_eq!(b.settings.quant.ion_number, 5);
+        // An edit in the window survives settings that leave QUANT_* alone ...
+        b.settings.quant.ion_number = 2;
+        applied.ls_ri_diff += 1.0;
+        b.use_settings(&applied);
+        assert_eq!(b.settings.quant.ion_number, 2);
+        // ... and the next change of QUANT_* replaces it.
+        applied.quant_ion_number = 4;
+        b.use_settings(&applied);
+        assert_eq!(b.settings.quant.ion_number, 4);
     }
 }

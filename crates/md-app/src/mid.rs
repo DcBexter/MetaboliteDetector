@@ -14,6 +14,7 @@ use md_core::library::LibraryCompound;
 use md_core::mid::{Method, Mids, determine, mid_library};
 use md_core::ri::RiCalibration;
 use md_core::search::PreparedLibrary;
+use md_core::settings::GcmsSettings;
 
 use crate::identify::Library;
 use crate::spawn;
@@ -57,8 +58,8 @@ pub struct MidWindow {
     /// Tracer `abundance` was last filled in for.
     abundance_for: String,
     rescan: bool,
-    /// Peak detection and deconvolution settings of the app, set every frame.
-    pub analysis: crate::settings::Key,
+    /// The applied settings (Analysis → Settings), set every frame.
+    pub applied: GcmsSettings,
     table: IsotopeTable,
     job: Option<Job>,
     result: Option<Done>,
@@ -77,7 +78,7 @@ impl Default for MidWindow {
             abundance: 0.0,
             abundance_for: String::new(),
             rescan: true,
-            analysis: Default::default(),
+            applied: GcmsSettings::default(),
             table: IsotopeTable::standard(),
             job: None,
             result: None,
@@ -138,8 +139,9 @@ impl MidWindow {
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
-        let mut s = crate::batch::scan_settings(&self.analysis, lib, cal, reference, false);
-        let shift_ref = s.shift.and(reference).map(|(n, c)| (n.to_owned(), c));
+        let mut s = self.applied.scan(cal.cloned());
+        // Like the single-run search: only with an RI calibration.
+        let shift_ref = cal.and(reference).map(|(n, c)| (n.to_owned(), c));
         let method = self.method();
         // Unlabelled runs only take part in the reference correction (old group `GUL`).
         let unlabelled = match self.kind {
@@ -202,7 +204,7 @@ impl MidWindow {
             errors.extend(more.errors);
             if let Some((n, _)) = shift_ref.filter(|_| s.shift.is_none()) {
                 errors.push(format!(
-                    "RT shift reference {n} has no MID fragment; scanned without RT shift."
+                    "RT shift reference {n} is not a substance with MID fragments; scanned without RT shift."
                 ));
             }
             // shortcut: a run that fails to load is dropped by scan_runs, which shifts the group
@@ -271,7 +273,9 @@ impl MidWindow {
             }
             None => {
                 let problem = self.problem();
-                let ready = lib.filter(|_| problem.is_none());
+                // Not while the library is rebuilt for new search settings, as in the batch window.
+                let ready =
+                    lib.filter(|l| problem.is_none() && l.settings == self.applied.search());
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new("Start"))
                     .clicked()
@@ -282,6 +286,9 @@ impl MidWindow {
                 match (lib, problem) {
                     (None, _) => ui.label("Open a library first (File → Open library)."),
                     (_, Some(p)) => ui.label(p),
+                    (Some(l), None) if l.settings != self.applied.search() => {
+                        ui.label("Library is being prepared for the new search settings.")
+                    }
                     (Some(l), None) => ui.label(format!(
                         "Library {}, {}",
                         l.name,

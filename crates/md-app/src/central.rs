@@ -134,6 +134,9 @@ fn trace_plot(
 impl App {
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.runs.is_empty() {
+                return self.start_screen(ui);
+            }
             self.trace_controls(ui);
             ui.horizontal_wrapped(|ui| {
                 self.view.controls(ui);
@@ -154,11 +157,32 @@ impl App {
         });
     }
 
+    /// Nothing open yet: the two ways in, instead of empty plots and controls. While the first runs
+    /// load, a spinner; the status bar counts the files.
+    fn start_screen(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() / 3.0);
+            if !self.loading.is_empty() {
+                ui.spinner();
+                return;
+            }
+            ui.label(
+                "Open GC-MS runs (NetCDF or old .bin) to see their chromatograms and spectra.",
+            );
+            ui.add_space(8.0);
+            self.open_chromatograms_button(ui);
+            self.open_library_button(ui);
+        });
+    }
+
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
-            ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
-            ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
+            ui.selectable_value(&mut self.trace, Trace::Tic, "TIC")
+                .on_hover_text("Total ion chromatogram: the sum of all masses per scan");
+            ui.selectable_value(&mut self.trace, Trace::Sic, "SIC")
+                .on_hover_text("Selected ion chromatogram: only the chosen m/z");
+            ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC")
+                .on_hover_text("Both, one above the other with a shared time axis");
             // Each control on its own, not in a nested scope, so the row can wrap between them.
             let sic = self.trace != Trace::Tic;
             let label = ui.add_enabled(sic, egui::Label::new("m/z"));
