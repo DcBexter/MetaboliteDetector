@@ -7,12 +7,11 @@ use std::sync::{Arc, mpsc};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
-use md_core::batch::{IonPeak, QuantSettings};
+use md_core::batch::{IonPeak, QuantSettings, ion_peaks_by};
 use md_core::deconv::Component;
 use md_core::library::LibraryCompound;
 use md_core::library_add::{
-    AddMode, RtCopy, add, apply_rt_copy, component_ions, compound_from_component, find,
-    plan_rt_copy,
+    AddMode, RtCopy, add, apply_rt_copy, compound_from_component, find, plan_rt_copy,
 };
 use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
@@ -43,14 +42,6 @@ enum Choice {
     QuantIons,
 }
 
-type IonJob = mpsc::Receiver<Result<Option<Vec<IonPeak>>, String>>;
-
-enum Ions {
-    Computing(IonJob),
-    Ready(Vec<IonPeak>),
-    Failed(String),
-}
-
 pub struct AddDialog {
     comp: Component,
     data: Arc<Chromatogram>,
@@ -61,7 +52,8 @@ pub struct AddDialog {
     choice: Choice,
     /// The question "Do you really want to …?" is showing.
     confirm: bool,
-    ions: Ions,
+    /// The ion peaks behind the component, largest integral first.
+    ions: Vec<IonPeak>,
 }
 
 pub struct RtDialog {
@@ -71,21 +63,6 @@ pub struct RtDialog {
 }
 
 impl AddDialog {
-    /// Takes the quant ions of the worker thread once they are there.
-    fn poll(&mut self) {
-        if let Ions::Computing(rx) = &self.ions
-            && let Some(r) = poll_job(rx, "quant ion search")
-        {
-            self.ions = match r {
-                Ok(Ok(Some(ions))) => Ions::Ready(ions),
-                Ok(Ok(None)) => {
-                    Ions::Failed("The component is gone; the run was analysed again.".into())
-                }
-                Ok(Err(e)) | Err(e) => Ions::Failed(e),
-            };
-        }
-    }
-
     /// Name, the old radio buttons for a name already in the library, and the comment.
     fn choices(&mut self, ui: &mut egui::Ui, library: &[LibraryCompound], exists: bool) {
         let before = (self.name.clone(), self.choice);
@@ -125,25 +102,13 @@ impl AddDialog {
         }
     }
 
-    /// RT and RI of the component, the state of the quant ion search and the question.
+    /// RT and RI of the component and the question.
     fn status(&self, ui: &mut egui::Ui) {
         ui.label(format!(
             "RT {:.3} min, RI {}",
             self.data.scan_times_s[self.comp.apex_scan as usize] / 60.0,
             self.ri.map_or("unknown".into(), |r| format!("{r:.1}")),
         ));
-        match &self.ions {
-            Ions::Computing(_) => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Choosing quantification ions…");
-                });
-            }
-            Ions::Failed(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            }
-            Ions::Ready(_) => {}
-        }
         if self.confirm {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
@@ -164,11 +129,11 @@ impl AddDialog {
     fn buttons(&mut self, ui: &mut egui::Ui, exists: bool) -> (bool, bool) {
         let (mut apply, mut cancel) = (false, false);
         ui.horizontal(|ui| {
-            let ready = matches!(self.ions, Ions::Ready(_)) && !self.name.trim().is_empty();
+            let ready = !self.name.trim().is_empty();
             let label = if self.confirm { "Yes" } else { "OK" };
             let ok = ui
                 .add_enabled(ready, egui::Button::new(label))
-                .on_disabled_hover_text("Needs a name and the quantification ions.");
+                .on_disabled_hover_text("Needs a name.");
             if ok.clicked() {
                 if exists && !self.confirm {
                     self.confirm = true;
@@ -184,18 +149,13 @@ impl AddDialog {
 
 impl LibraryEditor {
     /// Opens "Add component" for the selected component of the active run.
-    pub(super) fn start_add(&mut self, ctx: &egui::Context, src: &Source) {
+    pub(super) fn start_add(&mut self, src: &Source) {
         let Some(comp) = src.component() else { return };
-        let Some(key) = src.run.analysis.key.clone() else {
-            self.error = Some("The run has no finished analysis; analyse it again.".into());
-            return;
-        };
         let run = src.run;
         let rt_s = run.data.scan_times_s[comp.apex_scan as usize];
-        let (data, c) = (run.data.clone(), comp.clone());
-        let job = spawn(ctx, move || {
-            component_ions(&data, &key.0, &key.1, &c).map_err(|e| e.to_string())
-        });
+        // From the peaks the components were built from: also right for a `.cmp` made with another
+        // deconvolution width, which a fresh deconvolution would not find again (#312).
+        let ions = ion_peaks_by(comp, &run.peaks, |i| run.peak_masses[i]);
         self.add = Some(AddDialog {
             comp: comp.clone(),
             data: run.data.clone(),
@@ -205,7 +165,7 @@ impl LibraryEditor {
             comment: String::new(),
             choice: Choice::Replace,
             confirm: false,
-            ions: Ions::Computing(job),
+            ions,
         });
     }
 
@@ -233,7 +193,6 @@ impl LibraryEditor {
 
     fn add_window(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.add else { return };
-        d.poll();
         let existing = find(&self.compounds, &d.name);
         let (mut open, mut apply, mut cancel) = (true, false, false);
         egui::Window::new("Add component to library")
@@ -255,9 +214,14 @@ impl LibraryEditor {
 
     fn apply_add(&mut self, existing: Option<usize>) {
         let Some(d) = self.add.take() else { return };
-        let Ions::Ready(ions) = &d.ions else { return };
-        let c =
-            compound_from_component(&d.name, &d.comp, &d.data.scan_times_s, d.ri, ions, &d.quant);
+        let c = compound_from_component(
+            &d.name,
+            &d.comp,
+            &d.data.scan_times_s,
+            d.ri,
+            &d.ions,
+            &d.quant,
+        );
         let mode = match (existing, d.choice) {
             (None, _) => AddMode::New,
             (Some(i), Choice::Replace) => AddMode::Replace(i),
@@ -371,5 +335,38 @@ fn rt_minutes(v: f64) -> String {
         format!("{:.3}", v / 60_000.0)
     } else {
         "–".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ions come from the peaks behind the components, not from a new deconvolution with the
+    /// current settings: a `.cmp` made with another width has to work too (#312).
+    #[test]
+    fn add_takes_the_ions_of_the_stored_peaks() {
+        let mut run = crate::results::tests::run();
+        run.component = Some(1);
+        run.analysis = crate::settings::Analysis::default();
+        let src = Source {
+            run: &run,
+            ri: None,
+            quant: QuantSettings::default(),
+            search: SearchSettings::default(),
+        };
+        let mut ed = LibraryEditor::default();
+        ed.start_add(&src);
+        assert!(ed.error.is_none());
+        let ions = &ed.add.as_ref().expect("dialog").ions;
+        assert_eq!(
+            ions,
+            &[IonPeak {
+                mass: 73,
+                integral: 5.0,
+                quality: 0.5,
+                signal_to_noise: 12.0
+            }]
+        );
     }
 }

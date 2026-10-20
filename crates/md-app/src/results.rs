@@ -677,7 +677,17 @@ pub(crate) mod tests {
             sic_job: None,
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
-            peaks: Vec::new(),
+            // The peak both components point to.
+            peaks: vec![md_core::peaks::Peak {
+                row: 0,
+                first_scan: 0,
+                apex_scan: 1,
+                last_scan: 2,
+                precise_apex: None,
+                signal_to_noise: 12.0,
+                quality: 0.5,
+                sharpness: 3.0,
+            }],
             saved_calibration: None,
             analysis: settings::Analysis::default(),
             scan: 0,
