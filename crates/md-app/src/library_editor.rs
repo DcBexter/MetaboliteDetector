@@ -318,8 +318,10 @@ impl LibraryEditor {
         egui::Grid::new("compound fields")
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("Name");
-                changed |= ui.text_edit_singleline(&mut c.name).changed();
+                let name = ui.label("Name").id;
+                changed |= (ui.text_edit_singleline(&mut c.name))
+                    .labelled_by(name)
+                    .changed();
                 ui.end_row();
 
                 // The old program stores -1 for an unknown RT or RI; 0 is a real value.
@@ -370,8 +372,8 @@ impl LibraryEditor {
                     ("Comment", "COMMENT", true, ""),
                 ];
                 for (label, key, multiline, hint) in fields {
-                    ui.label(label);
-                    if feature_field(ui, c, key, multiline, hint) {
+                    let name = ui.label(label).id;
+                    if feature_field(ui, c, key, multiline, hint, name) {
                         changed = true;
                         // Clearing the field drops the feature instead of saving an empty one.
                         c.features.retain(|k, v| k != key || !v.is_empty());
@@ -407,8 +409,8 @@ fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut Stri
         .collect();
     egui::Grid::new("features").striped(true).show(ui, |ui| {
         for k in other {
-            ui.label(&k);
-            changed |= feature_field(ui, c, &k, false, "");
+            let name = ui.label(&k).id;
+            changed |= feature_field(ui, c, &k, false, "", name);
             if ui.small_button("×").on_hover_text("Remove").clicked() {
                 c.features.remove(&k);
                 changed = true;
@@ -435,13 +437,14 @@ fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut Stri
     changed
 }
 
-/// Edits one feature's value, adding the feature on the first edit.
+/// Edits one feature's value, adding the feature on the first edit; `name` is the row's label.
 fn feature_field(
     ui: &mut egui::Ui,
     c: &mut LibraryCompound,
     key: &str,
     multiline: bool,
     hint: &str,
+    name: egui::Id,
 ) -> bool {
     let mut value = c.features.get(key).cloned().unwrap_or_default();
     let edit = if multiline {
@@ -449,7 +452,7 @@ fn feature_field(
     } else {
         egui::TextEdit::singleline(&mut value)
     };
-    let changed = ui.add(edit.hint_text(hint)).changed();
+    let changed = ui.add(edit.hint_text(hint)).labelled_by(name).changed();
     if changed {
         c.features.insert(key.into(), value);
     }

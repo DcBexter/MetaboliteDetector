@@ -489,7 +489,7 @@ fn explain(hint: &str, key: &str) -> String {
 }
 
 /// One grid row: the plain name, then the field it names; both explain on hover.
-fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: impl egui::Widget) {
+pub(crate) fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: impl egui::Widget) {
     let hint = explain(hint, key);
     let label = ui.label(name).on_hover_text(&hint);
     ui.add(field).labelled_by(label.id).on_hover_text(hint);

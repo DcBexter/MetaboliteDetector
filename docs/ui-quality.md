@@ -40,11 +40,8 @@ editor, MID and window placement. Fixed in #168: Run info wraps a long path in a
 names the peak settings like the Settings dialog; statistics explains why it needs two replicate groups;
 the status bar shows load times as "80 ms" or "1.2 s". #183 fixed the MID findings (one rescan label, hovers for
 R² and negative values). Calibration, isotopes, chromatogram and component detail had no findings, and
-every screen except batch has no unnamed input.
+every screen except batch had no unnamed input.
 
-| Area | Issue | What to check |
-|---|---|---|
-| Results list | #169 | Columns are not cut off; headers in sentence case |
-| Library editor | #170 | No "RT 0.00" or "RI known 0" for compounds without RT/RI (needs a decision on how "unknown" is stored) |
-| Screenshot test | #171 | Run info, Results and Statistics have shots (the editor shot selects a compound since #165) |
-| Batch | #175 | Every input has a name and a hover text (8 unnamed) |
+#169, #170, #171 and #187 are done. #175 named every batch input, gave each a hover text and renamed
+`QUANT_EXCL_IONS` to a plain name; it also named the library editor's feature fields. No screenshot
+lists an unnamed input now. Nothing from the second review is open.

@@ -7,6 +7,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::layout::ToolWindow;
+use crate::settings::row;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
@@ -360,68 +361,109 @@ impl Batch {
     fn settings_grid(&mut self, ui: &mut egui::Ui) {
         let s = &mut self.settings;
         egui::Grid::new("batch settings").show(ui, |ui| {
-            ui.label("Runs in memory at once");
-            ui.add(egui::DragValue::new(&mut self.parallel).range(1..=64));
-            ui.end_row();
-            ui.label("Quant ions per substance");
-            ui.add(egui::DragValue::new(&mut s.quant.ion_number).range(1..=20));
-            ui.end_row();
-            ui.label("Min. distance of quant ions");
-            ui.add(
+            row(
+                ui,
+                "Runs in memory at once",
+                "",
+                "How many files are read at the same time; each run is analysed in parallel anyway. \
+                 Fewer need less memory.",
+                egui::DragValue::new(&mut self.parallel).range(1..=64),
+            );
+            row(
+                ui,
+                "Quant ions per substance",
+                "QUANT_ION_NUMBER",
+                "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
+                egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
+            );
+            row(
+                ui,
+                "Min. distance of quant ions",
+                "QUANT_MIN_DIST_IONS",
+                "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
                 egui::DragValue::new(&mut s.quant.min_dist)
                     .range(0.0..=100.0)
                     .speed(0.1),
             );
-            ui.end_row();
-            ui.label("Quant ion quality cut-off");
-            ui.add(
+            row(
+                ui,
+                "Quant ion quality cut-off",
+                "QUANT_QUALITY_CUTOFF",
+                "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
                 egui::DragValue::new(&mut s.quant.quality_cutoff)
                     .range(0.0..=100.0)
                     .speed(0.1),
             );
-            ui.end_row();
-            ui.label("Replicate groups (regex on file name)");
-            ui.add(
+            row(
+                ui,
+                "Replicate groups (regex on file name)",
+                "",
+                "Group = first capture group, else the whole match. A file without a match is a \
+                 group of its own, so it passes any reproducibility filter. Empty: one group.",
                 egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
-            )
-            .on_hover_text("Group = first capture group, else the whole match. A file without a match is a group of its own, so it passes any reproducibility filter. Empty: one group.");
-            ui.end_row();
-            ui.label("Min. reproducibility in a group");
-            ui.add(egui::Slider::new(&mut s.min_reproducibility, 0.0..=1.0));
-            ui.end_row();
-            ui.label("Min. quant ions found");
-            ui.add(egui::DragValue::new(&mut s.min_ions).range(1..=20));
-            ui.end_row();
-            ui.label("Min. signal-to-noise of an ion");
-            ui.add(
+            );
+            row(
+                ui,
+                "Min. reproducibility in a group",
+                "",
+                "Keep a substance only if some replicate group quantifies it in at least this share \
+                 of its runs.",
+                egui::Slider::new(&mut s.min_reproducibility, 0.0..=1.0),
+            );
+            row(
+                ui,
+                "Min. quant ions found",
+                "",
+                "A value counts only if at least this many of the substance's quant ions were found.",
+                egui::DragValue::new(&mut s.min_ions).range(1..=20),
+            );
+            row(
+                ui,
+                "Min. signal-to-noise of an ion",
+                "",
+                "An ion counts only if its peak has at least this signal-to-noise ratio (old \
+                 \"Req. S/N\").",
                 egui::DragValue::new(&mut s.min_sn)
                     .range(0.0..=1e6)
                     .speed(0.1),
             );
-            ui.end_row();
-            ui.label("Max. discrepancy index");
+            let hint = "A value counts only if the mean peak quality of its ions is at most this. \
+                        Off: no limit.";
+            let name = ui.label("Max. discrepancy index").on_hover_text(hint);
             let mut limit = s.max_discrepancy.is_finite();
             ui.horizontal(|ui| {
-                ui.checkbox(&mut limit, "");
+                ui.add(egui::Checkbox::without_text(&mut limit))
+                    .labelled_by(name.id)
+                    .on_hover_text(hint);
                 let mut v = if limit { s.max_discrepancy } else { 0.0 };
                 ui.add_enabled(limit, egui::DragValue::new(&mut v).range(0.0..=1e6).speed(0.1))
-                    .on_hover_text("A value counts only if the mean peak quality of its ions is at most this.");
+                    .labelled_by(name.id)
+                    .on_hover_text(hint)
+                    .on_disabled_hover_text("Tick the box to set a limit.");
                 s.max_discrepancy = if limit { v } else { f32::INFINITY };
             });
             ui.end_row();
-            ui.label("Untargeted");
-            ui.checkbox(&mut self.options.untargeted, "also list unidentified components")
-                .on_hover_text("Components without library hit are pooled over all runs into unknown substances. Applies to the next scan.");
-            ui.end_row();
-            ui.label("Rescan missing ions");
-            ui.checkbox(&mut self.options.rescan, "search the ion traces")
-                .on_hover_text("Searches the window of the RI difference around the expected positions. Applies to the next scan, with the quant ions chosen now.");
-            ui.end_row();
+            row(
+                ui,
+                "Untargeted",
+                "",
+                "Also list components without a library hit: they are pooled over all runs into \
+                 unknown substances. Applies to the next scan.",
+                egui::Checkbox::without_text(&mut self.options.untargeted),
+            );
+            row(
+                ui,
+                "Rescan missing ions",
+                "",
+                "Search the ion traces again in the window of the RI difference around the expected \
+                 positions. Applies to the next scan, with the quant ions chosen now.",
+                egui::Checkbox::without_text(&mut self.options.rescan),
+            );
         });
         crate::settings::ranges(
             ui,
-            "QUANT_EXCL_IONS",
-            "Ion ranges (m/z from–to) never picked as quant ions.",
+            "Ions avoided as quant ions",
+            "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
             &mut s.quant.excluded,
         );
     }
@@ -523,9 +565,9 @@ impl Batch {
         }
         ui.separator();
         ui.label(format!(
-            "{} runs scanned in {:.2?} against {}; {} unknown substances, {} ions added by the rescan",
+            "{} runs scanned in {} against {}; {} unknown substances, {} ions added by the rescan",
             scan.runs.len(),
-            scan.took,
+            crate::view::took(scan.took),
             scan.lib.name,
             scan.extra.len(),
             scan.rescanned
@@ -809,8 +851,9 @@ fn view_controls(
         ui.checkbox(&mut v.export_ions, "Export quant ions")
             .on_hover_text("Also writes results.ions.csv with the raw integral of every quant ion.");
         if v.mode == Mode::Groups {
-            ui.label("Blank group");
+            let blank = ui.label("Blank group");
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
+                .labelled_by(blank.id)
                 .on_hover_text(
                     "Replicate group of the blank runs; every other group gets a p-value against it.",
                 );
@@ -1204,7 +1247,7 @@ fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
     match n.kind {
         Kind::InternalStandard => {
             ui.horizontal(|ui| {
-                ui.label("Internal standard");
+                let label = ui.label("Internal standard");
                 let name = |c: Option<usize>| {
                     t.rows
                         .iter()
@@ -1217,15 +1260,19 @@ fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
                         for r in &t.rows {
                             ui.selectable_value(&mut n.standard, Some(r.compound), &r.name);
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(label.id);
             });
         }
         Kind::Pool => {
             ui.horizontal(|ui| {
-                ui.label("Pool runs are the replicate group");
-                ui.add(egui::TextEdit::singleline(&mut n.pool_group).desired_width(80.0));
-                ui.label("nearest pool runs");
-                ui.add(egui::DragValue::new(&mut n.pool_nearest).range(1..=99));
+                let group = ui.label("Pool runs are the replicate group");
+                ui.add(egui::TextEdit::singleline(&mut n.pool_group).desired_width(80.0))
+                    .labelled_by(group.id);
+                let nearest = ui.add(egui::DragValue::new(&mut n.pool_nearest).range(1..=99));
+                let label = ui.label("nearest pool runs");
+                nearest.labelled_by(label.id);
                 ui.checkbox(&mut n.pool_median, "median");
             })
             .response
