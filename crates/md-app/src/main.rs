@@ -18,6 +18,7 @@ mod jobs;
 mod library_editor;
 mod loading;
 mod menu;
+mod results;
 mod run_list;
 mod settings;
 mod status;
@@ -75,6 +76,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    results: results::Results,
     export: export::Export,
 }
 
@@ -99,6 +101,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            results: results::Results::default(),
             export: export::Export::default(),
         }
     }
@@ -120,6 +123,8 @@ struct Run {
     sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
     /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
+    /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
+    peak_masses: Vec<u32>,
     analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
@@ -172,6 +177,7 @@ impl App {
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
         self.isotopes.window(ctx);
+        self.results.window(ctx, &mut self.runs, self.active);
         self.library_editor(ctx);
     }
 }

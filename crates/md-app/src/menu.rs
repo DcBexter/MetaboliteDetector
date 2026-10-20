@@ -57,5 +57,8 @@ impl App {
         if ui.button("Natural isotopes…").clicked() {
             self.isotopes.open = true;
         }
+        if ui.button("Results of the active run…").clicked() {
+            self.results.open = true;
+        }
     }
 }
