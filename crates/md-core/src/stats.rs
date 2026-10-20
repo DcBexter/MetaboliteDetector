@@ -143,6 +143,9 @@ pub fn anova(groups: &[Vec<f64>]) -> Option<f64> {
         return None;
     }
     let all: Vec<f64> = groups.iter().flatten().copied().collect();
+    if all.iter().all(|&v| v == all[0]) {
+        return None; // no spread at all; the rounding of the mean would fake one
+    }
     let (n, grand) = (all.len() as f64, mean(&all));
     let total: f64 = all.iter().map(|v| (v - grand).powi(2)).sum();
     let between: f64 = (groups.iter())
@@ -655,6 +658,7 @@ mod tests {
         assert_eq!(anova(&[vec![1.0], vec![2.0]]), None);
         assert_eq!(anova(&[vec![1.0, 2.0], vec![]]), None);
         assert_eq!(anova(&[vec![3.0, 3.0], vec![3.0, 3.0]]), None);
+        assert_eq!(anova(&[vec![0.1; 3], vec![0.1; 2]]), None);
         // Perfect separation: infinite F.
         assert_eq!(anova(&[vec![1.0, 1.0], vec![2.0, 2.0]]), Some(0.0));
     }
