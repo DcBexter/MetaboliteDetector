@@ -7,7 +7,7 @@ Use **Use this template** on GitHub to start a project with the shared
 Impeccable sources stay pinned Git submodules; improvements arrive as update PRs.
 Add your own application and project-specific contracts without copying kit code.
 
-For agent-guided setup, give your agent the [setup entry](https://github.com/snagg-app/workflow-kit/blob/main/SETUP.md).
+For agent-guided setup, give your agent the [setup entry](https://github.com/snagg-app/workflow-kit/blob/a6c4d8925895f101c8a1a3f33b911066d26c11dc/SETUP.md).
 It asks for repository, board and integration choices, then performs and verifies setup.
 
 ## Setup
@@ -56,9 +56,9 @@ Follow [CONTRIBUTING](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md). Fill in
 architecture, build/test commands and product acceptance. Product CI and Sonar
 project keys are specific to your project; this template does not invent them.
 
-Dependabot proposes kit/Actions updates weekly. Renovate is explicitly disabled to
-avoid duplicate proposals in organizations where its App covers all repos. If you
-prefer Renovate, replace the Dependabot config with the kit's documented configuration.
+Renovate ([renovate.json](../renovate.json)) proposes updates, including the kit submodule,
+lockfile maintenance and the pinned Rust toolchain. If you use another update service,
+replace that configuration so the two do not propose the same updates.
 
 For an update PR, inspect the new source revision, then run:
 
