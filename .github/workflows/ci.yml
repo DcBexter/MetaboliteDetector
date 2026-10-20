@@ -50,6 +50,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.rust
         with:
+          # Key on the pinned toolchain, not on every toolchain the runner image happens to preinstall:
+          # otherwise a PR on another image version misses the main cache and builds cold.
+          add-rust-environment-hash-key: false
+          key: ${{ hashFiles('rust-toolchain.toml') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
         if: steps.changes.outputs.rust && runner.os == 'Linux'
