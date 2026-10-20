@@ -1798,6 +1798,7 @@ mod tests {
     fn an_export_writes_the_settings_and_on_request_the_ion_integrals() {
         let (scan, t) = one_hit_scan();
         let dir = std::env::temp_dir().join(format!("md-app-export-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok(); // leftovers of an aborted run
         std::fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("results.csv");
         let settings = TableSettings::default();
