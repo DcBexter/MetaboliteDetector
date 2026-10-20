@@ -85,6 +85,56 @@ fn variance(x: &[f64]) -> f64 {
     x.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (x.len() as f64 - 1.0)
 }
 
+/// The batch table's per-group columns of one substance (old `BatchQuantificationStatisticsTableModel`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Summary {
+    /// Samples with a value above 0 ("#").
+    pub hits: usize,
+    /// Mean of the values that are not 0, NaN or infinite; 0 if there are none.
+    pub mean: f64,
+    /// Standard error over the same values divided by their mean, as a fraction
+    /// ("Rel. Std. Err."); NaN below two values.
+    pub rel_std_err: f64,
+}
+
+/// `x` are the group's values of one substance, a missing value as 0.
+pub fn summary(x: &[f64]) -> Summary {
+    let kept: Vec<f64> = x
+        .iter()
+        .copied()
+        .filter(|v| *v != 0.0 && v.is_finite())
+        .collect();
+    let m = if kept.is_empty() { 0.0 } else { mean(&kept) };
+    let sd = if kept.len() > 1 {
+        variance(&kept).sqrt()
+    } else {
+        f64::NAN
+    };
+    Summary {
+        hits: x.iter().filter(|v| **v > 0.0).count(),
+        mean: m,
+        rel_std_err: sd / (kept.len() as f64).sqrt() / m,
+    }
+}
+
+/// Two-sided p of Student's t-test with pooled variance (the old "P (blank)"); `None` below three
+/// values in total, where the degrees of freedom vanish.
+pub fn student(x: &[f64], y: &[f64]) -> Option<f64> {
+    let (n1, n2) = (x.len() as f64, y.len() as f64);
+    let df = n1 + n2 - 2.0;
+    if df < 1.0 || x.is_empty() || y.is_empty() {
+        return None;
+    }
+    let pooled = ((n1 - 1.0) * variance_or_zero(x) + (n2 - 1.0) * variance_or_zero(y)) / df;
+    let t = ((mean(x) - mean(y)) / pooled.sqrt() * (n1 * n2 / (n1 + n2)).sqrt()).abs();
+    t.is_finite().then(|| t_two_sided(t, df))
+}
+
+/// A single value has no spread; the pooled test counts it as 0.
+fn variance_or_zero(x: &[f64]) -> f64 {
+    if x.len() > 1 { variance(x) } else { 0.0 }
+}
+
 /// The samples of the test for one substance and group list.
 fn samples(t: &Table, row: usize, groups: &[String], c: &TwoGroups) -> Vec<f64> {
     match c.samples {
@@ -494,6 +544,7 @@ mod tests {
                     rt_s: 0.0,
                     ions: vec![],
                     values: v.to_vec(),
+                    rts_s: vec![None; v.len()],
                 })
                 .collect(),
         }
@@ -525,6 +576,25 @@ mod tests {
             .iter()
             .map(|r| r.p.unwrap_or(f64::NAN))
             .collect()
+    }
+
+    #[test]
+    fn summary_follows_the_old_group_columns() {
+        // The zero and the NaN are left out of mean and error but a zero would still not be a hit.
+        let s = summary(&[2.0, 0.0, 4.0, 6.0, f64::NAN]);
+        assert_eq!(s.hits, 3);
+        assert_eq!(s.mean, 4.0);
+        assert!((s.rel_std_err - 2.0 / 3f64.sqrt() / 4.0).abs() < 1e-12);
+        assert!(summary(&[5.0, 0.0]).rel_std_err.is_nan());
+    }
+
+    #[test]
+    fn student_pools_the_variance() {
+        // Hand calculation: means 2 and 5, both variance 1, n = 3: t = 3 / sqrt(1) * sqrt(1.5) = 3.674234
+        // with 4 degrees of freedom; R: t.test(c(1,2,3), c(4,5,6), var.equal = TRUE)$p.value.
+        let p = student(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]).unwrap();
+        assert!((p - 0.02131).abs() < 5e-5, "{p}");
+        assert_eq!(student(&[1.0], &[2.0]), None);
     }
 
     #[test]
