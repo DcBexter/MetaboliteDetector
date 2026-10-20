@@ -605,6 +605,10 @@ pub enum MslType {
 /// never drops to 0.
 fn normalized_intensities(values: &[i32]) -> Vec<i32> {
     let base = f64::from(values.iter().copied().max().unwrap_or(0));
+    // shortcut: the old program's result for a base peak of 0 or less is not known, keep the values.
+    if base <= 0.0 {
+        return values.to_vec();
+    }
     values
         .iter()
         .map(|&v| match (f64::from(v) / base * 1000.0).round() as i32 {
@@ -734,12 +738,23 @@ pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
             };
             let _ = write!(s, "\nRESOLUTION:{width:.4}");
         }
+        // The old program keeps the peaks in a map, so they always come out sorted by mass.
+        let mut order: Vec<usize> = (0..sp.masses.len().min(sp.values.len())).collect();
+        order.sort_by(|&x, &y| sp.masses[x].total_cmp(&sp.masses[y]));
+        let sorted_m: Vec<f32> = order.iter().map(|&i| sp.masses[i]).collect();
+        let sorted_v: Vec<i32> = order.iter().map(|&i| sp.values[i]).collect();
         let (masses, values, fwhm) = match kind {
-            MslType::Profile => (sp.masses.clone(), sp.values.clone(), Vec::new()),
+            MslType::Profile => (sorted_m, sorted_v, Vec::new()),
             // The old program centroids first unless the compound already has a FWHM list.
             _ => match &c.fwhm {
-                Some(f) => (sp.masses.clone(), sp.values.clone(), f.clone()),
-                None => centroid(&sp.masses, &sp.values),
+                Some(f) => {
+                    let f = order
+                        .iter()
+                        .map(|&i| f.get(i).copied().unwrap_or(1.0))
+                        .collect();
+                    (sorted_m, sorted_v, f)
+                }
+                None => centroid(&sorted_m, &sorted_v),
             },
         };
         let (masses, values) = if kind == MslType::Nominal {
@@ -1430,6 +1445,27 @@ mod tests {
             format!("{head}\nNUM PEAKS:2\n( 73.000000  0.501000) (147.500000  1.00   1) {end}")
         );
         assert_eq!(write_msl_as(&[], MslType::Nominal), "\n\n");
+    }
+
+    /// The old program keeps peaks sorted by mass, whatever order the file has.
+    #[test]
+    fn old_msl_export_sorts_the_peaks_by_mass() {
+        let c = parse_msl(
+            "NAME: u
+NUM PEAKS: 3
+(100 10) (50 1000) (73 20)
+",
+        )
+        .unwrap();
+        for (kind, peaks) in [
+            (MslType::Nominal, "(  50 1000) (  73   20) ( 100   10)"),
+            (
+                MslType::Profile,
+                "( 50.000000 1000) ( 73.000000   20) (100.000000   10)",
+            ),
+        ] {
+            assert!(write_msl_as(&c, kind).contains(peaks), "{kind:?}");
+        }
     }
 
     /// The expected peaks are what the old program wrote for the same spectra

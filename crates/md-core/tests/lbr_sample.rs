@@ -229,7 +229,8 @@ fn reads_old_version_5_libraries() {
 /// (docs/reverse-engineering/tools/golden/make-msl-export.sh). Needs `MD_LBR_SAMPLE` and `MD_MSL_GOLDEN`
 /// (the OUT_PREFIX of the script); passes without checking anything when one is not set. When
 /// `MD_LBR_SAMPLE` is a `.msl` file (the script imports it first) the library is read back from the old
-/// program's profile export, which keeps every mass and intensity exactly.
+/// program's profile export; that only matches when the input already has a base peak of 1000 (the old
+/// import and export both normalise).
 #[test]
 fn msl_export_matches_the_old_program() {
     use md_core::library::{MslType, write_msl_as};

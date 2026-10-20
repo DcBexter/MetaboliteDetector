@@ -591,7 +591,7 @@ bins it to 1.0 (`getBinnedCompound`, 0x60dfc8). On an exception the old code pri
 centroid compound for MSL export. Using binned compound." to stderr and writes the binned compound.
 
 - **Centroiding** (only without a FWHM list; with one the spectrum is written as it is): the points are cut into
-  groups. A group climbs while the next point is not lower (two falling steps in a row end the climb), then falls
+  groups. A group climbs until two falling steps in a row, then falls
   until a clear rise, and ends at a gap of more than 0.01 in mass. A lone point stays with FWHM 1.00. In a longer
   group the points with at least half of the group maximum count: mass = intensity-weighted mean, intensity = sum,
   FWHM = number of points. A group without weight is dropped (`determineCentroid`).
