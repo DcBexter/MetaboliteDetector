@@ -1,27 +1,24 @@
 name: CI
 on:
-  # Runs on main keep the shared cache warm for every PR.
+  # No paths filter: the required checks (CI, SonarCloud Code Analysis) must report on every PR,
+  # and runs on main keep the shared cache warm and the Sonar main analysis current.
   push:
     branches: [main]
-    paths: &rust
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/ci.yml'
   pull_request:
     # Draft pushes run nothing; ready_for_review starts the run for the head that counts.
     # converted_to_draft starts a skipped run that cancels a running one through the concurrency group.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-    paths: *rust
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only PRs cancel superseded runs; every main push keeps its cache save and Sonar main analysis.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
+  # No debug info: faster builds and a smaller cache; panics still name the function.
+  CARGO_PROFILE_DEV_DEBUG: 0
 jobs:
   check:
     name: Rust (${{ matrix.os }})
@@ -31,16 +28,63 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # The Sonar scan is skipped until the repo secret exists and Automatic Analysis is off (see CONTRIBUTING.md).
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
+          # Linux: full history for Sonar blame and new-code detection. Windows: HEAD^1 for the change check.
+          fetch-depth: ${{ runner.os != 'Linux' && 2 || 0 }}
           persist-credentials: false
+      # A PR checks out its merge commit, so HEAD^1 is the base. PRs without Rust changes skip the build;
+      # main always builds to keep the cache and Sonar's coverage complete.
+      - id: changes
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- \
+              crates Cargo.toml Cargo.lock rust-toolchain.toml sonar-project.properties .github/workflows/ci.yml; then
+            echo rust=true >> "$GITHUB_OUTPUT"
+          fi
       # Caches ~/.cargo and target. Only main saves, so PR caches cannot fill the 10 GB repo limit.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.changes.outputs.rust
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
-        if: runner.os == 'Linux'
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: steps.changes.outputs.rust && runner.os == 'Linux'
+      # Clippy runs on Linux only: no code is platform-specific. One build serves both the gate and Sonar,
+      # which imports the JSON report but does not run Clippy.
+      # Prints every warning and error, then fails like -D warnings if there was one or Clippy itself failed.
+      - if: steps.changes.outputs.rust && runner.os == 'Linux'
+        run: |
+          cargo clippy --workspace --all-targets --message-format=json > clippy-report.json && ok=1
+          jq -r 'select(.reason == "compiler-message") | .message.rendered' clippy-report.json > clippy.txt
+          cat clippy.txt
+          [ -n "$ok" ] && [ ! -s clippy.txt ]
       # Example data is not fetched; its tests skip themselves.
       - run: cargo test --workspace
+        if: steps.changes.outputs.rust && runner.os != 'Linux'
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        if: steps.changes.outputs.rust && runner.os == 'Linux'
+        with:
+          tool: cargo-llvm-cov
+      # Runs the tests once, instrumented, for the Sonar coverage report.
+      - if: steps.changes.outputs.rust && runner.os == 'Linux'
+        run: |
+          rustup component add llvm-tools-preview
+          cargo llvm-cov --workspace --lcov --output-path lcov.info
+      # Also runs without a build, so the required Sonar check reports on PRs without Rust changes.
+      - uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+        if: runner.os == 'Linux' && env.SONAR_TOKEN != ''
+  # The one required result for main: a fixed name, and it reports even when the matrix fails or is cancelled.
+  ci:
+    name: CI
+    needs: check
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.check.result }}
