@@ -27,6 +27,14 @@ struct Row {
     used: bool,
 }
 
+/// The calibration that RT-only alignment replaced.
+struct Saved {
+    cal: Option<Arc<RiCalibration>>,
+    source: String,
+    rows: Vec<Row>,
+    applied: Vec<Row>,
+}
+
 type RowsJob = (String, mpsc::Receiver<Result<Vec<Row>, String>>);
 
 pub struct Calibration {
@@ -43,6 +51,7 @@ pub struct Calibration {
     own: HashMap<PathBuf, Arc<RiCalibration>>,
     /// RT-only alignment: `cal` is the identity and the library is searched by its retention times.
     pub rt_only: bool,
+    saved: Option<Saved>,
     /// Calibration mix: names of library compounds with RI, and the text filtering the picker.
     mix: BTreeSet<String>,
     mix_filter: String,
@@ -76,6 +85,7 @@ impl Default for Calibration {
             applied: Vec::new(),
             own: HashMap::new(),
             rt_only: false,
+            saved: None,
             mix: BTreeSet::new(),
             mix_filter: String::new(),
             mix_job: None,
@@ -168,7 +178,25 @@ impl Calibration {
     fn clear(&mut self) {
         (self.cal, self.job, self.mix_job) = (None, None, None);
         (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
-        self.own.clear();
+        (self.own, self.saved) = (HashMap::new(), None);
+    }
+
+    /// Switches RT-only alignment. The identity maps time to "RI" (the library is searched by its
+    /// retention times); the calibration in use before is kept and comes back when it is switched off.
+    fn set_rt_only(&mut self, on: bool) {
+        self.rt_only = on;
+        if on {
+            let saved = Saved {
+                cal: self.cal.take(),
+                source: std::mem::take(&mut self.source),
+                rows: std::mem::take(&mut self.rows),
+                applied: std::mem::take(&mut self.applied),
+            };
+            self.set(RiCalibration::identity(), "retention time only".into());
+            self.saved = Some(saved);
+        } else if let Some(s) = self.saved.take() {
+            (self.cal, self.source, self.rows, self.applied) = (s.cal, s.source, s.rows, s.applied);
+        }
     }
 
     pub fn window(
@@ -221,11 +249,7 @@ impl Calibration {
              are not reproducible and the results cannot be compared between instruments and labs.",
         );
         if self.rt_only != was {
-            // The identity maps time to "RI"; the library is searched by its retention times.
-            match self.rt_only {
-                true => self.set(RiCalibration::identity(), "retention time only".into()),
-                false => self.clear(),
-            }
+            self.set_rt_only(self.rt_only);
         }
         if self.rt_only {
             ui.colored_label(
@@ -630,6 +654,29 @@ mod tests {
             peaks: Vec::new(),
             exact_spectrum: Vec::new(),
         }
+    }
+
+    #[test]
+    fn rt_only_off_brings_back_the_previous_calibration() {
+        let cal = RiCalibration::new([(60.0, 1000.0), (120.0, 1100.0)]).unwrap();
+        let mut c = Calibration::default();
+        c.set(cal.clone(), "x.calib".into());
+        let before = (c.cal.clone(), c.rows.clone());
+        c.set_rt_only(true);
+        assert_eq!(c.source, "retention time only");
+        c.set_rt_only(false);
+        assert_eq!((c.cal.clone(), c.rows.clone()), before);
+        assert_eq!(c.source, "x.calib");
+        assert_eq!(c.cal.as_deref(), Some(&cal));
+    }
+
+    #[test]
+    fn rt_only_off_without_calibration_stays_uncalibrated() {
+        let mut c = Calibration::default();
+        c.set_rt_only(true);
+        assert!(c.cal.is_some());
+        c.set_rt_only(false);
+        assert!(c.cal.is_none() && c.rows.is_empty() && c.source.is_empty() && !c.rt_only);
     }
 
     #[test]
