@@ -10,7 +10,7 @@
 mod rescan;
 mod untargeted;
 
-pub use rescan::{RescanSettings, rescan_runs};
+pub use rescan::rescan_runs;
 pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
@@ -261,15 +261,15 @@ pub struct Completed {
 }
 
 /// The passes after `scan_runs`, shared by the app and the command line: pools the unknown
-/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is
-/// given. `None` once `cancel` is set.
+/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is set.
+/// `None` once `cancel` is set.
 #[allow(clippy::too_many_arguments)]
 pub fn complete_scan(
     runs: &mut [RunResult],
     lib: &[LibraryCompound],
     s: &ScanSettings,
     q: &QuantSettings,
-    rescan: Option<&RescanSettings>,
+    rescan: bool,
     parallel: usize,
     cancel: &AtomicBool,
 ) -> Option<Completed> {
@@ -278,9 +278,10 @@ pub fn complete_scan(
     } else {
         Vec::new()
     };
-    let (rescanned, errors) = match rescan {
-        Some(r) => rescan_runs(runs, lib, &extra, s, q, r, parallel, cancel)?,
-        None => (0, Vec::new()),
+    let (rescanned, errors) = if rescan {
+        rescan_runs(runs, lib, &extra, s, q, parallel, cancel)?
+    } else {
+        (0, Vec::new())
     };
     Some(Completed {
         extra,
@@ -526,8 +527,9 @@ pub fn table(
                 .map(|f| cell(f.as_ref()?, &ions, need, s))
                 .collect();
             let mut per_group: BTreeMap<&str, usize> = BTreeMap::new();
-            for (v, col) in values.iter().zip(&cols) {
-                if v.is_some() {
+            // The old reproducibility filter runs before the rescan, so rescanned runs do not count.
+            for ((v, col), f) in values.iter().zip(&cols).zip(&found) {
+                if v.is_some() && f.is_some_and(|f| !f.rescanned) {
                     *per_group.entry(&col.0).or_default() += 1;
                 }
             }
@@ -887,8 +889,7 @@ NUM PEAKS: 1
         ];
         let q = QuantSettings::default();
         let cancel = AtomicBool::new(false);
-        let r = RescanSettings::default();
-        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 2, &cancel).unwrap();
+        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
         let t = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
@@ -899,17 +900,22 @@ NUM PEAKS: 1
         }
         // Rescanned entries do not move the retention time of the substance.
         assert!(runs[1].found.iter().all(|f| f.rescanned && f.score == 0.0));
-        // A substance seen in too few runs is left alone.
-        let strict = RescanSettings {
-            min_share: 1.0,
-            ..r
+        // ... and do not count for reproducibility, which the old program checks before the rescan.
+        let all = TableSettings {
+            min_reproducibility: 1.0,
+            ..Default::default()
         };
-        let mut again = vec![runs[0].clone(), RunResult::default()];
-        again[1].path = runs[1].path.clone();
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, &strict, 1, &cancel).unwrap();
+        assert!(table(&runs, &lib, &[], &all).unwrap().rows.is_empty());
+        // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
+        let mut again = vec![runs[0].clone()];
+        again.extend((0..5).map(|_| RunResult {
+            path: runs[1].path.clone(),
+            ..Default::default()
+        }));
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
         assert_eq!(added, 0);
         cancel.store(true, Relaxed);
-        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 1, &cancel).is_none());
+        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

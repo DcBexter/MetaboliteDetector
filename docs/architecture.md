@@ -315,9 +315,11 @@ rescan:
   minimum S/N of an ion and maximum discrepancy index (mean peak quality of the ions of a cell). A
   substance without any value left drops out of the table.
 - **Untargeted** (`ScanSettings::untargeted`, then `add_unknowns`): components without library hit are kept
-  per run and pooled over all runs into a temporary library (`Unknown n`); `table` takes it as `extra`.
-- **Rescan** (`rescan_runs`): a substance found in at least half of the runs gets its missing quant ions
-  from the ion traces of the other runs' files, near the expected retention time (old `ResultSeries::scanIons`).
+  per run and pooled over all runs into a temporary library (`Unknown n`, the mean spectrum of its members);
+  `table` takes it as `extra`.
+- **Rescan** (`rescan_runs`): a substance found in at least a quarter of the runs gets its missing quant ions
+  from the ion traces of the runs' files, within ΔRI (`SearchSettings::ri_diff`) around the expected
+  position (old `ResultSeries::scanIons`).
   `complete_scan` runs both passes for the app and `md-cli`.
 - **RT shift** (`ScanSettings::shift`): the calibration is shifted per run onto a reference substance.
 
@@ -327,9 +329,9 @@ All 15 example runs against the TargetSearchData library (12 entries, converted 
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
 (90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
 memory depends on the runs in memory, not on the study size (`examples/batch.rs`). Reading the file
-(~27 ms per run) is the largest share. Untargeted, the 15 runs give 89 unknown substances besides the 5
-library substances (245 of 1410 cells filled, 185 ms scan, 2 ms pooling, 90 MiB peak); with the rescan 274
-cells are filled (194 ms more, 96 ions added, 87 MiB), measured 2026-10-20 with `examples/batch.rs`.
+(~27 ms per run) is the largest share. Untargeted, the 15 runs give 97 unknown substances besides the 5
+library substances; with the rescan 380 of 1530 cells of 102 substances are filled (435 ions added, 2 ms
+pooling, 1.1 s rescan with 4 in parallel), measured 2026-10-20 with `examples/batch.rs` after #110.
 
 ### Command line (`md-cli`)
 
@@ -344,7 +346,7 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 (`GcmsSettings::from_bytes`): its `AN_*`/`LS_*` values drive peak detection, deconvolution and search, its
 `QUANT_*` values are the quant defaults, which `--ions`, `--min-dist` and `--quality-cutoff` override.
 `--replicates`, `--min-reproducibility`, `--min-ions`, `--min-sn`, `--max-discrepancy` and `--exclude-ions`
-(`QUANT_EXCL_IONS`) are the batch window's filters; `--untargeted`, `--rescan` (`--rescan-window`) and
+(`QUANT_EXCL_IONS`) are the batch window's filters; `--untargeted`, `--rescan` and
 `--shift-reference` (needs `-c`; `--shift-cutoff`) switch on the passes above. The CSV is
 `Table::write_csv` (`Substance,RT_s,Quant_ions,<run>...`, empty cell = not quantified); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    Completed, RescanSettings, RunResult, ScanSettings, ShiftReference, Table, TableSettings,
-    complete_scan, scan_runs, table,
+    Completed, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
+    scan_runs, table,
 };
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
@@ -78,7 +78,6 @@ impl Default for Norm {
 struct ScanOptions {
     untargeted: bool,
     rescan: bool,
-    rescan_window_s: f64,
 }
 
 pub struct Batch {
@@ -114,7 +113,6 @@ impl Default for Batch {
             options: ScanOptions {
                 untargeted: false,
                 rescan: false,
-                rescan_window_s: RescanSettings::default().window_s,
             },
             settings: TableSettings::default(),
             analysis: Default::default(),
@@ -209,10 +207,7 @@ impl Batch {
                 .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
             untargeted: self.options.untargeted,
         };
-        let rescan = self.options.rescan.then(|| RescanSettings {
-            window_s: self.options.rescan_window_s,
-            ..Default::default()
-        });
+        let rescan = self.options.rescan;
         let quant = self.settings.quant.clone();
         let (paths, l, d, c, parallel) = (
             self.paths.clone(),
@@ -223,15 +218,7 @@ impl Batch {
         );
         let rx = spawn(ctx, move || {
             let (mut runs, errors) = scan_runs(&paths, &l.prepared, &s, parallel, &d, &c)?;
-            let more = complete_scan(
-                &mut runs,
-                &l.compounds,
-                &s,
-                &quant,
-                rescan.as_ref(),
-                parallel,
-                &c,
-            )?;
+            let more = complete_scan(&mut runs, &l.compounds, &s, &quant, rescan, parallel, &c)?;
             Some((runs, errors, more))
         });
         self.job = Some(Job {
@@ -302,16 +289,8 @@ impl Batch {
                 .on_hover_text("Components without library hit are pooled over all runs into unknown substances. Applies to the next scan.");
             ui.end_row();
             ui.label("Rescan missing ions");
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.options.rescan, "search the ion traces");
-                ui.add_enabled(
-                    self.options.rescan,
-                    egui::DragValue::new(&mut self.options.rescan_window_s)
-                        .range(0.0..=1e4)
-                        .suffix(" s"),
-                )
-                .on_hover_text("Search window around the expected retention times. Applies to the next scan, with the quant ions chosen now.");
-            });
+            ui.checkbox(&mut self.options.rescan, "search the ion traces")
+                .on_hover_text("Searches the window of the RI difference around the expected positions. Applies to the next scan, with the quant ions chosen now.");
             ui.end_row();
         });
         crate::settings::ranges(

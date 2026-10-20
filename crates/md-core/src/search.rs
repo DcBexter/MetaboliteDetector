@@ -279,6 +279,13 @@ pub fn map_compounds_to_library(
         .enumerate()
         .map(|(i, c)| library_hits(&c.spectrum, ris.and_then(|r| r.get(i).copied()), lib, s))
         .collect();
+    let assigned = assign_best_first(&hits, lib.len());
+    Identification { hits, assigned }
+}
+
+/// The assignment step of `map_compounds_to_library` on precomputed hits (`hits[c]` best first):
+/// one library compound of `lib_len` per component, best overall scores first.
+pub fn assign_best_first(hits: &[Vec<LibraryHit>], lib_len: usize) -> Vec<Option<LibraryHit>> {
     // Taking pairs in descending score equals the old loop, which picks the best free pair each round.
     // Ties go to the lower library index, then the lower component index (old: pointer order).
     let mut pairs: Vec<(usize, usize)> = hits
@@ -294,8 +301,8 @@ pub fn map_compounds_to_library(
             .then(x.compound.cmp(&y.compound))
             .then(a.0.cmp(&b.0))
     });
-    let mut assigned = vec![None; comps.len()];
-    let mut used = vec![false; lib.len()];
+    let mut assigned = vec![None; hits.len()];
+    let mut used = vec![false; lib_len];
     for p in &pairs {
         let h = hit(p);
         if assigned[p.0].is_none() && !used[h.compound] {
@@ -303,7 +310,7 @@ pub fn map_compounds_to_library(
             used[h.compound] = true;
         }
     }
-    Identification { hits, assigned }
+    assigned
 }
 
 /// RT shift correction (§6.5) for one run: finds library compound `reference` among `comps` within
