@@ -167,7 +167,9 @@ impl Calibration {
         if self.rows == self.applied {
             return;
         }
-        let used = (self.rows.iter().filter(|r| r.used)).map(|r| (r.rt_min * 60.0, r.ri));
+        // A time of 0 is a line just added by hand (no marker elutes then), not yet a point.
+        let used = (self.rows.iter().filter(|r| r.used && r.rt_min > 0.0))
+            .map(|r| (r.rt_min * 60.0, r.ri));
         match RiCalibration::new(used) {
             Ok(cal) => (self.cal, self.error) = (Some(Arc::new(cal)), None),
             Err(e) => self.error = Some(e.to_string()),
@@ -191,7 +193,7 @@ impl Calibration {
 
     fn clear(&mut self) {
         (self.cal, self.job, self.mix_job) = (None, None, None);
-        (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
+        (self.rows, self.applied, self.rt_only, self.error) = (Vec::new(), Vec::new(), false, None);
         (self.own, self.saved) = (HashMap::new(), None);
     }
 
@@ -710,6 +712,10 @@ mod tests {
         let mut c = Calibration::default();
         for (rt, ri) in fames {
             c.add_point();
+            // The empty line the button adds (time 0) does not disturb the calibration so far.
+            let before = c.cal.clone();
+            c.apply_edits();
+            assert_eq!(c.cal, before);
             let r = c.rows.last_mut().unwrap();
             (r.rt_min, r.ri) = (rt / 60.0, ri);
             // One point is not a calibration yet; the table keeps its error and no `cal`.
