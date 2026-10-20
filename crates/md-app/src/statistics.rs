@@ -92,6 +92,217 @@ fn color(i: usize) -> egui::Color32 {
     egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.7, 0.8, 1.0).into()
 }
 
+/// Check boxes that put each replicate group on side 1 or 2 (or neither).
+fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
+    egui::Grid::new("group picker")
+        .striped(true)
+        .show(ui, |ui| {
+            ui.strong("Replicate group");
+            ui.strong("Group 1");
+            ui.strong("Group 2");
+            ui.end_row();
+            for g in all {
+                ui.label(*g);
+                for side in 0..2 {
+                    let mut on = sides[side].iter().any(|s| s == g);
+                    if ui.checkbox(&mut on, "").changed() {
+                        sides.iter_mut().for_each(|s| s.retain(|s| s != g));
+                        if on {
+                            sides[side].push((*g).into());
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        });
+}
+
+/// Text field to paste group names and the buttons that fill a side from it.
+fn paste_box(ui: &mut egui::Ui, paste: &mut String, sides: &mut [Vec<String>; 2], all: &[&str]) {
+    ui.vertical(|ui| {
+        ui.label("Paste group names (one per line), then fill a side:");
+        ui.add(egui::TextEdit::multiline(paste).desired_rows(4));
+        ui.horizontal(|ui| {
+            for side in 0..2 {
+                if ui.button(format!("Fill group {}", side + 1)).clicked() {
+                    fill(paste, sides, side, all);
+                }
+            }
+        });
+    });
+}
+
+/// Puts the pasted names that are replicate groups into `side` (exact match, like the old
+/// program), taking them out of the other side.
+fn fill(paste: &str, sides: &mut [Vec<String>; 2], side: usize, all: &[&str]) {
+    let names = paste
+        .split(['\n', '\r', '\t', ';', ','])
+        .map(str::trim)
+        .filter(|n| all.contains(n));
+    for n in names {
+        sides.iter_mut().for_each(|s| s.retain(|s| s != n));
+        sides[side].push(n.into());
+    }
+}
+
+/// The order of a side is the order of its boxes.
+fn order_rows(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2]) {
+    for (side, groups) in sides.iter_mut().enumerate() {
+        if groups.len() < 2 {
+            continue;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Order of group {}:", side + 1));
+            let mut swap = None;
+            for (i, g) in groups.iter().enumerate() {
+                ui.label(g);
+                if i > 0 && ui.small_button("◀").clicked() {
+                    swap = Some(i);
+                }
+            }
+            if let Some(i) = swap {
+                groups.swap(i - 1, i);
+            }
+        });
+    }
+}
+
+fn samples_picker(ui: &mut egui::Ui, samples: &mut Samples) {
+    ui.horizontal(|ui| {
+        ui.label("Samples");
+        ui.selectable_value(samples, Samples::Independent, "independent runs")
+            .on_hover_text("Welch's t-test over all runs of each side.");
+        ui.selectable_value(samples, Samples::GroupMeans, "group means")
+            .on_hover_text(
+                "Welch's t-test over one mean per replicate group (old: not independent).",
+            );
+        ui.selectable_value(samples, Samples::Paired, "paired")
+            .on_hover_text("Paired t-test: the i-th run of group 1 with the i-th run of group 2.");
+    });
+}
+
+fn filter_row(ui: &mut egui::Ui, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
+    ui.horizontal(|ui| {
+        ui.label("Show only p ≤");
+        ui.add(
+            egui::DragValue::new(p_max)
+                .range(0.0..=1.0)
+                .speed(0.001)
+                .max_decimals(4),
+        );
+        ui.checkbox(sort_by_p, "sort by p");
+        if c.samples == Samples::Paired && c.group1.len() != c.group2.len() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "Paired runs: the sides need the same number of replicate groups.",
+            );
+        }
+    });
+}
+
+/// Count of the shown rows and the CSV button; returns the note to show after a save.
+fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) -> Option<String> {
+    let mut note = None;
+    ui.horizontal(|ui| {
+        ui.label(format!("{} of {total} substances", shown.len()));
+        if ui.button("Export CSV…").clicked()
+            && let Some(p) = rfd::FileDialog::new()
+                .add_filter("CSV", &["csv"])
+                .set_file_name("biomarkers.csv")
+                .save_file()
+        {
+            let rows: Vec<Biomarker> = shown.iter().map(|r| (*r).clone()).collect();
+            note = Some(match write_file(&p, |w| stats::write_csv(t, &rows, w)) {
+                Ok(()) => format!("Saved {}", p.display()),
+                Err(e) => format!("Export failed: {e}"),
+            });
+        }
+    });
+    note
+}
+
+fn p_text(p: Option<f64>) -> String {
+    match p {
+        None => "–".into(),
+        Some(p) if p < 1e-4 => format!("{p:.1e}"),
+        Some(p) => format!("{p:.4}"),
+    }
+}
+
+fn cells_of(t: &Table, r: &Biomarker) -> [String; 10] {
+    let s = &t.rows[r.row];
+    [
+        s.name.clone(),
+        format!("{:.2}", s.rt_s / 60.0),
+        r.hits[0].to_string(),
+        r.hits[1].to_string(),
+        format!("{:.4}", r.mean[0]),
+        format!("{:.4}", r.mean[1]),
+        format!("{:.4}", r.sd[0]),
+        format!("{:.4}", r.sd[1]),
+        format!("{:.4}", r.ratio),
+        p_text(r.p),
+    ]
+}
+
+/// The comparison table; returns the table row that was clicked.
+fn biomarker_table(
+    ui: &mut egui::Ui,
+    t: &Table,
+    shown: &[&Biomarker],
+    selected: Option<usize>,
+) -> Option<usize> {
+    const TITLES: [&str; 10] = [
+        "Substance",
+        "RT (min)",
+        "Hits 1",
+        "Hits 2",
+        "Mean 1",
+        "Mean 2",
+        "SD 1",
+        "SD 2",
+        "Ratio",
+        "p-value",
+    ];
+    let mut clicked = None;
+    TableBuilder::new(ui)
+        .id_salt("biomarker table")
+        .striped(true)
+        .sense(egui::Sense::click())
+        .column(Column::auto().at_least(160.0))
+        .columns(Column::auto().at_least(60.0), 9)
+        .header(20.0, |mut h| {
+            for title in TITLES {
+                h.col(|ui| {
+                    ui.strong(title);
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(18.0, shown.len(), |mut row| {
+                let r = shown[row.index()];
+                row.set_selected(selected == Some(r.row));
+                for (i, c) in cells_of(t, r).into_iter().enumerate() {
+                    row.col(|ui| {
+                        // Numbers right-aligned so the digits line up.
+                        let align = if i == 0 {
+                            egui::Layout::left_to_right(egui::Align::Center)
+                        } else {
+                            egui::Layout::right_to_left(egui::Align::Center)
+                        };
+                        ui.with_layout(align, |ui| {
+                            ui.add(egui::Label::new(c).selectable(false));
+                        });
+                    });
+                }
+                if row.response().clicked() {
+                    clicked = Some(r.row);
+                }
+            });
+        });
+    clicked
+}
+
 impl Statistics {
     /// `table` is the batch table as shown (normalised), with a number that changes with it.
     pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>) {
@@ -162,86 +373,12 @@ impl Statistics {
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    egui::Grid::new("group picker")
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.strong("Replicate group");
-                            ui.strong("Group 1");
-                            ui.strong("Group 2");
-                            ui.end_row();
-                            for g in all {
-                                ui.label(*g);
-                                for side in 0..2 {
-                                    let mut on = self.sides[side].iter().any(|s| s == g);
-                                    if ui.checkbox(&mut on, "").changed() {
-                                        self.sides.iter_mut().for_each(|s| s.retain(|s| s != g));
-                                        if on {
-                                            self.sides[side].push((*g).into());
-                                        }
-                                    }
-                                }
-                                ui.end_row();
-                            }
-                        });
-                    ui.vertical(|ui| {
-                        ui.label("Paste group names (one per line), then fill a side:");
-                        ui.add(egui::TextEdit::multiline(&mut self.paste).desired_rows(4));
-                        ui.horizontal(|ui| {
-                            for side in 0..2 {
-                                if ui.button(format!("Fill group {}", side + 1)).clicked() {
-                                    self.fill(side, all);
-                                }
-                            }
-                        });
-                    });
+                    group_grid(ui, &mut self.sides, all);
+                    paste_box(ui, &mut self.paste, &mut self.sides, all);
                 });
-                // The order of a side is the order of its boxes.
-                for side in 0..2 {
-                    if self.sides[side].len() > 1 {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(format!("Order of group {}:", side + 1));
-                            let mut swap = None;
-                            for (i, g) in self.sides[side].iter().enumerate() {
-                                ui.label(g);
-                                if i > 0 && ui.small_button("◀").clicked() {
-                                    swap = Some(i);
-                                }
-                            }
-                            if let Some(i) = swap {
-                                self.sides[side].swap(i - 1, i);
-                            }
-                        });
-                    }
-                }
+                order_rows(ui, &mut self.sides);
             });
-        ui.horizontal(|ui| {
-            ui.label("Samples");
-            ui.selectable_value(&mut self.samples, Samples::Independent, "independent runs")
-                .on_hover_text("Welch's t-test over all runs of each side.");
-            ui.selectable_value(&mut self.samples, Samples::GroupMeans, "group means")
-                .on_hover_text(
-                    "Welch's t-test over one mean per replicate group (old: not independent).",
-                );
-            ui.selectable_value(&mut self.samples, Samples::Paired, "paired")
-                .on_hover_text(
-                    "Paired t-test: the i-th run of group 1 with the i-th run of group 2.",
-                );
-        });
-    }
-
-    /// Puts the pasted names that are replicate groups into `side` (exact match, like the old
-    /// program), taking them out of the other side.
-    fn fill(&mut self, side: usize, all: &[&str]) {
-        let names: Vec<&str> = self
-            .paste
-            .split(['\n', '\r', '\t', ';', ','])
-            .map(str::trim)
-            .filter(|n| all.contains(n))
-            .collect();
-        for n in names {
-            self.sides.iter_mut().for_each(|s| s.retain(|s| s != n));
-            self.sides[side].push(n.into());
-        }
+        samples_picker(ui, &mut self.samples);
     }
 
     fn table_tab(&mut self, ui: &mut egui::Ui, t: &Table) {
@@ -250,22 +387,7 @@ impl Statistics {
             ui.label("Choose at least one replicate group on each side.");
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label("Show only p ≤");
-            ui.add(
-                egui::DragValue::new(&mut self.p_max)
-                    .range(0.0..=1.0)
-                    .speed(0.001)
-                    .max_decimals(4),
-            );
-            ui.checkbox(&mut self.sort_by_p, "sort by p");
-            if self.samples == Samples::Paired && cache.1.group1.len() != cache.1.group2.len() {
-                ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    "Paired runs: the sides need the same number of replicate groups.",
-                );
-            }
-        });
+        filter_row(ui, &mut self.p_max, &mut self.sort_by_p, &cache.1);
         let mut shown: Vec<&Biomarker> = cache
             .2
             .iter()
@@ -274,92 +396,14 @@ impl Statistics {
         if self.sort_by_p {
             shown.sort_by(|a, b| a.p.unwrap_or(2.0).total_cmp(&b.p.unwrap_or(2.0)));
         }
-        ui.horizontal(|ui| {
-            ui.label(format!("{} of {} substances", shown.len(), cache.2.len()));
-            if ui.button("Export CSV…").clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("CSV", &["csv"])
-                    .set_file_name("biomarkers.csv")
-                    .save_file()
-            {
-                let rows: Vec<Biomarker> = shown.iter().map(|r| (*r).clone()).collect();
-                self.note = match write_file(&p, |w| stats::write_csv(t, &rows, w)) {
-                    Ok(()) => format!("Saved {}", p.display()),
-                    Err(e) => format!("Export failed: {e}"),
-                };
-            }
-        });
+        if let Some(note) = export_row(ui, t, &shown, cache.2.len()) {
+            self.note = note;
+        }
         ui.label(match self.selected.and_then(|r| t.rows.get(r)) {
             Some(s) => format!("Selected: {} (see Box plot)", s.name),
             None => "Click a substance to see its box plot.".into(),
         });
-        let mut clicked = None;
-        TableBuilder::new(ui)
-            .id_salt("biomarker table")
-            .striped(true)
-            .sense(egui::Sense::click())
-            .column(Column::auto().at_least(160.0))
-            .columns(Column::auto().at_least(60.0), 9)
-            .header(20.0, |mut h| {
-                for title in [
-                    "Substance",
-                    "RT (min)",
-                    "Hits 1",
-                    "Hits 2",
-                    "Mean 1",
-                    "Mean 2",
-                    "SD 1",
-                    "SD 2",
-                    "Ratio",
-                    "p-value",
-                ] {
-                    h.col(|ui| {
-                        ui.strong(title);
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(18.0, shown.len(), |mut row| {
-                    let r = shown[row.index()];
-                    let s = &t.rows[r.row];
-                    row.set_selected(self.selected == Some(r.row));
-                    let cells = [
-                        s.name.clone(),
-                        format!("{:.2}", s.rt_s / 60.0),
-                        r.hits[0].to_string(),
-                        r.hits[1].to_string(),
-                        format!("{:.4}", r.mean[0]),
-                        format!("{:.4}", r.mean[1]),
-                        format!("{:.4}", r.sd[0]),
-                        format!("{:.4}", r.sd[1]),
-                        format!("{:.4}", r.ratio),
-                        r.p.map_or("–".into(), |p| {
-                            if p < 1e-4 {
-                                format!("{p:.1e}")
-                            } else {
-                                format!("{p:.4}")
-                            }
-                        }),
-                    ];
-                    for (i, c) in cells.into_iter().enumerate() {
-                        row.col(|ui| {
-                            // Numbers right-aligned so the digits line up.
-                            let layout = if i == 0 {
-                                egui::Layout::left_to_right(egui::Align::Center)
-                            } else {
-                                egui::Layout::right_to_left(egui::Align::Center)
-                            };
-                            ui.with_layout(layout, |ui| {
-                                ui.add(egui::Label::new(c).selectable(false));
-                            });
-                        });
-                    }
-                    if row.response().clicked() {
-                        clicked = Some(r.row);
-                    }
-                });
-            });
-        if let Some(c) = clicked {
+        if let Some(c) = biomarker_table(ui, t, &shown, self.selected) {
             self.selected = Some(c);
         }
     }
