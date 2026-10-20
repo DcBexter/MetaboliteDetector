@@ -401,7 +401,7 @@ impl App {
     }
 
     /// Ends the running flow unfinished; a detection takes back the ".cmp" saving it switched on.
-    fn cancel_flow(&mut self) {
+    pub fn cancel_flow(&mut self) {
         if self.guided.flow.take().is_some() {
             self.restore_cmp();
         }
