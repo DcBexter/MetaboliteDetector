@@ -487,7 +487,8 @@ Sonar scan, so Linux builds once for both; Windows only runs the tests, since no
 `crates/`, the Cargo files, the toolchain, `sonar-project.properties` or the workflow skip the build and only run the Sonar scan;
 `main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
 result for `main`. It does not fetch the example data, so those tests skip themselves;
-run them locally. Only `main` saves the cargo cache; PRs restore it.
+run them locally. Only `main` saves the cargo cache; PRs restore it. The cache key
+follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall.
 
 ## Compatibility goals
 
