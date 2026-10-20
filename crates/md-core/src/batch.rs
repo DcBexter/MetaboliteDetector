@@ -266,7 +266,7 @@ pub struct Row {
 }
 
 impl Table {
-    /// RFC 4180 CSV with `.` decimals and `,` separators, readable by R (`read.csv`) and Excel:
+    /// RFC 4180 CSV with `.` decimals and `,` separators, readable by R (`read.csv`); in Excel use Data → From Text/CSV (UTF-8, comma):
     /// `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are space-separated; a value
     /// that was not found is an empty cell, which R reads as `NA`.
     pub fn write_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
@@ -293,7 +293,7 @@ impl Table {
                 );
             writeln!(w, "{}", cells.collect::<Vec<_>>().join(","))?;
         }
-        Ok(())
+        w.flush()
     }
 }
 
@@ -425,6 +425,25 @@ mod tests {
 \"Glucose \"\"1\"\"\",12.5,73 147,1500,
 "
         );
+    }
+
+    #[test]
+    fn csv_reports_a_failing_flush() {
+        struct Full;
+        impl std::io::Write for Full {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("disk full"))
+            }
+        }
+        let t = Table {
+            runs: vec![],
+            groups: vec![],
+            rows: vec![],
+        };
+        assert!(t.write_csv(Full).is_err());
     }
 
     #[test]
