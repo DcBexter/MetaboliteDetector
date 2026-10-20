@@ -271,7 +271,7 @@ fn screenshots() {
     let found: Vec<_> = (paths.iter().enumerate())
         .map(|(i, p)| md_core::batch::RunResult {
             path: p.clone(),
-            found: (0..lib.compounds.len().min(12))
+            found: (0..lib.compounds.len().min(16))
                 .map(|k| md_core::batch::Found {
                     compound: k,
                     score: 0.9,
@@ -305,6 +305,17 @@ fn screenshots() {
     h.state_mut().statistics.compare("0", "2");
     h.run_steps(3);
     shots.save(&mut h, "17-statistics");
+    h.hover_at(egui::pos2(800.0, 500.0));
+    h.run_steps(2);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-600.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(5);
+    shots.save(&mut h, "17b-statistics-scrolled");
 }
 
 /// A quantity that differs by substance, a little by run and, for most substances, by the run's
