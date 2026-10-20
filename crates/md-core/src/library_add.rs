@@ -52,7 +52,7 @@ pub fn component_ions(
     deconv: &DeconvSettings,
     comp: &Component,
 ) -> Result<Option<Vec<IonPeak>>, TooLarge> {
-    let traces = IonTraces::new(data)?;
+    let mut traces = IonTraces::new(data)?;
     let found = traces.detect_peaks(peaks);
     let same = |k: &&Component| {
         (k.first_scan, k.apex_scan, k.last_scan)
@@ -439,8 +439,9 @@ mod tests {
     fn a_found_component_is_found_again_from_a_run() {
         let (run, _) = crate::deconv::tests::two_substances();
         let (ps, ds) = (PeakSettings::default(), DeconvSettings::default());
-        let traces = IonTraces::new(&run).unwrap();
-        let comps = deconvolute(&traces, &traces.detect_peaks(&ps), &ds);
+        let mut traces = IonTraces::new(&run).unwrap();
+        let found = traces.detect_peaks(&ps);
+        let comps = deconvolute(&traces, &found, &ds);
         assert_eq!(comps.len(), 2);
         let ions = component_ions(&run, &ps, &ds, &comps[1])
             .unwrap()
