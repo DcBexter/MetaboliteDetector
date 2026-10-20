@@ -62,6 +62,8 @@ struct App {
     isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
+    /// Search settings whose library preparation crashed; not retried until they change.
+    library_failed: Option<md_core::search::SearchSettings>,
     batch: batch::Batch,
 }
 
@@ -83,6 +85,7 @@ impl Default for App {
             isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
+            library_failed: None,
             batch: batch::Batch::default(),
         }
     }
@@ -122,7 +125,11 @@ fn spawn<T: Send + 'static>(
     let (tx, rx) = mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        tx.send(job()).ok();
+        // Dropping `tx` before the repaint lets the UI see a panic as `Disconnected` right away.
+        if let Ok(v) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
+            tx.send(v).ok();
+        }
+        drop(tx);
         ctx.request_repaint();
     });
     rx

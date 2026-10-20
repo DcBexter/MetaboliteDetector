@@ -94,11 +94,15 @@ impl App {
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
-            && let Some(result) = poll_job(rx, "library search").map(|r| r.and_then(|x| x))
+            && let Some(result) = poll_job(rx, "library search")
         {
             match result {
-                Ok(lib) => self.library = Some(lib),
-                Err(e) => self.error = Some(e),
+                Ok(Ok(lib)) => self.library = Some(lib),
+                Ok(Err(e)) => self.error = Some(e),
+                Err(e) => {
+                    self.error = Some(e);
+                    self.library_failed = Some(self.settings.applied.search());
+                }
             }
             self.library_job = None;
         }
@@ -108,7 +112,7 @@ impl App {
         // New search settings: prepare the library again, then every run is searched again.
         let wanted = self.settings.applied.search();
         if lib.settings != wanted {
-            if self.library_job.is_none() {
+            if self.library_job.is_none() && self.library_failed.as_ref() != Some(&wanted) {
                 let lib = lib.clone();
                 self.library_job = Some(spawn(ctx, move || {
                     Ok(Arc::new(Library {
