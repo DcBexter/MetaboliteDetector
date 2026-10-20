@@ -1,13 +1,32 @@
-//! RI calibration window: alkanes found in one run, or a `.calib` file; applies to every open run,
-//! optionally shifted per run onto a reference substance from the library (RT shift correction).
+//! RI calibration window: alkanes or a calibration mix from the library found in one run, or a `.calib`
+//! file, in an editable RT → RI table. The calibration applies to every open run unless a run has its own;
+//! it is optionally shifted per run onto a reference substance from the library (RT shift correction).
+//! "Retention time only" is the old emergency exit without an alkane mix.
 
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
 use eframe::egui;
-use md_core::ri::{RiCalibration, marker_peaks, series_points};
+use md_core::deconv::Component;
+use md_core::library::LibraryCompound;
+use md_core::ri::{RiCalibration, marker_peaks, match_mix, series_points};
+use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
 use crate::identify::Library;
 use crate::{Run, spawn};
+
+/// One line of the calibration table; lines that are not `used` (a mix substance not found, or switched
+/// off by hand) stay out of the calibration.
+#[derive(Debug, Clone, PartialEq)]
+struct Row {
+    name: String,
+    ri: f64,
+    rt_min: f64,
+    used: bool,
+}
+
+type RowsJob = (String, mpsc::Receiver<Result<Vec<Row>, String>>);
 
 pub struct Calibration {
     /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
@@ -15,6 +34,18 @@ pub struct Calibration {
     /// Where `cal` came from, shown in the window.
     source: String,
     pub open: bool,
+    /// The table being edited and the state `cal` was last built from; an edit that is finished
+    /// (no field dragged or focused) builds a new `cal`.
+    rows: Vec<Row>,
+    applied: Vec<Row>,
+    /// Calibrations of single runs (by file), which win over `cal`.
+    own: HashMap<PathBuf, Arc<RiCalibration>>,
+    /// RT-only alignment: `cal` is the identity and the library is searched by its retention times.
+    pub rt_only: bool,
+    /// Calibration mix: names of library compounds with RI, and the text filtering the picker.
+    mix: BTreeSet<String>,
+    mix_filter: String,
+    mix_job: Option<RowsJob>,
     mz: f32,
     /// Alkane carbon numbers: C`first` … C`last` get RI 100 · n.
     first: u32,
@@ -40,6 +71,13 @@ impl Default for Calibration {
             cal: None,
             source: String::new(),
             open: false,
+            rows: Vec::new(),
+            applied: Vec::new(),
+            own: HashMap::new(),
+            rt_only: false,
+            mix: BTreeSet::new(),
+            mix_filter: String::new(),
+            mix_job: None,
             // Alkane fragment C4H9+.
             mz: 57.0,
             first: 10,
@@ -56,14 +94,21 @@ impl Default for Calibration {
 }
 
 impl Calibration {
-    /// The run's calibration: shifted onto the reference when it was found there, else the global one.
+    /// The calibration of the run before any shift: its own, else the global one.
+    pub fn base(&self, run: &Run) -> Option<&Arc<RiCalibration>> {
+        self.own.get(&run.path).or(self.cal.as_ref())
+    }
+
+    /// The run's calibration: shifted onto the reference when it was found there, else `base`.
     /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
+    /// None in RT-only mode, where "RI" is a time.
     pub fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
-        let ptr = |c: &Option<Arc<RiCalibration>>| c.as_ref().map(Arc::as_ptr);
+        let ptr = |c: Option<&Arc<RiCalibration>>| c.map(Arc::as_ptr);
+        let base = self.base(run).filter(|_| !self.rt_only);
         (run.ident.as_ref())
-            .filter(|i| run.ident_job.is_none() && ptr(&i.0.1) == ptr(&self.cal))
+            .filter(|i| run.ident_job.is_none() && ptr(i.0.1.as_ref()) == ptr(base))
             .and_then(|i| i.2.as_ref())
-            .or(self.cal.as_deref())
+            .or(base.map(|c| &**c))
     }
 
     /// ", RI …" for the scan, or nothing without a calibration.
@@ -73,9 +118,49 @@ impl Calibration {
             .unwrap_or_default()
     }
 
-    /// Also drops a running alkane search, so its late result cannot replace this calibration.
+    /// What a library compound is anchored to: its RI, or in RT-only mode its time in s. Negative: none.
+    pub fn anchor(&self, c: &LibraryCompound) -> f64 {
+        anchor(self.rt_only, c)
+    }
+
+    /// Also drops a running search, so its late result cannot replace this calibration.
     fn set(&mut self, cal: RiCalibration, source: String) {
-        (self.cal, self.source, self.error, self.job) = (Some(Arc::new(cal)), source, None, None);
+        self.rows = (cal.points().iter())
+            .map(|(t, ri)| Row {
+                name: String::new(),
+                ri: *ri,
+                rt_min: t / 60.0,
+                used: true,
+            })
+            .collect();
+        self.applied = self.rows.clone();
+        (self.cal, self.source, self.error) = (Some(Arc::new(cal)), source, None);
+        (self.job, self.mix_job) = (None, None);
+    }
+
+    /// Takes the table of a mix search; `cal` follows once the table is valid (see `apply_edits`).
+    fn set_rows(&mut self, rows: Vec<Row>, source: String) {
+        (self.rows, self.applied, self.source, self.error) = (rows, Vec::new(), source, None);
+        (self.job, self.mix_job) = (None, None);
+    }
+
+    /// Builds `cal` from an edited table once no field is being dragged or typed in, so that a change
+    /// takes effect at once but not on every frame of a drag. An invalid table keeps the old `cal`.
+    fn apply_edits(&mut self) {
+        if self.rows == self.applied {
+            return;
+        }
+        let used = (self.rows.iter().filter(|r| r.used)).map(|r| (r.rt_min * 60.0, r.ri));
+        match RiCalibration::new(used) {
+            Ok(cal) => (self.cal, self.error) = (Some(Arc::new(cal)), None),
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        self.applied = self.rows.clone();
+    }
+
+    fn clear(&mut self) {
+        (self.cal, self.job, self.mix_job) = (None, None, None);
+        (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
     }
 
     pub fn window(
@@ -94,17 +179,53 @@ impl Calibration {
             }
             self.job = None;
         }
+        if let Some((source, rx)) = &self.mix_job
+            && let Some(result) = crate::poll_job(rx, "calibration mix").map(|r| r.and_then(|x| x))
+        {
+            match result {
+                Ok(rows) => self.set_rows(rows, source.clone()),
+                Err(e) => self.error = Some(e),
+            }
+            self.mix_job = None;
+        }
         let mut open = self.open;
         egui::Window::new("RI calibration")
             .open(&mut open)
             .show(ctx, |ui| {
                 self.contents(ui, runs.get(active));
+                self.mix_contents(ui, runs.get(active), lib);
+                self.table(ui);
+                self.run_contents(ui, runs);
                 self.shift_contents(ui, runs, lib);
             });
         self.open = open;
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>) {
+        let was = self.rt_only;
+        ui.checkbox(
+            &mut self.rt_only,
+            "Use retention time for alignment (not recommended)",
+        )
+        .on_hover_text(
+            "Only if you have no n-alkane mix. Alignment and identification by retention time \
+             are not reproducible and the results cannot be compared between instruments and labs.",
+        );
+        if self.rt_only != was {
+            // The identity maps time to "RI"; the library is searched by its retention times.
+            match self.rt_only {
+                true => self.set(RiCalibration::identity(), "retention time only".into()),
+                false => self.clear(),
+            }
+        }
+        if self.rt_only {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "Retention times are compared directly. Library entries need a retention time; \
+                 components get no retention index.",
+            );
+            return;
+        }
         egui::Grid::new("alkane settings").show(ui, |ui| {
             ui.label("Marker ion m/z");
             ui.add(egui::DragValue::new(&mut self.mz).range(1.0..=2000.0));
@@ -155,47 +276,178 @@ impl Calibration {
                     self.error = Some(format!("{}: {e}", path.display()));
                 }
                 if ui.button("Clear").clicked() {
-                    (self.cal, self.job) = (None, None);
+                    self.clear();
                 }
             }
         });
+    }
+
+    /// Calibration mix (old wizard page "RI Calibration Mix"): library compounds with RI that are found
+    /// in a run by their spectra; their times in that run and their library RIs make the table.
+    fn mix_contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>, lib: Option<&Library>) {
+        let Some(lib) = lib.filter(|_| !self.rt_only) else {
+            return;
+        };
+        ui.collapsing("Calibration mix from the library", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Add");
+                ui.text_edit_singleline(&mut self.mix_filter);
+            });
+            let filter = self.mix_filter.to_lowercase();
+            if !filter.is_empty() {
+                let found: Vec<_> = (lib.compounds.iter())
+                    .filter(|c| c.spectrum.ri >= 0.0 && !self.mix.contains(&c.name))
+                    .filter(|c| c.name.to_lowercase().contains(&filter))
+                    .take(8)
+                    .collect();
+                for c in found {
+                    if ui
+                        .small_button(format!("+ {} (RI {:.1})", c.name, c.spectrum.ri))
+                        .clicked()
+                    {
+                        self.mix.insert(c.name.clone());
+                    }
+                }
+            }
+            let mut remove = None;
+            for name in &self.mix {
+                if ui.small_button(format!("− {name}")).clicked() {
+                    remove = Some(name.clone());
+                }
+            }
+            if let Some(name) = remove {
+                self.mix.remove(&name);
+            }
+            let Some(run) = run else {
+                return;
+            };
+            let button = egui::Button::new(format!("Find the mix in {}", run.name));
+            if ui
+                .add_enabled(!self.mix.is_empty() && self.mix_job.is_none(), button)
+                .on_hover_text(
+                    "Going through the mix by RI, each substance takes the next component in time \
+                     order that the library search finds for it",
+                )
+                .clicked()
+            {
+                let mix = (lib.compounds.iter())
+                    .filter(|c| c.spectrum.ri >= 0.0 && self.mix.contains(&c.name))
+                    .cloned()
+                    .collect();
+                let (comps, data, s) = (
+                    run.components.clone(),
+                    run.data.clone(),
+                    lib.settings.clone(),
+                );
+                let source = format!("{}, {} mix substances", run.name, self.mix.len());
+                let job = spawn(ui.ctx(), move || {
+                    Ok(find_mix(mix, &comps, &data.scan_times_s, &s))
+                });
+                self.mix_job = Some((source, job));
+            }
+        });
+    }
+
+    /// The editable table: a change takes effect when the field is left or the drag ends.
+    fn table(&mut self, ui: &mut egui::Ui) {
         if let Some(e) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
-        let Some(cal) = &self.cal else {
+        if self.rt_only {
+            return;
+        }
+        if self.rows.is_empty() {
             ui.label(
                 "Not calibrated: components have no RI, the library search uses the spectrum only.",
             );
             return;
-        };
+        }
         ui.label(format!(
-            "{} points from {}",
-            cal.points().len(),
+            "{} of {} points from {}",
+            self.cal.as_ref().map_or(0, |c| c.points().len()),
+            self.rows.len(),
             self.source
         ));
+        let mut busy = false;
         egui::ScrollArea::vertical()
             .max_height(300.0)
             .show(ui, |ui| {
                 egui::Grid::new("calibration points")
                     .striped(true)
                     .show(ui, |ui| {
+                        ui.strong("Use");
+                        ui.strong("Substance");
                         ui.strong("RT (min)");
                         ui.strong("RI");
                         ui.end_row();
-                        for (t, ri) in cal.points() {
-                            ui.label(format!("{:.3}", t / 60.0));
-                            ui.label(format!("{ri:.1}"));
+                        for r in &mut self.rows {
+                            ui.checkbox(&mut r.used, "");
+                            // A mix substance that was not found has no time yet: red until it gets one.
+                            let name = egui::RichText::new(&r.name);
+                            ui.label(match r.used || r.rt_min > 0.0 {
+                                true => name,
+                                false => name.color(ui.visuals().error_fg_color),
+                            });
+                            let t = egui::DragValue::new(&mut r.rt_min)
+                                .speed(0.001)
+                                .range(0.0..=f64::MAX)
+                                .fixed_decimals(3);
+                            let t = ui.add(t);
+                            let ri = ui.add(egui::DragValue::new(&mut r.ri).fixed_decimals(1));
+                            busy |= [t, ri].iter().any(|x| x.dragged() || x.has_focus());
                             ui.end_row();
                         }
                     });
             });
+        if !busy {
+            self.apply_edits();
+        }
     }
-}
 
-impl Calibration {
+    /// Calibration per run (old "Calibration Setter"): which runs use their own, and its `.calib`.
+    fn run_contents(&mut self, ui: &mut egui::Ui, runs: &[Run]) {
+        if self.rt_only || runs.is_empty() || (self.cal.is_none() && self.own.is_empty()) {
+            return;
+        }
+        ui.separator();
+        ui.strong("Calibration per run");
+        egui::Grid::new("run calibrations")
+            .striped(true)
+            .show(ui, |ui| {
+                for run in runs {
+                    ui.label(&run.name);
+                    let own = self.own.get(&run.path).cloned();
+                    ui.label(match &own {
+                        Some(c) => format!("own, {} points", c.points().len()),
+                        None => "table above".into(),
+                    });
+                    ui.horizontal(|ui| {
+                        if let Some(cal) = &self.cal
+                            && ui.small_button("Use table").clicked()
+                        {
+                            self.own.insert(run.path.clone(), cal.clone());
+                        }
+                        if own.is_some() && ui.small_button("Reset").clicked() {
+                            self.own.remove(&run.path);
+                        }
+                        if let Some(cal) = own.as_ref().or(self.cal.as_ref())
+                            && ui.small_button("Save .calib…").clicked()
+                            && let Some(path) = calib_dialog()
+                                .set_file_name(format!("{}.calib", run.name))
+                                .save_file()
+                            && let Err(e) = std::fs::write(&path, cal.to_calib())
+                        {
+                            self.error = Some(format!("{}: {e}", path.display()));
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+    }
+
     /// RT shift correction (§6.5): reference choice and the shift found in each run.
     fn shift_contents(&mut self, ui: &mut egui::Ui, runs: &[Run], lib: Option<&Library>) {
-        if self.cal.is_none() {
+        if self.cal.is_none() && self.own.is_empty() {
             return;
         }
         ui.separator();
@@ -203,6 +455,7 @@ impl Calibration {
             ui.label("Open a library to correct RT shifts with a reference substance.");
             return;
         };
+        let rt_only = self.rt_only;
         ui.horizontal(|ui| {
             ui.label("Reference substance");
             let shown = self.reference.as_deref().unwrap_or("None");
@@ -210,9 +463,9 @@ impl Calibration {
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.reference, None, "None");
-                    // Only compounds with a library RI can anchor the shift.
-                    for c in lib.compounds.iter().filter(|c| c.spectrum.ri >= 0.0) {
-                        let label = format!("{} (RI {:.1})", c.name, c.spectrum.ri);
+                    // Only compounds with a library RI (a time in RT-only mode) can anchor the shift.
+                    for c in lib.compounds.iter().filter(|c| anchor(rt_only, c) >= 0.0) {
+                        let label = format!("{} ({:.1})", c.name, anchor(rt_only, c));
                         ui.selectable_value(&mut self.reference, Some(c.name.clone()), label);
                     }
                 });
@@ -247,6 +500,92 @@ impl Calibration {
     }
 }
 
+/// Mix substances (sorted by RI) found in a run: the library search with spectra only, then the old
+/// assignment in time order (`match_mix`). Not found: unused row.
+fn find_mix(
+    mut mix: Vec<LibraryCompound>,
+    comps: &[Component],
+    scan_times_s: &[f64],
+    s: &SearchSettings,
+) -> Vec<Row> {
+    mix.sort_by(|a, b| a.spectrum.ri.total_cmp(&b.spectrum.ri));
+    let id = map_compounds_to_library(comps, None, &PreparedLibrary::new(&mix, s), s);
+    let rts: Vec<f64> = (comps.iter())
+        .map(|c| scan_times_s[c.apex_scan as usize])
+        .collect();
+    let ris: Vec<f64> = mix.iter().map(|c| c.spectrum.ri).collect();
+    let score = |c: usize, m: usize| {
+        (id.hits[c].iter())
+            .find(|h| h.compound == m)
+            .map_or(0.0, |h| h.overall)
+    };
+    let found = match_mix(&ris, &rts, 0.0, score);
+    mix.iter()
+        .zip(found)
+        .map(|(c, k)| Row {
+            name: c.name.clone(),
+            ri: c.spectrum.ri,
+            rt_min: k.map_or(0.0, |k| rts[k] / 60.0),
+            used: k.is_some(),
+        })
+        .collect()
+}
+
+fn anchor(rt_only: bool, c: &LibraryCompound) -> f64 {
+    match rt_only {
+        true => c.spectrum.rt_ms / 1000.0,
+        false => c.spectrum.ri,
+    }
+}
+
 fn calib_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("RI calibration", &["calib"])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn substance(name: &str, ri: f64, mass: f32) -> LibraryCompound {
+        let mut c = LibraryCompound::new(name);
+        c.spectrum.ri = ri;
+        (c.spectrum.masses, c.spectrum.values) = (vec![mass], vec![1000]);
+        c
+    }
+
+    fn component(apex: u32, mass: u32) -> Component {
+        Component {
+            first_scan: apex,
+            apex_scan: apex,
+            last_scan: apex,
+            model: Vec::new(),
+            spectrum: vec![(mass, 1000)],
+            peaks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mix_rows_follow_ri_and_leave_missing_substances_unused() {
+        // C12 (RI 1200) and C10 (RI 1000) are in the run, C11 (RI 1100) is not; the library is unordered.
+        let mix = vec![
+            substance("C12", 1200.0, 60.0),
+            substance("C11", 1100.0, 50.0),
+            substance("C10", 1000.0, 40.0),
+        ];
+        let comps = [component(1, 40), component(3, 60)];
+        let times = [0.0, 60.0, 90.0, 120.0];
+        let rows = find_mix(mix, &comps, &times, &SearchSettings::default());
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|r| (&*r.name, r.ri, r.rt_min, r.used))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("C10", 1000.0, 1.0, true),
+                ("C11", 1100.0, 0.0, false),
+                ("C12", 1200.0, 2.0, true)
+            ]
+        );
+    }
 }

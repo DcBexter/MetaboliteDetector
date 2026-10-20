@@ -71,24 +71,26 @@ pub struct PreparedLibrary {
     norms: Vec<f64>,
     /// RI per entry; `None` where the library has none (old value -1).
     ris: Vec<Option<f64>>,
+    rt_only: bool,
 }
 
 impl PreparedLibrary {
     pub fn new(library: &[LibraryCompound], s: &SearchSettings) -> Self {
-        Self::with_ri(library, s, |c| c.spectrum.ri)
+        Self::with_ri(library, s, |c| c.spectrum.ri, false)
     }
 
     /// RT-only alignment (old "Use Retention time for chromatogram alignment", §5.6): every entry's
     /// retention time in s takes the place of its RI. Use with [`RiCalibration::identity`], so the
     /// components' "RI" is their retention time in s too. Not reproducible between instruments.
     pub fn new_rt_only(library: &[LibraryCompound], s: &SearchSettings) -> Self {
-        Self::with_ri(library, s, |c| c.spectrum.rt_ms / 1000.0)
+        Self::with_ri(library, s, |c| c.spectrum.rt_ms / 1000.0, true)
     }
 
     fn with_ri(
         library: &[LibraryCompound],
         s: &SearchSettings,
         ri: fn(&LibraryCompound) -> f64,
+        rt_only: bool,
     ) -> Self {
         let mut lib = Self {
             offsets: vec![0],
@@ -96,6 +98,7 @@ impl PreparedLibrary {
             values: Vec::new(),
             norms: Vec::new(),
             ris: Vec::new(),
+            rt_only,
         };
         let mut peaks = Vec::new();
         for c in library {
@@ -127,6 +130,11 @@ impl PreparedLibrary {
             lib.ris.push(known_ri(ri(c)));
         }
         lib
+    }
+
+    /// Built with [`Self::new_rt_only`].
+    pub fn is_rt_only(&self) -> bool {
+        self.rt_only
     }
 
     pub fn len(&self) -> usize {
