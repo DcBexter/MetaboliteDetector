@@ -1,4 +1,17 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "enabled": false
+  "extends": ["config:recommended"],
+  "dependencyDashboard": false,
+  "minimumReleaseAge": "3 days",
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "rebaseWhen": "conflicted",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "git-submodules": {
+    "enabled": true
+  }
 }
