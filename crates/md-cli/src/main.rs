@@ -48,6 +48,8 @@ Options:
       --min-sn F              an ion counts only with at least this signal-to-noise ratio
       --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
       --ion-integrals         also write the integral of every quant ion to FILE.ions.csv (needs -o)
+      --excel-de              write the CSV files for a spreadsheet with German locale: `;` and decimal
+                              commas (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
       --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
@@ -74,6 +76,7 @@ struct Args {
     min_sn: Option<f32>,
     max_discrepancy: Option<f32>,
     ion_integrals: bool,
+    excel_de: bool,
     untargeted: bool,
     rescan: bool,
     save_cmp: Option<PathBuf>,
@@ -123,6 +126,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         min_sn: None,
         max_discrepancy: None,
         ion_integrals: false,
+        excel_de: false,
         untargeted: false,
         rescan: false,
         save_cmp: None,
@@ -172,6 +176,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--min-sn" => a.min_sn = Some(num(0.0, 1e6)? as f32),
             "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
             "--ion-integrals" => a.ion_integrals = true,
+            "--excel-de" => a.excel_de = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
             "--save-cmp" => a.save_cmp = Some(value()?.into()),
@@ -191,6 +196,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
     }
     if a.ion_integrals && a.output.is_none() {
         return Err("--ion-integrals needs -o".into());
+    }
+    if a.excel_de && a.output.is_none() {
+        return Err("--excel-de needs -o".into());
     }
     Ok(Some(a))
 }
@@ -317,11 +325,15 @@ fn run(a: Args) -> Result<bool, String> {
     }
     // Groups, settings and ion integrals go next to a CSV file; standard output has no room for more tables.
     if let Some(p) = &a.output {
-        table.write_groups_file(p).map_err(io)?;
-        table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
+        // Every file written, with the number of leading name columns `--excel-de` leaves as they are.
+        let mut written = vec![(p.clone(), 3)];
+        written.extend(table.write_groups_file(p).map_err(io)?.map(|f| (f, 2)));
+        let stats = table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
+        written.extend(stats.map(|f| (f, 3)));
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
         ts.write_csv(&how, f).map_err(io)?;
+        written.push((settings_path(p), 2));
         if !a.ion_integrals {
             // An older ions file would not match this results file.
             std::fs::remove_file(ions_path(p)).ok();
@@ -329,6 +341,13 @@ fn run(a: Args) -> Result<bool, String> {
             let by_column: Vec<&RunResult> = table.sources.iter().map(|i| &runs[*i]).collect();
             let f = create(&ions_path(p)).map_err(io)?;
             table.write_ions_csv(&by_column, &ts, f).map_err(io)?;
+            written.push((ions_path(p), 2));
+        }
+        if a.excel_de {
+            // The files are written in the standard format first; the German variant is a rewrite.
+            for (f, text_cols) in &written {
+                md_core::csv::excel_de_file(f, *text_cols).map_err(io)?;
+            }
         }
     }
     eprintln!(
@@ -470,6 +489,25 @@ mod tests {
         // A later export without the flag removes the ions file, which no longer matches.
         assert!(run(args(&line).unwrap().unwrap()).unwrap());
         assert!(!dir.join("out.ions.csv").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn excel_de_rewrites_the_whole_export_and_the_default_stays() {
+        let dir = std::env::temp_dir().join(format!("md-cli-de-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&format!("--excel-de {line}")).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(
+            csv.starts_with("\u{feff}Substance;RT_s;Quant_ions;ctrl_1.cdf\n"),
+            "{csv}"
+        );
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run;Group\nctrl_1.cdf;ctrl\n");
+        assert!(args("-l lib.msl --excel-de a.cdf").is_err());
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(csv.starts_with("\u{feff}Substance,RT_s,"), "{csv}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

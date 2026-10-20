@@ -145,6 +145,8 @@ struct View {
     ion_rows: bool,
     /// Also write the integral of every quant ion when exporting.
     export_ions: bool,
+    /// Write the export for a spreadsheet with German locale (`;`, decimal comma).
+    excel_de: bool,
     /// Replicate group of the blank runs (the old program's fixed name).
     blanks: String,
 }
@@ -156,6 +158,7 @@ impl Default for View {
             totals: false,
             ion_rows: false,
             export_ions: false,
+            excel_de: false,
             blanks: "BLANK".into(),
         }
     }
@@ -776,6 +779,7 @@ impl Batch {
                             ]
                             .concat(),
                             ions: self.view.export_ions,
+                            excel_de: self.view.excel_de,
                             blank: &self.view.blanks,
                             group_stats: !self.norm.z_score,
                         };
@@ -884,6 +888,8 @@ struct Export<'a> {
     extra: Vec<(&'static str, String)>,
     /// Also write the integral of every quant ion.
     ions: bool,
+    /// Convert the files for a spreadsheet with German locale (`md_core::csv::to_excel_de`).
+    excel_de: bool,
     /// The replicate group the group statistics test against (if the table has it).
     blank: &'a str,
     /// Write the group statistics; not for z-scores, which the view does not show them for either.
@@ -956,11 +962,20 @@ fn remove_stale(path: &Path) -> std::io::Result<Option<PathBuf>> {
     }
 }
 
+/// Files are written in the standard format first; the German spreadsheet variant is a rewrite.
+fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
+    if ex.excel_de {
+        md_core::csv::excel_de_file(path, text_cols)?;
+    }
+    Ok(())
+}
+
 /// Writes the results CSV `p` and the files next to it; the note names what was saved and what
 /// could not be.
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
+    german(p, 3, ex)?;
     let sp = settings_path(p);
     let group_stats = if ex.group_stats {
         t.write_group_stats_file(p, Some(ex.blank))
@@ -992,6 +1007,11 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let mut saved = vec![p.display().to_string()];
     let mut failed = Vec::new();
     for (what, r) in results {
+        let r = r.map(|r| {
+            r.and_then(|f| {
+                german(&f, if what == "group statistics" { 3 } else { 2 }, ex).map(|()| f)
+            })
+        });
         match r {
             Some(Ok(path)) => saved.push(path.display().to_string()),
             Some(Err(e)) => failed.push(format!("{what}: {e}")),
@@ -1111,6 +1131,9 @@ fn view_controls(
         .on_disabled_hover_text("Only in the Values view.");
         ui.checkbox(&mut v.export_ions, "Export quant ions")
             .on_hover_text("Also writes results.ions.csv with the raw integral of every quant ion.");
+        ui.checkbox(&mut v.excel_de, "Excel (German)").on_hover_text(
+            "Exports with semicolons and decimal commas, for a spreadsheet with German locale. Off: commas and decimal points; open those with locale English (USA) in the import dialog.",
+        );
         if v.mode == Mode::Groups {
             let blank = ui.label("Blank group");
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
@@ -1922,6 +1945,7 @@ mod tests {
             settings: &settings,
             extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
+            excel_de: false,
             blank: "BLANK",
             group_stats: true,
         };
@@ -1940,6 +1964,23 @@ mod tests {
             ions,
             "\u{feff}Substance,Quant_ion,a.cdf\nGlucose,73,500\nGlucose,147,100\n"
         );
+
+        // The German spreadsheet variant converts every file of the export.
+        ex.excel_de = true;
+        save_results(&csv, &t, &ex).unwrap();
+        let ions = std::fs::read_to_string(dir.join("results.ions.csv")).unwrap();
+        assert_eq!(
+            ions,
+            "\u{feff}Substance;Quant_ion;a.cdf\nGlucose;73;500\nGlucose;147;100\n"
+        );
+        let main = std::fs::read_to_string(&csv).unwrap();
+        assert!(
+            main.starts_with("\u{feff}Substance;RT_s;Quant_ions;"),
+            "{main}"
+        );
+        let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
+        assert!(text.contains("\nNORMALISATION;none\n"), "{text}");
+        ex.excel_de = false;
 
         // Group statistics only for a table that has groups, and not for z-scores (the view has none).
         let grouped = Table {
