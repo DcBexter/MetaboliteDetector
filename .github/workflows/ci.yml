@@ -46,14 +46,18 @@ jobs:
               crates Cargo.toml Cargo.lock rust-toolchain.toml sonar-project.properties .github/workflows/ci.yml; then
             echo rust=true >> "$GITHUB_OUTPUT"
           fi
+      # rust-cache hashes every installed toolchain into its key. Keep only the pinned one, so a runner image
+      # with another preinstalled stable still matches main's cache.
+      - if: steps.changes.outputs.rust
+        shell: bash
+        run: |
+          rustup toolchain install
+          active=$(rustup show active-toolchain | cut -d' ' -f1)
+          rustup toolchain list --quiet | grep -vxF "$active" | xargs -r -n1 rustup toolchain uninstall
       # Caches ~/.cargo and target. Only main saves, so PR caches cannot fill the 10 GB repo limit.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.rust
         with:
-          # Key on the pinned toolchain, not on every toolchain the runner image happens to preinstall:
-          # otherwise a PR on another image version misses the main cache and builds cold.
-          add-rust-environment-hash-key: false
-          key: ${{ hashFiles('rust-toolchain.toml') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
         if: steps.changes.outputs.rust && runner.os == 'Linux'
