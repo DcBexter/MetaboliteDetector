@@ -26,7 +26,7 @@ pub struct Settings {
     note: Option<Result<String, String>>,
 }
 
-type Analyzed = Result<Vec<Component>, String>;
+type Analyzed = Result<(Vec<Component>, Vec<u32>), String>;
 
 /// Re-analysis state of one run.
 #[derive(Default)]
@@ -50,12 +50,16 @@ impl Analysis {
 }
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
-pub fn analyze(data: &Chromatogram, key: &Key) -> Result<Vec<Component>, String> {
+pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
     let traces = IonTraces::new(data).map_err(|e| e.to_string())?;
     let peaks = traces.detect_peaks(&key.0);
     let mut components = deconvolute(&traces, &peaks, &key.1);
     components.sort_by_key(|k| k.apex_scan);
-    Ok(components)
+    let masses = peaks
+        .iter()
+        .map(|p| traces.masses[p.row as usize])
+        .collect();
+    Ok((components, masses))
 }
 
 impl Settings {
@@ -74,10 +78,11 @@ impl Settings {
                 match rx.try_recv() {
                     Ok(result) => {
                         match result {
-                            Ok(components) => {
-                                run.components = components;
+                            Ok((components, masses)) => {
+                                (run.components, run.peak_masses) = (components, masses);
                                 // Selection and library hits belong to the old components.
                                 (run.component, run.ident, run.ident_job) = (None, None, None);
+                                run.rev += 1;
                             }
                             Err(e) => error = Some(format!("{}: {e}", run.name)),
                         }

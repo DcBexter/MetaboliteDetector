@@ -392,12 +392,7 @@ impl Table {
     /// `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are space-separated; a value
     /// that was not found is an empty cell, which R reads as `NA`.
     pub fn write_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
-        fn field(s: &str) -> String {
-            match s.contains([',', '"', '\n', '\r']) {
-                true => format!("\"{}\"", s.replace('"', "\"\"")),
-                false => s.into(),
-            }
-        }
+        use crate::csv::quote as field;
         let head = ["Substance", "RT_s", "Quant_ions"].map(String::from);
         let head: Vec<String> = head
             .into_iter()
