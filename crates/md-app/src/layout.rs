@@ -93,6 +93,7 @@ mod tests {
                     })
                     .into(),
                 rescanned: false,
+                rescued: Vec::new(),
             }],
             ..Default::default()
         };

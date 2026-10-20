@@ -358,7 +358,7 @@ fn result_table_of_a_real_run() {
 /// are taken out. Runs the whole pipeline: MID library, batch scan with rescan, `determine`.
 #[test]
 fn unlabelled_runs_give_m0_by_sum_formula() {
-    use md_core::batch::{QuantSettings, RescanSettings, ScanSettings, complete_scan, scan_runs};
+    use md_core::batch::{QuantSettings, ScanSettings, complete_scan, scan_runs};
     use md_core::isotope::IsotopeTable;
     use md_core::mid::{Method, determine, mid_library};
     use md_core::search::PreparedLibrary;
@@ -384,13 +384,9 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
     let (mut found, errors) =
         scan_runs(&runs, &prepared, &s, 4, &AtomicUsize::new(0), &no).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
-    // Few runs find the substance without RI calibration; rescan the fragment ions in all of them.
-    let r = RescanSettings {
-        min_share: 0.0,
-        ..Default::default()
-    };
+    // Few runs find the substance without RI calibration; rescan the fragment ions in the others.
     let q = QuantSettings::default();
-    complete_scan(&mut found, &lib, &s, &q, Some(&r), 4, &no).unwrap();
+    complete_scan(&mut found, &lib, &s, &q, true, 4, &no).unwrap();
     let m = determine(
         &found,
         &lib,

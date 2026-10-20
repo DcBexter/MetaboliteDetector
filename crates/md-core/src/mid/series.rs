@@ -313,6 +313,7 @@ mod tests {
                     })
                     .collect(),
                 rescanned: false,
+                rescued: Vec::new(),
             }],
             unknown: Vec::new(),
             calibration: None,
