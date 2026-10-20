@@ -1,2 +1,3 @@
-# Same limit as Sonar rule rust:S3776, so that a too complex function shows up before the PR.
+# Sonar rule rust:S3776 reports above 30 in this project; clippy counts differently,
+# so 15 (the issue's start value) shows a too complex function before the PR.
 cognitive-complexity-threshold = 15
