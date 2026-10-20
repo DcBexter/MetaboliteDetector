@@ -56,7 +56,7 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (&'static str, Vec<f64>
 }
 
 /// Writes through `<path>.part` and renames, so a failed export never leaves a half-written file.
-fn write_file(
+pub(crate) fn write_file(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<std::fs::File>) -> std::io::Result<()>,
 ) -> Result<(), String> {
@@ -76,7 +76,7 @@ fn write_file(
 }
 
 /// PNG of `rect` (points) out of a full-window screenshot taken at `ppp` pixels per point.
-fn write_png(
+pub(crate) fn write_png(
     path: &Path,
     shot: &egui::ColorImage,
     rect: egui::Rect,

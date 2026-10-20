@@ -20,6 +20,7 @@ mod loading;
 mod menu;
 mod run_list;
 mod settings;
+mod statistics;
 mod status;
 
 use jobs::{poll_job, spawn};
@@ -75,6 +76,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    statistics: statistics::Statistics,
     export: export::Export,
 }
 
@@ -99,6 +101,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            statistics: statistics::Statistics::default(),
             export: export::Export::default(),
         }
     }
@@ -171,6 +174,7 @@ impl App {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
+        self.statistics.window(ctx, self.batch.shown_table());
         self.isotopes.window(ctx);
         self.library_editor(ctx);
     }
