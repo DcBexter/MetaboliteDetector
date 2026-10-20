@@ -43,8 +43,12 @@ impl View {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.derivative, "1st derivative");
-        ui.checkbox(&mut self.auto_y, "Auto Y");
+        ui.checkbox(&mut self.derivative, "1st derivative")
+            .on_hover_text(
+                "Plot the slope per scan instead of the intensity; hides component marks",
+            );
+        ui.checkbox(&mut self.auto_y, "Auto Y")
+            .on_hover_text("Fit the Y axis to the visible time range");
         egui::ComboBox::from_id_salt("time unit")
             .selected_text(format!("Time: {}", self.unit.label()))
             .show_ui(ui, |ui| {
