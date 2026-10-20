@@ -353,6 +353,68 @@ fn result_table_of_a_real_run() {
     assert_eq!(csv.iter().filter(|b| **b == b'\n').count(), rows.len() + 1);
 }
 
+/// MID wizard by sum formula (F16) on the example runs, which carry no label: the Glycine 3TMS
+/// fragment m/z 174 (C7H20NSi2) of `lib_aa` must come out almost all M+0 once the natural isotopes
+/// are taken out. Runs the whole pipeline: MID library, batch scan with rescan, `determine`.
+#[test]
+fn unlabelled_runs_give_m0_by_sum_formula() {
+    use md_core::batch::{QuantSettings, RescanSettings, ScanSettings, complete_scan, scan_runs};
+    use md_core::isotope::IsotopeTable;
+    use md_core::mid::{Method, determine, mid_library};
+    use md_core::search::PreparedLibrary;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let Ok(lbr) = std::env::var("MD_LBR_SAMPLE") else {
+        eprintln!("skipped: MD_LBR_SAMPLE not set");
+        return;
+    };
+    let runs = runs();
+    if runs.is_empty() {
+        return;
+    }
+    let mut lib = md_core::library::read_lbr(&lbr).unwrap();
+    let gly = lib.iter().position(|c| c.name == "Glycine 3TMS").unwrap();
+    lib[gly].formulas.push((174, 177, "C7H20NSi2".into()));
+    let lib = mid_library(&lib);
+    assert_eq!(lib.len(), 1);
+    let mut s = ScanSettings::default();
+    // Without RI calibration the spectra alone decide; the weaker matches still are Glycine.
+    s.search.cutoff = 0.6;
+    let prepared = PreparedLibrary::new(&lib, &s.search);
+    let no = AtomicBool::new(false);
+    let (mut found, errors) =
+        scan_runs(&runs, &prepared, &s, 4, &AtomicUsize::new(0), &no).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    // Few runs find the substance without RI calibration; rescan the fragment ions in all of them.
+    let r = RescanSettings {
+        min_share: 0.0,
+        ..Default::default()
+    };
+    let q = QuantSettings::default();
+    complete_scan(&mut found, &lib, &s, &q, Some(&r), 4, &no).unwrap();
+    let m = determine(
+        &found,
+        &lib,
+        &[],
+        &[],
+        Method::Formula,
+        "C",
+        &IsotopeTable::standard(),
+    );
+    assert!(m.errors.is_empty(), "{:?}", m.errors);
+    let fits: Vec<_> = m.compounds[0].fragments[0].fits.iter().flatten().collect();
+    eprintln!(
+        "Glycine 3TMS found with MIDs in {} of {} runs",
+        fits.len(),
+        runs.len()
+    );
+    assert_eq!(fits.len(), runs.len());
+    for f in fits {
+        eprintln!("M0..M3 {:.4?}, R² {:.4?}", f.mids, f.r2);
+        assert!((f.mids[0] - 1.0).abs() < 0.03, "{:?}", f.mids);
+        assert!(f.mids[1..].iter().all(|m| m.abs() < 0.03), "{:?}", f.mids);
+    }
+}
+
 #[test]
 fn component_detail_of_a_real_run() {
     use md_core::detail::{compare, component_detail};
