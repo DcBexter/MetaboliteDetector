@@ -44,6 +44,13 @@ fn export_runs(
     cancel: &AtomicBool,
 ) -> Vec<String> {
     let (mut errors, mut used) = (Vec::new(), HashSet::new());
+    // Quitting mid-write leaves `<file>.cdf.tmp` behind (the writer renames it when done): clear them and say so.
+    for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = f.file_name().to_string_lossy().into_owned();
+        if n.to_lowercase().ends_with(".cdf.tmp") && std::fs::remove_file(f.path()).is_ok() {
+            errors.push(format!("{n}: leftover of an interrupted export, removed"));
+        }
+    }
     for (name, data) in runs {
         if cancel.load(Relaxed) {
             break;
@@ -216,6 +223,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("md-export-all-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("keep_profile.cdf"), b"old").unwrap();
+        std::fs::write(dir.join("orphan.cdf.tmp"), b"half").unwrap();
         let runs = vec![
             ("a".to_string(), c.clone()),
             ("a".to_string(), c.clone()),
@@ -239,9 +247,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(kept, b"old");
         assert_eq!(done.load(Relaxed), 5);
-        assert_eq!(errors.len(), 2);
-        assert!(errors[0].starts_with("bad_profile.cdf"));
-        assert!(errors[1].contains("already exists"));
+        assert_eq!(errors.len(), 3);
+        assert!(errors[0].starts_with("orphan.cdf.tmp") && errors[0].contains("removed"));
+        assert!(errors[1].starts_with("bad_profile.cdf"));
+        assert!(errors[2].contains("already exists"));
         // Three runs whose names differ at most in case give three files, plus the kept one.
         assert_eq!(names.len(), 4, "{names:?}");
     }
