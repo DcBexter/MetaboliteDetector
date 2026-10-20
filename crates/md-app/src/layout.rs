@@ -1,16 +1,7 @@
-//! Shared spacing, so no window or panel puts one control on top of another.
+//! Shared layout, so no window or panel puts one control on top of another; the spacing itself is
+//! in `style::apply`.
 
 use eframe::egui;
-
-/// App-wide style: scroll bars take their own room instead of floating over the controls, and
-/// window content starts past the corner resize grips.
-pub fn apply(ctx: &egui::Context) {
-    ctx.all_styles_mut(|s| {
-        s.spacing.scroll = egui::style::ScrollStyle::solid();
-        s.spacing.window_margin =
-            egui::Margin::same(s.interaction.resize_grab_radius_corner.ceil() as i8);
-    });
-}
 
 /// A resizable list on the left and its details beside it, each with the panel margin, so the
 /// details never start on the list's edge.
@@ -69,15 +60,17 @@ mod tests {
             sic_for: None,
             sic_job: None,
             components: Vec::new(),
+            peak_masses: Vec::new(),
             analysis: settings::Analysis::new(app.settings.key()),
             scan: 0,
             component: None,
             visible: true,
             ident: None,
             ident_job: None,
+            rev: 0,
         });
         let ctx = egui::Context::default();
-        layout::apply(&ctx);
+        style::apply(&ctx);
         ctx.enable_accesskit();
         let mut frame = eframe::Frame::_new_kittest();
         let mut names = HashMap::new();
