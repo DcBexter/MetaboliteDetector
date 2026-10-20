@@ -42,7 +42,7 @@ fn named(dir: &Path, name: &str) -> PathBuf {
         .map(|e| e.path())
         .find(|p| {
             p.file_name()
-                .and_then(|n| n.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|n| n.eq_ignore_ascii_case(name))
         })
         .unwrap_or_else(|| dir.join(name))
@@ -51,7 +51,7 @@ fn named(dir: &Path, name: &str) -> PathBuf {
 /// True for the two files of a FastFlight run (any letter case).
 pub fn is_fastflight(path: &Path) -> bool {
     path.file_name()
-        .and_then(|n| n.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|n| n.eq_ignore_ascii_case(FFT) || n.eq_ignore_ascii_case(FFC))
 }
 
