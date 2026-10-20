@@ -246,11 +246,17 @@ fn table(
             .sense(egui::Sense::click())
             .resizable(true)
             // A long name is cut (the row's tooltip has it whole) so the scores stay in view.
-            .column(Column::initial(140.0).at_least(90.0).clip(true))
-            // Widths that fit the 720 px a window gets at 1280 px; right-aligned cells would make
-            // automatic columns grow to the window.
-            .columns(Column::initial(70.0).at_least(40.0), 6)
-            .column(Column::remainder().at_least(70.0))
+            .column(Column::initial(106.0).at_least(90.0).clip(true))
+            // Widths that fit the 720 px a window gets at 1280 px, each with room for the sort
+            // arrow (a column never shrinks again); right-aligned cells would make automatic
+            // columns grow to the window.
+            .column(Column::initial(66.0).at_least(40.0))
+            .column(Column::initial(44.0).at_least(40.0))
+            .column(Column::initial(80.0).at_least(40.0))
+            .column(Column::initial(96.0).at_least(40.0))
+            .column(Column::initial(84.0).at_least(40.0))
+            .column(Column::initial(70.0).at_least(40.0))
+            .column(Column::remainder().at_least(90.0).clip(true))
             .header(20.0, |mut h| {
                 for (c, title) in HEAD.iter().enumerate() {
                     h.col(|ui| {
