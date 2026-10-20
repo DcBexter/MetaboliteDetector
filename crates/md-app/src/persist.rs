@@ -445,13 +445,12 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     true
                 }
                 ("", "mode") => {
-                    let m = crate::guided::Mode::from_key(&v);
-                    match m {
+                    match crate::guided::Mode::from_key(&v) {
                         Some(m) => (app.guided.mode, app.guided.ask) = (m, false),
-                        // Maybe from a newer version: kept until the user answers.
+                        // Maybe from a newer version: kept until the user answers, so not "unreadable".
                         None => app.saved.extra.push((key.clone(), v)),
                     }
-                    m.is_some()
+                    true
                 }
                 (_, "recent" | "rc_open_file") => {
                     recent.extend(path(&v));
@@ -582,8 +581,16 @@ type Note = Result<String, String>;
 /// Before eframe reads `app.ron`. A good file is copied to `app.ron.bak`. A damaged one (eframe
 /// drops it and would write over it) is replaced by that copy; without one it becomes the backup.
 /// If neither works, eframe gets another file name, so nothing is overwritten. Returns the file
-/// eframe may use and what to tell the user.
+/// eframe may use and what to tell the user. A damaged file counts only if it is still damaged
+/// after a short pause, so a second start does not take another window's save for damage (#305).
 pub fn guard(file: Option<PathBuf>) -> (Option<PathBuf>, Option<Note>) {
+    guard_after(file, || {
+        std::thread::sleep(std::time::Duration::from_millis(200))
+    })
+}
+
+/// [`guard`] with the pause before a damaged file is read a second time.
+fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>, Option<Note>) {
     let Some(file) = file else {
         return (None, None);
     };
@@ -602,10 +609,19 @@ pub fn guard(file: Option<PathBuf>) -> (Option<PathBuf>, Option<Note>) {
         (Some(other), Some(Err(msg)))
     };
     // A file we cannot read (locked by a scanner) is not a damaged one.
-    let bytes = match std::fs::read(&file) {
+    let read = || std::fs::read(&file);
+    let mut bytes = match read() {
         Ok(bytes) => bytes,
         Err(e) => return aside(e),
     };
+    if parse(&bytes).is_none() {
+        // Another window may be saving right now (eframe truncates first): look once more.
+        pause();
+        bytes = match read() {
+            Ok(bytes) => bytes,
+            Err(e) => return aside(e),
+        };
+    }
     if parse(&bytes).is_some() {
         // A failed copy loses nothing: the file itself is fine.
         if std::fs::read(&bak).ok().as_deref() != Some(&bytes[..]) {
@@ -837,10 +853,19 @@ size=@Size(1591 800)
 
     #[test]
     fn unknown_mode_is_asked_again_and_kept_until_answered() {
-        let (mut app, bad) = apply_text("mode=wizard\n", own_entries);
-        assert_eq!(bad, ["mode"]);
-        // `apply_text` starts from the default; the real start sets `ask` before reading.
+        let mut app = App::default();
+        // As the real start: asked unless a saved `mode` answers it.
         app.guided.ask = true;
+        let bad = apply(
+            &mut app,
+            &egui::Context::default(),
+            own_entries("mode=wizard\n"),
+        );
+        assert!(bad.is_empty(), "a kept mode is not unreadable: {bad:?}");
+        assert!(
+            app.guided.ask,
+            "an unknown mode does not answer the question"
+        );
         assert!(super::text(&app).contains("mode=wizard\n"));
         (app.guided.mode, app.guided.ask) = (crate::guided::Mode::Expert, false);
         let text = super::text(&app);
@@ -917,6 +942,29 @@ size=@Size(1591 800)
         assert!(note.is_some_and(|n| n.is_err()));
         assert_eq!(restored, good);
         assert_eq!(names, ["app.ron", "app.ron.bak"]);
+    }
+
+    /// A file caught mid-save by another window is whole again on the second read: left alone.
+    #[test]
+    fn file_being_saved_is_read_again() {
+        let (dir, file) = state_dir("saving", &[Path::new("/a")]);
+        let good = std::fs::read(&file).unwrap();
+        std::fs::write(file.with_extension("ron.bak"), "{}").unwrap();
+        std::fs::write(&file, &good[..good.len() / 2]).unwrap();
+        let (used, note) =
+            guard_after(Some(file.clone()), || std::fs::write(&file, &good).unwrap());
+        let (now, bak) = (
+            std::fs::read(&file).unwrap(),
+            std::fs::read(file.with_extension("ron.bak")),
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!((used, note), (Some(file), None));
+        assert_eq!(now, good, "the older copy did not replace the saved file");
+        assert_eq!(
+            bak.unwrap(),
+            good,
+            "the whole file is the new last good copy"
+        );
     }
 
     /// Without a good copy the damaged file becomes the one backup; the defaults apply.
