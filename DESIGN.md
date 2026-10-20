@@ -143,7 +143,9 @@ planned, so no sentence is assembled from fragments.
   scroll bars are solid and take their own room (`style::apply`).
 - Forms are two-column `egui::Grid`s: label left, control right. Tables are striped grids.
 - Default window size 1200 × 800; nothing may overlap or be cut off at the side down to
-  800 × 600 and at 520 px width (overlap test, #89). Rows of controls use `horizontal_wrapped`.
+  800 × 600 and at 520 px width (overlap test, #89). Rows of controls use `horizontal_wrapped`;
+  the run list and the component panel grow to their content up to 30 % of the width, then scroll
+  (`layout::side_panel`); wide tables scroll sideways.
 
 ## Elevation & Depth
 

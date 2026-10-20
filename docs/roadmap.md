@@ -74,4 +74,4 @@ parallel loops, pixel-bounded drawing and a perf case per new algorithm.
 | Noise, baseline, peak detection | done (pseudocode, not yet validated against the old app) | [algorithms.md](reverse-engineering/algorithms.md) §2–3 |
 | Deconvolution, library scoring, RI calibration, quantification ion choice | done; open details listed per section | [algorithms.md](reverse-engineering/algorithms.md) §4–7 |
 | MID, normalisation, statistics, PCA | open | [algorithms.md](reverse-engineering/algorithms.md) §8 |
-| File formats and settings | mostly done: `.lbr` v2 parser verified on the sample library; `.bin`, `.cmp`, `.calib`, `.mzcalib`, settings layouts documented. Open: `.idx` layout, peak records in `.cmp`, NIST parser, MSL export | [file-formats.md](reverse-engineering/file-formats.md) |
+| File formats and settings | mostly done: `.lbr` v2 parser verified on the sample library; `.bin`, `.cmp`, `.calib`, `.mzcalib`, settings layouts documented. Open: `.idx` layout, peak records in `.cmp`, MSL export | [file-formats.md](reverse-engineering/file-formats.md) |
