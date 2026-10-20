@@ -1,6 +1,6 @@
 //! Result table of one run: one row per component with its library match, the old `DataTableModel`
 //! (columns Compound Name, RT, RI, Peak Area, Overall, Spec. and RI Score, Quant. Ions) and
-//! `CompoundMapper::findCompound`, see docs/reverse-engineering/algorithms.md §9.
+//! `CompoundMapper::findCompound`, see docs/reverse-engineering/algorithms.md §7f.
 
 use std::io::{self, Write};
 

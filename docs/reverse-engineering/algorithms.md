@@ -826,7 +826,7 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 
 The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of the total signal), `md_core::spectrum::normalize`. A zero norm is not guarded in the old code (division by zero); the rewrite leaves such a spectrum unchanged. The toolbar label strings were not read, so the names Unit/Relative are inferred from the issue. `SplitSpectrumPlot` and `LibrarySpectrumPlot` reuse the same mode.
 
-## 7e. Result table of a run and Find Compound (Observed; ported in `crates/md-core/src/results.rs`)
+## 7f. Result table of a run and Find Compound (Observed; ported in `crates/md-core/src/results.rs`)
 
 Observed with objdump on `DataTableModel::getData` (0x4c88a2), `CompoundExporter::run` (0x4b5bb8) and `CompoundMapper::findCompound` (0x4b6ca0).
 
@@ -835,6 +835,32 @@ Observed with objdump on `DataTableModel::getData` (0x4c88a2), `CompoundExporter
 - Quant. Ions: the library compound's quant ions as `QTextStream` floats, fixed notation, precision 4, joined by ` / `. The old code truncates two characters from the end, which leaves a trailing space. Empty when the set is empty.
 - `CompoundExporter` writes the model generically: the header row, then every cell's display text. The separator is a TAB (0xa810ab), the line end `\n`, no quoting, despite the `*.csv` file filter. The new export uses comma and RFC 4180 quoting and leaves missing values empty instead of -1.
 - Find Compound: for each component's list of hits, keep a hit whose library compound has the same name (string compare) as the chosen one and an overall score of at least `LS_CUTOFF`; list (score, component), sorted descending (`qSort` with `qGreater`).
+
+## 7e. Adding a found compound to a library, copying RTs (Observed; ported in `crates/md-core/src/library_add.rs`)
+
+Read from the disassembly of `DialogAddLib::on_okButton_clicked` (0x4ca1be), `Ui_DialogAddLib::retranslateUi`, `LibrarySearch::addCompoundSpectrum` (0x627f88) and `MainWindow::copyRT` (0x3cacc2).
+
+**Add dialog.** Input is the selected component (`Compound`), the target `LibrarySearch`, a name (editable combo box of the library names) and a comment. Without an open library: error "No compound library opened. Changes can not be saved." The name must not be empty. The dialog copies the compound, sets the name to the combo text and, when the comment is not empty, adds the feature `COMMENT`. If the library does not contain the name, the compound is added (`addCompound(c, "no source")`). Otherwise one of four radio buttons decides, each after a yes/no question:
+
+| Button | Text | Action |
+|---|---|---|
+| `rb_replace` | Replace entry | Removes the entry and adds the found compound (question "replace the existing reference compound?"). |
+| `rb_modify` | Modify entry | `addCompoundSpectrum(c, name, source)`: merges the spectrum into the entry (combined spectrum); not ported. |
+| `rb_keep` | Replace RT/Spec | A new `LibraryCompound(c, ...)` takes the auto quant ions, the quant ions, the features and the formulas of the old entry and replaces it: spectrum, RT, RI new; ions and comments old. |
+| `rb_quant_ions` | Exchange quant. ions | Sets only the auto-detected quant ions of the entry to those of the found compound. |
+
+After a change the library is written with `toDisk()` ("Error saving compound library" on failure). The auto quant ions of the found compound come from `autoQuantificationIonAssignment(n)` (§7.1).
+
+**Copy retention times** (File menu, "Copy Retention Times"): asks for a target library (`.lbr`), maps the components of the run to it with `CompoundMapper::mapCompsToLib` (same search and one-to-one assignment as §5), and shows a table with the columns Compound, RT, Lib RT, RI, Lib RI, Score. Entries with several candidates are set in italics. The write-back after confirmation is in a slot that was not read; the rewrite replaces RT and RI of the assigned entries.
+
+Deviations and gaps of the rewrite:
+
+- "Modify entry" (merge of spectra) is not ported; the combined-spectrum arithmetic (`LibraryCompound::addSpectrum`, virtual call from 0x61cde2) was not read.
+- With "Replace RT/Spec" the old code copies the old features over the new ones, which drops a comment typed in the dialog; the rewrite appends the typed comment (new line) to the old one.
+- The old "Replace RT/Spec" also copies the formulas of the old entry; `LibraryCompound` has no formula field, so they are not copied. "Replace entry" removes the entry and adds the new one at the end; the rewrite replaces it in place. Like the old dialog, the entry gets the source "no source"; the run name is only in the suggested entry name.
+- A found compound without RI (run not calibrated) is stored with RI -1 (no RI); copying RTs then leaves the RI of the entry alone.
+- The result is an entry in the rewrite's `.mdlib` (saved through the library editor), not an `.lbr`.
+- Source string "no source" and the `LibraryCompound(Compound, source)` constructor defaults for the combined spectrum are Inferred from the MSL importer.
 
 ## 8. Open gaps (ranked by impact on reproducing results)
 
