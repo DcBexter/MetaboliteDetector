@@ -297,12 +297,12 @@ Data type, mass traces and centroiding (Observed):
   - With type 1 the intensity is max instead (the importer passes 0).
   - Parts with a negative centroid are dropped. Value = `(int)(intensity + 0.5)` (`is_fl_value` is 0). Mass = `(float)centroid` (`is_fl_mass` is 1).
 - The masses in the old disk-scan cache are these centroids rounded to nominal masses, `floor(m + 0.5)`. Checked against the cache of the synthetic high-resolution run: all 4400 scans are equal. Where exactly the rounding happens is not analysed.
-- On unit-mass data every gap is 1, so each point is its own part and centroiding changes nothing.
+- On unit-mass data every gap is 1, so each point is its own part; centroiding then only rounds intensities and drops negative masses.
 - `GCMSDiskScan::getChromatogram` reads each trace with `getSignal(ion)` (0x5e0aec): the point of exactly that float mass.
   - A missing mass reads `(int)` of the scan's first baseline statistic (0 for CDF), or 0 when baseline correction is on.
   - A found point is baseline-corrected (vtbl+0x48) when that is on.
 
-Port: `IonTraces::new` centroids like this (`centroided`, skipped when no scan has two points within 0.1) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z, with 0 where a scan lacks that mass, for FastFlight-like runs; `reorder_peaks` is 4.2.
+Port: `IonTraces::new` centroids like this (`centroided`; skipped when no scan has two points within 0.1, then fractional intensities and m/z in [-0.5, 0) stay as read) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z, with 0 where a scan lacks that mass, for FastFlight-like runs; `reorder_peaks` is 4.2.
 
 ### 4.2 reorderPeaks(scan_dist, ion_dist) (0x5eac2c) - align apexes of split masses
 

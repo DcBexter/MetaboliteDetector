@@ -194,14 +194,16 @@ fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
             )
         };
         if mz >= 0.0 {
-            out.push((mz as f32, (sum + 0.5).floor() as f32));
+            out.push((mz as f32, (sum + 0.5).trunc() as f32)); // C `(int)` truncates
         }
         i += 1;
     }
 }
 
 /// The run as the old CDF import stores it: every scan centroided. `None` when no scan has two
-/// points within 0.1 m/z, where centroiding keeps every point as it is.
+/// points within 0.1 m/z, where centroiding keeps every point of integer intensity and m/z >= 0.
+/// shortcut: that skip keeps fractional intensities and m/z in [-0.5, 0), which centroiding rounds
+/// or drops (CDF intensities are integers); round both ways alike if such input matters.
 fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
     let close = |s: usize| {
         let (m, _) = c.spectrum(s);
@@ -640,12 +642,18 @@ pub fn reorder_peaks(
         peaks: Vec<usize>,
         last_row: usize,
         apex: u32,
+        /// insertIonProfile puts the profile into bins `lo..hi`.
+        lo: usize,
+        hi: usize,
     }
     peaks.sort_by_key(|p| (p.row, p.first_scan));
     let nb = number_bins as usize;
     let dist = (number_bins as f32 * scan_dist).round() as usize;
     let len = nb * (traces.scan_count() + 1) + 1;
-    let mut bins: Vec<Vec<usize>> = vec![Vec::new(); len];
+    // Instead of the old 2 * dist bin lists per profile, blocks of `dist` bins list every profile
+    // whose range touches them (at most 3 blocks), in creation order like the old bin lists.
+    let block = dist.max(1);
+    let mut blocks: Vec<Vec<usize>> = vec![Vec::new(); len / block + 1];
     let mut profiles: Vec<Profile> = Vec::new();
     for k in 0..peaks.len() {
         let p = peaks[k];
@@ -655,9 +663,10 @@ pub fn reorder_peaks(
             continue; // the old code throws here; detected peaks never get this far
         }
         let next = |r: usize| (r + 1 < traces.len()).then_some(r + 1);
-        let winner = bins[b]
+        let winner = blocks[b / block]
             .iter()
             .copied()
+            .filter(|j| (profiles[*j].lo..profiles[*j].hi).contains(&b))
             .filter(|j| {
                 let last = profiles[*j].last_row;
                 next(last).is_some_and(|n| {
@@ -668,13 +677,17 @@ pub fn reorder_peaks(
         match winner {
             None => {
                 // insertIonProfile: the new profile sits in bins [b - dist, b + dist).
-                let j = profiles.len();
+                let (lo, hi) = (b.saturating_sub(dist), (b + dist).min(len - 1));
+                if lo < hi {
+                    (lo / block..=(hi - 1) / block).for_each(|i| blocks[i].push(profiles.len()));
+                }
                 profiles.push(Profile {
                     peaks: vec![k],
                     last_row: p.row as usize,
                     apex: summed_apex(traces, peaks, &[k], number_bins).0,
+                    lo,
+                    hi,
                 });
-                (b.saturating_sub(dist)..(b + dist).min(len - 1)).for_each(|i| bins[i].push(j));
             }
             Some(j) if p.first_scan < profiles[j].apex && profiles[j].apex < p.last_scan => {
                 let w = &mut profiles[j];
@@ -1094,6 +1107,40 @@ mod tests {
         let mut q = t.detect_peaks(&PeakSettings::default());
         reorder_peaks(&mut q, &t, 0.2, 0.05, 10);
         assert_eq!(apexes(&q), vec![100, 103, 103]);
+    }
+
+    #[test]
+    fn reorder_peaks_leaves_out_the_last_bin_of_a_profile() {
+        // The profile of the first peak (bin 1000) covers bins 900..1100 (insertIonProfile, §4.2).
+        let scans = 300;
+        let mut traces = [noisy(scans), noisy(scans)];
+        gauss(&mut traces[0], 100.0, 3.0, 20_000.0);
+        gauss(&mut traces[1], 105.0, 3.0, 20_000.0);
+        let c = Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64).collect(),
+            offsets: (0..=scans).map(|s| 2 * s).collect(),
+            mz: (0..scans).flat_map(|_| [73.047f32, 73.089]).collect(),
+            intensity: (0..scans)
+                .flat_map(|s| [traces[0][s], traces[1][s]])
+                .collect(),
+        };
+        let t = IonTraces::exact(&c).unwrap();
+        let peak = |row, apex, precise| Peak {
+            row,
+            first_scan: 90,
+            apex_scan: apex,
+            last_scan: 120,
+            precise_apex: Some(precise),
+            signal_to_noise: 10.0,
+            quality: 0.0,
+            sharpness: 1.0,
+        };
+        let mut joined = [peak(0, 100, 100.0), peak(1, 105, 109.9)];
+        reorder_peaks(&mut joined, &t, 10.0, 0.05, 10);
+        assert_eq!(joined[0].apex_scan, joined[1].apex_scan);
+        let mut apart = [peak(0, 100, 100.0), peak(1, 105, 110.0)];
+        reorder_peaks(&mut apart, &t, 10.0, 0.05, 10);
+        assert_eq!((apart[0].apex_scan, apart[1].apex_scan), (100, 105));
     }
 
     #[test]

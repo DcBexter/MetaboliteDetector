@@ -155,8 +155,8 @@ Conscious deviations from the old app; the golden test (below) shows that none o
 peaks of the example runs:
 
 - **Traces per nominal mass.** Not a deviation: `IonTraces::new` centroids every scan like the old CDF
-  import (§4.1), then sums the centroids per nominal mass. On unit-resolution runs centroiding changes
-  nothing. Exact-mass traces (`IonTraces::exact`) plus `reorder_peaks` (§4.2) are what the old app does
+  import (§4.1), then sums the centroids per nominal mass. On unit-resolution runs with integer
+  intensities centroiding changes nothing. Exact-mass traces (`IonTraces::exact`) plus `reorder_peaks` (§4.2) are what the old app does
   for FastFlight runs. The deconvolution still keys spectra by nominal mass, so exact masses merge there
   (shortcut in `deconv.rs`).
 - **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
