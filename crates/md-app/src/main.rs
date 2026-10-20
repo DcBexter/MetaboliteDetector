@@ -267,7 +267,11 @@ impl App {
             (self.library.as_ref()).map(|l| l.path.as_path()),
             (self.nist.lib.as_ref()).map(|l| l.path.as_path()),
         ];
-        if let Some(which) = self.settings.window(ctx, libraries, &mut self.guided.mode) {
+        let times = (self.runs.get(self.active)).map(|r| r.data.scan_times_s.as_slice());
+        if let Some(which) = self
+            .settings
+            .window(ctx, libraries, &mut self.guided.mode, times)
+        {
             self.pick_library(ctx, which);
         }
         self.batch

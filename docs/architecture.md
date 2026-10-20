@@ -190,7 +190,12 @@ peaks of the example runs:
 matched filter (`AN_DECONVOLUTION_WIDTH` scans) marks regions above 5, and each region becomes a component.
 Its model peak is the sum of the sharpest clean peaks (quality ≤ 10, at most a quarter); every ion trace is
 fitted as `c0 + c1 * scan + c2 * model`, and `c2 * max(model)` is that ion's height in the spectrum.
-Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults. The app runs
+Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults; the golden tests
+use it. Deviation (#279): the defaults of app and CLI (`GcmsSettings::default()`) set the width to automatic,
+`deconv::auto_width`: 0.5 s at the run's median scan interval, at least the old 1 scan, at most 100. 3.3 always uses
+1 scan, which cuts the substances of a 20 scans/s run into pieces (#242). A width from a loaded settings file, the
+imported 3.3 settings or the saved app settings (`AN_DECONVOLUTION_WIDTH=auto` or a number) is a set one and wins;
+the old file format has no "auto", so **Save…** writes the width of the shown run (1 without one). The app runs
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 
@@ -428,7 +433,7 @@ locale reads `.` as thousands mark (`293.808` becomes 293808, #249). `--excel-de
 rewrites every file of the export with `csv::to_excel_de`: `;` separators and decimal commas in the number
 columns; header lines, name columns (so a group `0.5` stays) and the values of `FILE.settings.csv` (text for
 `load_results.R`) keep their text, quoting as before. `load_results.R` reads both. A group name like `01` is still
-read as a number by a spreadsheet.
+quoted (`"01"`): Calc (de-DE) keeps it text only with "Quoted field as text" in the import dialog, else it reads 1; CRLF files keep CRLF. Checked in LibreOffice Calc headless (numbers stay numbers, names text); `load_results.R` was not run (no R installed).
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 

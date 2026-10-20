@@ -91,6 +91,8 @@ pub fn config_dir() -> Option<PathBuf> {
 /// A field of [`GcmsSettings`] as read from and written to a line.
 enum Field<'a> {
     F64(&'a mut f64),
+    /// A number, or `auto` for `None`.
+    Auto(&'a mut Option<f64>),
     F32(&'a mut f32),
     I32(&'a mut i32),
     Bool(&'a mut bool),
@@ -130,7 +132,7 @@ const FIELDS: [(&str, Access); 35] = [
         Field::F64(&mut s.an_min_peak_height)
     }),
     ("AN_DECONVOLUTION_WIDTH", |s| {
-        Field::F64(&mut s.an_deconvolution_width)
+        Field::Auto(&mut s.an_deconvolution_width)
     }),
     ("AN_NUMBER_BINS", |s| Field::I32(&mut s.an_number_bins)),
     ("AN_MIN_PEAK_NUMBER", |s| {
@@ -185,6 +187,11 @@ impl Field<'_> {
     fn parse(self, v: &str) -> bool {
         match self {
             Field::F64(f) => put(f, v),
+            Field::Auto(f) if v == "auto" => {
+                *f = None;
+                true
+            }
+            Field::Auto(f) => v.parse().map(|x| *f = Some(x)).is_ok(),
             Field::F32(f) => put(f, v) || variant_f32(v).map(|x| *f = x).is_some(),
             Field::I32(f) => put(f, v),
             Field::Bool(f) => put(f, v),
@@ -196,6 +203,7 @@ impl Field<'_> {
     fn text(self) -> String {
         match self {
             Field::F64(f) => f.to_string(),
+            Field::Auto(f) => f.map_or("auto".into(), |x| x.to_string()),
             Field::F32(f) => f.to_string(),
             Field::I32(f) => f.to_string(),
             Field::Bool(f) => f.to_string(),
@@ -436,9 +444,15 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     app.saved.nist = path(&v);
                     true
                 }
-                ("", "mode") => crate::guided::Mode::from_key(&v)
-                    .map(|m| (app.guided.mode, app.guided.ask) = (m, false))
-                    .is_some(),
+                ("", "mode") => {
+                    let m = crate::guided::Mode::from_key(&v);
+                    match m {
+                        Some(m) => (app.guided.mode, app.guided.ask) = (m, false),
+                        // Maybe from a newer version: kept until the user answers.
+                        None => app.saved.extra.push((key.clone(), v)),
+                    }
+                    m.is_some()
+                }
                 (_, "recent" | "rc_open_file") => {
                     recent.extend(path(&v));
                     true
@@ -527,7 +541,13 @@ pub fn text(app: &App) -> String {
         let p = std::path::absolute(&p).unwrap_or(p);
         Some((k.to_owned(), p.to_str()?.to_owned()))
     }));
-    lines.extend(app.saved.extra.iter().cloned());
+    // An answered question replaces a kept unknown `mode`.
+    let answered = !app.guided.ask;
+    lines.extend(
+        (app.saved.extra.iter())
+            .filter(|(k, _)| !(answered && k == "mode"))
+            .cloned(),
+    );
     // A line break would split a value into a second, wrong line.
     (lines.into_iter())
         .filter(|(_, v)| !v.contains(['\n', '\r']))
@@ -736,6 +756,11 @@ size=@Size(1591 800)
         assert_eq!(s.ls_resolution, 0.3);
         assert_eq!(s.an_peak_threshold_end, -5.0);
         assert_eq!(s.ls_cutoff, 0.85);
+        assert_eq!(
+            s.an_deconvolution_width,
+            Some(1.0),
+            "a saved width beats the automatic one (#279)"
+        );
         let shown = app.settings.appearance;
         assert_eq!((shown.axes_labels, shown.peak_labels), (false, true));
         let run = std::path::absolute("/data/run 1.bin").unwrap();
@@ -794,6 +819,7 @@ size=@Size(1591 800)
         app.saved.extra.push(("language".into(), "de".into()));
         app.guided.mode = crate::guided::Mode::Guided;
         let text = text(&app);
+        assert!(text.contains("\nAN_DECONVOLUTION_WIDTH=auto\n"), "{text}");
         let (mut back, bad) = apply_text(&text, own_entries);
         assert!(bad.is_empty(), "{bad:?}");
         assert_eq!(back.guided.mode, app.guided.mode);
@@ -801,10 +827,27 @@ size=@Size(1591 800)
         back.guided.ask = true;
         assert!(!super::text(&back).contains("mode="));
         assert_eq!(back.settings.applied, app.settings.applied);
+        let set = apply_text("AN_DECONVOLUTION_WIDTH=2.5\n", own_entries).0;
+        assert_eq!(set.settings.applied.an_deconvolution_width, Some(2.5));
         assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
         assert_eq!(back.saved.extra, app.saved.extra);
+    }
+
+    #[test]
+    fn unknown_mode_is_asked_again_and_kept_until_answered() {
+        let (mut app, bad) = apply_text("mode=wizard\n", own_entries);
+        assert_eq!(bad, ["mode"]);
+        // `apply_text` starts from the default; the real start sets `ask` before reading.
+        app.guided.ask = true;
+        assert!(super::text(&app).contains("mode=wizard\n"));
+        (app.guided.mode, app.guided.ask) = (crate::guided::Mode::Expert, false);
+        let text = super::text(&app);
+        assert!(
+            text.contains("mode=expert\n") && !text.contains("wizard"),
+            "{text}"
+        );
     }
 
     #[test]

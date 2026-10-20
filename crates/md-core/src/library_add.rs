@@ -58,7 +58,7 @@ pub fn component_ions(
         (k.first_scan, k.apex_scan, k.last_scan)
             == (comp.first_scan, comp.apex_scan, comp.last_scan)
     };
-    let comps = deconvolute(&traces, &found, deconv);
+    let comps = deconvolute(&traces, &found, &data.scan_times_s, deconv);
     Ok(comps
         .iter()
         .find(same)
@@ -497,7 +497,7 @@ mod tests {
         let (ps, ds) = (PeakSettings::default(), DeconvSettings::default());
         let mut traces = IonTraces::new(&run, 0.5).unwrap();
         let found = traces.detect_peaks(&ps);
-        let comps = deconvolute(&traces, &found, &ds);
+        let comps = deconvolute(&traces, &found, &run.scan_times_s, &ds);
         assert_eq!(comps.len(), 2);
         let ions = component_ions(&run, &ps, &ds, &comps[1])
             .unwrap()

@@ -296,7 +296,7 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
         };
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_all_peaks(settings);
-        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         let mass = |row: u32| traces.mz[row as usize];
 
         // Peaks: the same peaks with the same bounds and S/N.

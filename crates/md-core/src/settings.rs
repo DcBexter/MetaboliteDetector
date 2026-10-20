@@ -31,7 +31,9 @@ pub struct GcmsSettings {
     /// Stored only: the old peak detector does not read it (algorithms.md §1).
     pub an_max_base_dev: f64,
     pub an_min_peak_height: f64,
-    pub an_deconvolution_width: f64,
+    /// `None`: automatic, from each run's scan rate (`deconv::auto_width`). The old file holds a number,
+    /// so a loaded file sets it.
+    pub an_deconvolution_width: Option<f64>,
     pub an_number_bins: i32,
     pub an_min_peak_number: i32,
     // Library search.
@@ -82,7 +84,7 @@ impl Default for GcmsSettings {
             an_peak_threshold_end: -5.0,
             an_max_base_dev: 20.0,
             an_min_peak_height: 20.0,
-            an_deconvolution_width: 1.0,
+            an_deconvolution_width: None,
             an_number_bins: 10,
             an_min_peak_number: 10,
             ls_ri_diff: 20.0,
@@ -187,12 +189,9 @@ impl GcmsSettings {
         // A share of the peak maximum: above 1 no point reaches it and every centroid is empty.
         ranged("SF_FWHM", self.sf_fwhm, 0.0, 1.0)?;
         ranged("AN_MIN_PEAK_HEIGHT", self.an_min_peak_height, 0.0, 1e9)?;
-        ranged(
-            "AN_DECONVOLUTION_WIDTH",
-            self.an_deconvolution_width,
-            0.1,
-            100.0,
-        )?;
+        if let Some(w) = self.an_deconvolution_width {
+            ranged("AN_DECONVOLUTION_WIDTH", w, 0.1, 100.0)?;
+        }
         ranged("AN_NUMBER_BINS", self.an_number_bins as f64, 1.0, 100.0)?;
         ranged(
             "AN_MIN_PEAK_NUMBER",
@@ -261,7 +260,8 @@ impl GcmsSettings {
             self.an_peak_threshold_end,
             self.an_max_base_dev,
             self.an_min_peak_height,
-            self.an_deconvolution_width,
+            // Automatic is the old default 1 there: the old version knows no other.
+            self.an_deconvolution_width.unwrap_or(1.0),
         ] {
             out.extend(v.to_le_bytes());
         }
@@ -346,7 +346,7 @@ impl GcmsSettings {
             an_peak_threshold_end: c.f64(),
             an_max_base_dev: c.f64(),
             an_min_peak_height: c.f64(),
-            an_deconvolution_width: c.f64(),
+            an_deconvolution_width: Some(c.f64()),
             an_number_bins: c.i32(),
             an_min_peak_number: c.i32(),
             ls_ri_diff: c.f64(),
@@ -462,7 +462,16 @@ mod tests {
         };
         let centroid = crate::centroid::CentroidSettings::from(&f);
         assert_eq!((f.peak().fwhm, centroid.fwhm), (0.3, 0.3));
-        assert_eq!(s.deconv(), DeconvSettings::default());
+        // Except the deconvolution width: automatic (#279), written to the old file as its 1.
+        assert_eq!(
+            s.deconv(),
+            DeconvSettings {
+                width: None,
+                ..Default::default()
+            }
+        );
+        let back = GcmsSettings::default().from_bytes(&s.to_bytes()).unwrap();
+        assert_eq!(back.an_deconvolution_width, Some(1.0));
         assert_eq!(
             s.search(),
             SearchSettings {
@@ -549,6 +558,7 @@ mod tests {
         let s = GcmsSettings {
             an_peak_threshold_begin: 12.5,
             an_number_bins: 7,
+            an_deconvolution_width: Some(2.5),
             ls_use_ri: false,
             quant_excl_ions: vec![(73.0, 73.0), (147.0, 149.5)],
             ..Default::default()
@@ -576,6 +586,8 @@ mod tests {
             ls_cutoff: 0.85,
             sql_max_number_fragments: 7,
             sql_minimal_number_equal_fragments: 2,
+            // The file holds the width, so a loaded one is set.
+            an_deconvolution_width: Some(1.0),
             ..Default::default()
         };
         let got = base
@@ -605,7 +617,7 @@ mod tests {
             |s: &mut GcmsSettings| s.an_peak_threshold_end = f64::NAN,
             |s: &mut GcmsSettings| s.an_number_bins = 0,
             |s: &mut GcmsSettings| s.an_number_bins = i32::MAX,
-            |s: &mut GcmsSettings| s.an_deconvolution_width = 0.0,
+            |s: &mut GcmsSettings| s.an_deconvolution_width = Some(0.0),
             |s: &mut GcmsSettings| s.an_min_peak_number = -1,
             |s: &mut GcmsSettings| s.ls_ri_diff = 0.0,
             |s: &mut GcmsSettings| s.quant_excl_ions = vec![(f32::NAN, 1.0)],
@@ -631,6 +643,7 @@ mod tests {
     fn raw_file_starting_with_gzip_magic_loads() {
         let s = GcmsSettings {
             sf_peak_threshold_begin: f64::from_le_bytes([0x1f, 0x8b, 0x08, 0, 0, 0, 0x24, 0x40]),
+            an_deconvolution_width: Some(1.0),
             ..Default::default()
         };
         let b = s.to_bytes();

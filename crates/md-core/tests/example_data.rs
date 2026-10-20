@@ -119,7 +119,7 @@ fn deconvolutes_example_runs() {
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let s = DeconvSettings::default();
-        let comps = deconvolute(&traces, &peaks, &s);
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &s);
         let total = t.elapsed();
         let ions: usize = comps.iter().map(|k| k.spectrum.len()).sum();
         eprintln!(
@@ -259,7 +259,7 @@ fn amino_acids_get_ri_score_with_lib_aa() {
         let cal = RiCalibration::new(bridge.map(|(f, n)| (fame.rt(f), lib_ri(n)))).unwrap();
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
-        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         let ris = cal.component_ris(&c.scan_times_s, &comps);
         let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
         for h in id.assigned.iter().flatten() {
@@ -371,7 +371,7 @@ fn mona_msp_finds_the_targets_with_ri() {
         let cal = RiCalibration::new(window_points(&fame, &windows)).unwrap();
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
-        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         let ris = cal.component_ris(&c.scan_times_s, &comps);
         let mut line = String::new();
         for (k, (s, prep)) in [(&without, &prep_without), (&with, &prep_with)]
@@ -431,7 +431,8 @@ fn mona_msp_finds_the_targets_with_ri() {
 /// These runs have 20 scans/s: the ion apexes of one substance spread over several scans, so the default
 /// deconvolution width of 1 scan cuts it into pieces below 10 ions and a run keeps ~15 components,
 /// mostly the FAME markers (the old 3.3 gives the same, `old-results/`). A width of 10 scans and 5 ions
-/// find the targets; the RI sigma is on the library's FAME scale (2 s), not the alkane 20.
+/// find the targets, and so does the automatic width of the defaults (#279: 10 scans here); the RI
+/// sigma is on the library's FAME scale (2 s), not the alkane 20.
 #[test]
 fn targetsearch_library_finds_its_targets() {
     use md_core::ri::{RiCalibration, marker_peaks, window_points};
@@ -457,14 +458,24 @@ fn targetsearch_library_finds_its_targets() {
         ..Default::default()
     };
     let prepared = PreparedLibrary::new(&lib, &s);
-    let tuned = DeconvSettings {
-        width: 10.0,
-        min_peak_number: 5,
-        ..Default::default()
-    };
-    // Runs in which each target is assigned with at least the batch cutoff 0.8, for [default
-    // deconvolution, tuned]. 0.8 needs an RI score above 0.51, i.e. within 2.3 s of the library RI.
-    let mut found = [vec![0usize; lib.len()], vec![0usize; lib.len()]];
+    let configs = [
+        ("3.3 defaults (width 1 scan)", DeconvSettings::default()),
+        (
+            "defaults (automatic width, #279)",
+            md_core::settings::GcmsSettings::default().deconv(),
+        ),
+        (
+            "width 10, 5 ions",
+            DeconvSettings {
+                width: Some(10.0),
+                min_peak_number: 5,
+                ..Default::default()
+            },
+        ),
+    ];
+    // Runs in which each target is assigned with at least the batch cutoff 0.8, per config. 0.8 needs
+    // an RI score above 0.51, i.e. within 2.3 s of the library RI.
+    let mut found = configs.clone().map(|_| vec![0usize; lib.len()]);
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
         let cal = RiCalibration::new(window_points(
@@ -474,11 +485,8 @@ fn targetsearch_library_finds_its_targets() {
         .unwrap();
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
-        for (n, d) in [DeconvSettings::default(), tuned.clone()]
-            .iter()
-            .enumerate()
-        {
-            let comps = deconvolute(&traces, &peaks, d);
+        for (n, (_, d)) in configs.iter().enumerate() {
+            let comps = deconvolute(&traces, &peaks, &c.scan_times_s, d);
             let ris = cal.component_ris(&c.scan_times_s, &comps);
             let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
             for (i, h) in id.assigned.iter().enumerate() {
@@ -487,29 +495,24 @@ fn targetsearch_library_finds_its_targets() {
                 };
                 found[n][h.compound] += 1;
                 // A clear hit is also the first of the component's hit list.
-                if n == 1 {
+                if n > 0 {
                     assert_eq!(id.hits[i][0].compound, h.compound, "{}", name(path));
                 }
             }
         }
     }
-    let per_target = |f: &[usize]| {
-        lib.iter()
-            .map(|c| c.name.as_str())
-            .zip(f.to_vec())
-            .collect::<Vec<_>>()
-    };
-    eprintln!(
-        "runs per target, default deconvolution: {:?}",
-        per_target(&found[0])
-    );
-    eprintln!(
-        "runs per target, width 10, 5 ions: {:?}",
-        per_target(&found[1])
-    );
-    let targets_found = |f: &[usize]| f.iter().filter(|n| **n > 0).count();
-    assert!(targets_found(&found[1]) >= 9, "{:?}", found[1]);
-    assert!(targets_found(&found[0]) < targets_found(&found[1]));
+    let targets = found
+        .each_ref()
+        .map(|f| f.iter().filter(|n| **n > 0).count());
+    for ((what, _), (f, t)) in configs.iter().zip(found.iter().zip(targets)) {
+        let per_target: Vec<_> = lib.iter().map(|c| c.name.as_str()).zip(f).collect();
+        eprintln!("{what}: {t} targets, runs per target {per_target:?}");
+    }
+    let [old, auto, tuned] = targets;
+    assert!(tuned >= 9, "{found:?}");
+    assert!(old < tuned);
+    // #279: the defaults find at least as many targets as the hand-tuned width.
+    assert!(auto >= tuned, "automatic width {auto}, width 10 {tuned}");
 }
 
 /// Result table of a real run: components whose own spectra form the library are found again, with
@@ -530,7 +533,7 @@ fn result_table_of_a_real_run() {
         .iter()
         .map(|p| traces.masses[p.row as usize])
         .collect();
-    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
     assert!(comps.len() > 10);
     let lib: Vec<LibraryCompound> = comps
         .iter()
@@ -632,7 +635,7 @@ fn component_detail_of_a_real_run() {
         .iter()
         .map(|p| traces.masses[p.row as usize])
         .collect();
-    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
     let k = comps
         .iter()
         .find(|k| k.peaks.len() > 3)
@@ -665,7 +668,7 @@ fn example_components_save_and_load_again() {
             .iter()
             .map(|p| traces.masses[p.row as usize])
             .collect();
-        let mut comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let mut comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         comps.sort_by_key(|k| k.apex_scan);
         assert!(comps.len() > 10, "{}", name(&path));
 
