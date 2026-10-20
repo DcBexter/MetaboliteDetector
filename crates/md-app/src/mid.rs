@@ -31,6 +31,7 @@ enum Kind {
 }
 
 struct Done {
+    method: Method,
     /// The substances with fragments the MIDs refer to.
     lib: Vec<LibraryCompound>,
     /// One per fit: the labelled runs' names, or the group.
@@ -46,6 +47,51 @@ struct Done {
     stats_text: Option<String>,
     errors: Vec<String>,
     took: Duration,
+}
+
+/// A move in the result view: run columns (old "Change column order…") or substances with their
+/// diagrams (old "Change order of diagrams…"), from one position to another.
+#[derive(Clone, Copy)]
+enum Move {
+    Run(usize, usize),
+    Compound(usize, usize),
+}
+
+impl Done {
+    /// Applies a move to the table, the diagrams and both exports; the values stay as determined.
+    fn apply(&mut self, m: Move) {
+        match m {
+            Move::Run(a, b) => {
+                self.columns.swap(a, b);
+                if !self.paths.is_empty() {
+                    self.paths.swap(a, b);
+                }
+                (self.mids.compounds.iter_mut())
+                    .flat_map(|c| &mut c.fragments)
+                    .for_each(|f| f.fits.swap(a, b));
+            }
+            Move::Compound(a, b) => self.mids.compounds.swap(a, b),
+        }
+        self.refresh();
+    }
+
+    /// Statistics and text exports of the MIDs in their current order.
+    fn refresh(&mut self) {
+        let per_run = self.method.per_run();
+        self.stats = (self.mids.compounds.iter())
+            .filter(|_| per_run)
+            .map(|c| {
+                (c.fragments.iter())
+                    .map(|f| (0..f.isotopomers).map(|k| group_stat(f, k)).collect())
+                    .collect()
+            })
+            .collect();
+        self.text = match per_run {
+            true => (self.mids).run_text(&self.lib, self.method, &self.columns),
+            false => self.mids.group_text(&self.lib),
+        };
+        self.stats_text = per_run.then(|| self.mids.stats_text(&self.lib));
+    }
 }
 
 struct Job {
@@ -245,31 +291,20 @@ impl MidWindow {
                         .collect();
                 }
             }
-            let per_run = method.per_run();
-            let stats = (mids.compounds.iter())
-                .filter(|_| per_run)
-                .map(|c| {
-                    (c.fragments.iter())
-                        .map(|f| (0..f.isotopomers).map(|k| group_stat(f, k)).collect())
-                        .collect()
-                })
-                .collect();
-            let text = match per_run {
-                true => mids.run_text(&mids_lib, method, &columns),
-                false => mids.group_text(&mids_lib),
-            };
-            let stats_text = per_run.then(|| mids.stats_text(&mids_lib));
-            Ok(Done {
+            let mut done = Done {
+                method,
                 lib: mids_lib,
                 columns,
                 paths: column_paths,
                 mids,
-                stats,
-                text,
-                stats_text,
+                stats: Vec::new(),
+                text: String::new(),
+                stats_text: None,
                 errors,
                 took: started.elapsed(),
-            })
+            };
+            done.refresh();
+            Ok(done)
         });
         self.job = Some(Job {
             total: nl + nu,
@@ -337,7 +372,7 @@ impl MidWindow {
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
-        let Some(r) = &self.result else { return };
+        let Some(r) = &mut self.result else { return };
         ui.separator();
         result_view(ui, r, &mut self.note);
     }
@@ -442,7 +477,7 @@ fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
 
 /// Substances, fragments and per column the MID ± CI of each isotopomer and R², with a bar chart.
 /// shortcut: every substance header is laid out each frame; fine for hundreds of substances.
-fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
+fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!(
             "{} with MIDs in {}",
@@ -467,21 +502,51 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
     for e in r.errors.iter().chain(&r.mids.errors) {
         ui.colored_label(error, e);
     }
+    let mut mv = None;
+    let n = r.mids.compounds.len();
     egui::ScrollArea::both().show(ui, |ui| {
         for (i, c) in r.mids.compounds.iter().enumerate() {
-            egui::CollapsingHeader::new(&r.lib[c.compound].name)
-                .id_salt(c.compound)
-                .default_open(i == 0)
-                .show(ui, |ui| {
-                    for (j, f) in c.fragments.iter().enumerate() {
-                        let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
-                        ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
-                        fragment_grid(ui, f, (&r.columns, &r.paths), stats, (c.compound, j));
-                        fragment_plot(ui, f, &r.columns, stats, (c.compound, j));
-                    }
-                });
+            let id = ui.make_persistent_id(("mid compound", c.compound));
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                i == 0,
+            );
+            let head = ui.horizontal(|ui| {
+                state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+                let name = egui::RichText::new(&r.lib[c.compound].name).strong();
+                if ui
+                    .add(egui::Label::new(name).sense(egui::Sense::click()))
+                    .clicked()
+                {
+                    state.toggle(ui);
+                }
+                if n < 2 {
+                    return;
+                }
+                let up = ui.add_enabled(i > 0, egui::Button::new("▲").small());
+                if up.on_hover_text("Move substance up").clicked() {
+                    mv = Some(Move::Compound(i, i - 1));
+                }
+                let down = ui.add_enabled(i + 1 < n, egui::Button::new("▼").small());
+                if down.on_hover_text("Move substance down").clicked() {
+                    mv = Some(Move::Compound(i, i + 1));
+                }
+            });
+            state.show_body_indented(&head.response, ui, |ui| {
+                for (j, f) in c.fragments.iter().enumerate() {
+                    let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
+                    ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
+                    let id = (c.compound, j);
+                    mv = fragment_grid(ui, f, (&r.columns, &r.paths), stats, id).or(mv);
+                    fragment_plot(ui, f, &r.columns, stats, id);
+                }
+            });
         }
     });
+    if let Some(m) = mv {
+        r.apply(m);
+    }
 }
 
 /// "Export …" and "Copy …" of one of the old program's text exports.
@@ -513,20 +578,31 @@ fn cell(v: Option<f64>) -> String {
         .map_or("–".into(), |v| format!("{v:.4}"))
 }
 
+/// The MID table of a fragment; ‹ › in a run's header move that run in every table and export.
 fn fragment_grid(
     ui: &mut egui::Ui,
     f: &FragmentMid,
     (columns, paths): (&[String], &[String]),
     stats: &[(f64, f64)],
     id: (usize, usize),
-) {
+) -> Option<Move> {
+    let mut mv = None;
+    let n = columns.len();
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         ui.label("");
         for (i, c) in columns.iter().enumerate() {
-            let head = ui.strong(c);
-            if let Some(path) = paths.get(i) {
-                head.on_hover_text(path);
-            }
+            ui.horizontal(|ui| {
+                if i > 0 && ui.small_button("‹").on_hover_text("Move run left").clicked() {
+                    mv = Some(Move::Run(i, i - 1));
+                }
+                let head = ui.strong(c);
+                if let Some(path) = paths.get(i) {
+                    head.on_hover_text(path);
+                }
+                if i + 1 < n && ui.small_button("›").on_hover_text("Move run right").clicked() {
+                    mv = Some(Move::Run(i, i + 1));
+                }
+            });
         }
         if !stats.is_empty() {
             ui.strong("Mean").on_hover_text(
@@ -569,6 +645,7 @@ fn fragment_grid(
         }
         ui.end_row();
     });
+    mv
 }
 
 /// Bars per isotopomer: one per run or group, and for the per-run methods the mean; whiskers show
@@ -649,5 +726,83 @@ impl MidWindow {
 
     pub fn busy(&self) -> bool {
         self.job.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use md_core::mid::{CompoundMid, MidFit};
+
+    /// Two substances, runs `a`/`b` with the shares `x` and `1 - x` per run.
+    fn done(method: Method, columns: &[&str]) -> Done {
+        let fit = |x: f64| {
+            Some(MidFit {
+                mids: vec![x, 1.0 - x],
+                r2: Some(x),
+                cis: vec![Some(x / 10.0), None],
+            })
+        };
+        let compound = |c: usize| CompoundMid {
+            compound: c,
+            fragments: vec![FragmentMid {
+                lo: 73,
+                hi: 74,
+                isotopomers: 2,
+                fits: (0..columns.len())
+                    .map(|j| fit(0.1 * (c * 3 + j + 1) as f64))
+                    .collect(),
+            }],
+        };
+        let mut d = Done {
+            method,
+            lib: ["Alanine", "Glycine"].map(LibraryCompound::new).to_vec(),
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            paths: Vec::new(),
+            mids: Mids {
+                compounds: vec![compound(0), compound(1)],
+                errors: Vec::new(),
+            },
+            stats: Vec::new(),
+            text: String::new(),
+            stats_text: None,
+            errors: Vec::new(),
+            took: Duration::ZERO,
+        };
+        d.refresh();
+        d
+    }
+
+    #[test]
+    fn exports_follow_the_moved_runs_and_substances() {
+        let mut d = done(Method::Formula, &["a", "b"]);
+        let before = (d.text.clone(), d.stats_text.clone());
+        d.apply(Move::Run(1, 0));
+        assert_eq!(d.columns, ["b", "a"]);
+        let head = "\tb\ta\t\tCI (b)\tCI (a)\t\tR2 (b)\tR2 (a)\n";
+        assert!(d.text.starts_with(head), "{}", d.text);
+        // Run b of Alanine is 0.2, run a 0.1: the values move with their column.
+        assert!(
+            d.text
+                .contains("73 (M0)\t0.2\t0.1\t\t0.02\t0.01\t\t0.2\t0.1\n")
+        );
+        d.apply(Move::Compound(0, 1));
+        assert!(d.text.starts_with("\tb\ta"));
+        assert!(d.text.find("Glycine").unwrap() < d.text.find("Alanine").unwrap());
+        let stats = d.stats_text.as_deref().unwrap();
+        assert!(stats.find("Glycine").unwrap() < stats.find("Alanine").unwrap());
+        // The table's mean of Glycine M0 (0.4 and 0.5) moved up with it.
+        assert!((d.stats[0][0][0].0 - 0.45).abs() < 1e-12);
+        d.apply(Move::Compound(1, 0));
+        d.apply(Move::Run(0, 1));
+        assert_eq!((d.text, d.stats_text), before);
+    }
+
+    #[test]
+    fn group_export_follows_the_moved_substances() {
+        let mut d = done(Method::Uncorrected, &["labelled"]);
+        d.apply(Move::Compound(1, 0));
+        assert!(d.text.starts_with("Glycine_73 (M0)\t0.4\t"));
+        assert!(d.stats.is_empty() && d.stats_text.is_none());
     }
 }

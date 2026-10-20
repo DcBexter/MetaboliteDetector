@@ -687,7 +687,9 @@ window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. 
 shown table (`mid::frag_export`). The worker also computes the mean and standard error of the labelled
 runs (`mid::group_stat`, per-run methods) and the old result window's text exports (`Mids::run_text`,
 `stats_text`, `group_text`, numbers in Qt's `%g` via `mid::qt_g`); the window shows them as table
-columns and bar plots and saves or copies the texts. Methods 2 and 3, the statistics and both per-run
+columns and bar plots and saves or copies the texts. ‹ › move a run column and ▲ ▼ a substance with its
+tables and plots; the window then swaps the fits or substances in its `Mids` and rebuilds the statistics
+and texts, so the exports follow the shown order (old reorder dialogs and deviations: algorithms.md §7g.7). Methods 2 and 3, the statistics and both per-run
 exports are tested against the old `MIDCompoundSeries`, methods 0 and 1 and the group export against the
 old `MIDWizard::Calculate` and `MIDResultWidget` (`tests/mid_series.rs`, harness
 `docs/reverse-engineering/tools/isotopes/make-midseries.sh`; the old program computes but never shows the
