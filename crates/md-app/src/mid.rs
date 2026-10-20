@@ -38,6 +38,8 @@ struct Done {
     columns: Vec<String>,
     /// Full path of each per-run column, for its hover; empty for the group methods.
     paths: Vec<String>,
+    /// Position of each column when determined, before the user moved runs.
+    runs: Vec<usize>,
     mids: Mids,
     /// Per-run methods: mean and standard error of the labelled runs per substance, fragment and
     /// isotopomer (old group `GL`); empty for the group methods.
@@ -58,11 +60,13 @@ enum Move {
 }
 
 impl Done {
-    /// Applies a move to the table, the diagrams and both exports; the values stay as determined.
+    /// Applies a move to the table, the diagrams and the exports. The values stay as determined:
+    /// the statistics keep summing the runs in their first order, so not even the last bit moves.
     fn apply(&mut self, m: Move) {
         match m {
             Move::Run(a, b) => {
                 self.columns.swap(a, b);
+                self.runs.swap(a, b);
                 if !self.paths.is_empty() {
                     self.paths.swap(a, b);
                 }
@@ -70,14 +74,31 @@ impl Done {
                     .flat_map(|c| &mut c.fragments)
                     .for_each(|f| f.fits.swap(a, b));
             }
-            Move::Compound(a, b) => self.mids.compounds.swap(a, b),
+            Move::Compound(a, b) => {
+                self.mids.compounds.swap(a, b);
+                if !self.stats.is_empty() {
+                    self.stats.swap(a, b);
+                }
+                if self.stats_text.is_some() {
+                    let mut first = self.mids.clone();
+                    for f in first.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
+                        let mut fits = vec![None; f.fits.len()];
+                        for (j, fit) in std::mem::take(&mut f.fits).into_iter().enumerate() {
+                            fits[self.runs[j]] = fit;
+                        }
+                        f.fits = fits;
+                    }
+                    self.stats_text = Some(first.stats_text(&self.lib));
+                }
+            }
         }
-        self.refresh();
+        self.text = self.mids_text();
     }
 
-    /// Statistics and text exports of the MIDs in their current order.
+    /// Statistics and text exports of the MIDs as determined.
     fn refresh(&mut self) {
         let per_run = self.method.per_run();
+        self.runs = (0..self.columns.len()).collect();
         self.stats = (self.mids.compounds.iter())
             .filter(|_| per_run)
             .map(|c| {
@@ -86,11 +107,15 @@ impl Done {
                     .collect()
             })
             .collect();
-        self.text = match per_run {
+        self.text = self.mids_text();
+        self.stats_text = per_run.then(|| self.mids.stats_text(&self.lib));
+    }
+
+    fn mids_text(&self) -> String {
+        match self.method.per_run() {
             true => (self.mids).run_text(&self.lib, self.method, &self.columns),
             false => self.mids.group_text(&self.lib),
-        };
-        self.stats_text = per_run.then(|| self.mids.stats_text(&self.lib));
+        }
     }
 }
 
@@ -296,6 +321,7 @@ impl MidWindow {
                 lib: mids_lib,
                 columns,
                 paths: column_paths,
+                runs: Vec::new(),
                 mids,
                 stats: Vec::new(),
                 text: String::new(),
@@ -578,6 +604,34 @@ fn cell(v: Option<f64>) -> String {
         .map_or("–".into(), |v| format!("{v:.4}"))
 }
 
+/// Header of run column `i`: its name with the path on hover, between ‹ › that move it.
+fn run_head(ui: &mut egui::Ui, (columns, paths): (&[String], &[String]), i: usize) -> Option<Move> {
+    let mut mv = None;
+    ui.horizontal(|ui| {
+        if i > 0
+            && ui
+                .small_button("‹")
+                .on_hover_text("Move run left")
+                .clicked()
+        {
+            mv = Some(Move::Run(i, i - 1));
+        }
+        let head = ui.strong(&columns[i]);
+        if let Some(path) = paths.get(i) {
+            head.on_hover_text(path);
+        }
+        if i + 1 < columns.len()
+            && ui
+                .small_button("›")
+                .on_hover_text("Move run right")
+                .clicked()
+        {
+            mv = Some(Move::Run(i, i + 1));
+        }
+    });
+    mv
+}
+
 /// The MID table of a fragment; ‹ › in a run's header move that run in every table and export.
 fn fragment_grid(
     ui: &mut egui::Ui,
@@ -587,22 +641,10 @@ fn fragment_grid(
     id: (usize, usize),
 ) -> Option<Move> {
     let mut mv = None;
-    let n = columns.len();
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         ui.label("");
-        for (i, c) in columns.iter().enumerate() {
-            ui.horizontal(|ui| {
-                if i > 0 && ui.small_button("‹").on_hover_text("Move run left").clicked() {
-                    mv = Some(Move::Run(i, i - 1));
-                }
-                let head = ui.strong(c);
-                if let Some(path) = paths.get(i) {
-                    head.on_hover_text(path);
-                }
-                if i + 1 < n && ui.small_button("›").on_hover_text("Move run right").clicked() {
-                    mv = Some(Move::Run(i, i + 1));
-                }
-            });
+        for i in 0..columns.len() {
+            mv = run_head(ui, (columns, paths), i).or(mv);
         }
         if !stats.is_empty() {
             ui.strong("Mean").on_hover_text(
@@ -759,6 +801,7 @@ mod tests {
             lib: ["Alanine", "Glycine"].map(LibraryCompound::new).to_vec(),
             columns: columns.iter().map(|c| c.to_string()).collect(),
             paths: Vec::new(),
+            runs: Vec::new(),
             mids: Mids {
                 compounds: vec![compound(0), compound(1)],
                 errors: Vec::new(),
@@ -796,6 +839,18 @@ mod tests {
         d.apply(Move::Compound(1, 0));
         d.apply(Move::Run(0, 1));
         assert_eq!((d.text, d.stats_text), before);
+    }
+
+    #[test]
+    fn moving_runs_keeps_the_statistics_bit_for_bit() {
+        // Alanine M0 is 0.1, 0.2, 0.3: the mean is 0.20000000000000004, summed backwards 0.19999999999999998.
+        let mut d = done(Method::Formula, &["a", "b", "c"]);
+        let (stats, stats_text) = (d.stats.clone(), d.stats_text.clone());
+        d.apply(Move::Run(2, 0));
+        d.apply(Move::Compound(0, 1));
+        d.apply(Move::Compound(1, 0));
+        assert_eq!(d.columns, ["c", "b", "a"]);
+        assert_eq!((d.stats, d.stats_text), (stats, stats_text));
     }
 
     #[test]
