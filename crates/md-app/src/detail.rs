@@ -124,73 +124,77 @@ pub fn panel(ui: &mut egui::Ui, run: &Run, mz: &mut f32, trace: &mut Trace) {
         return;
     };
     egui::Panel::right("hits").show(ui, |ui| {
-        ui.strong(format!("Component {}", k + 1));
-        let c = &run.components[k];
-        let d = component_detail(c, &run.peaks, &run.peak_masses);
-        let hit = shown_hit(run);
-        egui::Grid::new("component values").show(ui, |ui| {
-            let mut row = |name: &str, tip: &str, value: String| {
-                ui.label(name).on_hover_text(tip);
-                ui.label(value);
-                ui.end_row();
-            };
-            row(
-                "Mean S/N",
-                "Mean signal-to-noise of the ion peaks",
-                format!("{:.1}", d.mean_signal_to_noise),
-            );
-            row(
-                "Peak sharpness",
-                "Mean sharpness of the ion peaks",
-                format!("{:.2}", d.mean_sharpness),
-            );
-            let disc = if d.discrepancy < 0.0 {
-                "–".into()
-            } else {
-                format!("{:.1}", d.discrepancy)
-            };
-            row(
-                "Peak discrepancy",
-                "Mean peak quality (old \"Peak dis.indx\"); 0 is best",
-                disc,
-            );
-            // The rewrite reads centroid spectra only, so there is no profile count (architecture.md).
-            let ions = match hit {
-                Some((l, _)) => format!(
-                    "{} found / {} library",
-                    c.spectrum.len(),
-                    l.spectrum.masses.len()
-                ),
-                None => format!("{} found", c.spectrum.len()),
-            };
-            row(
-                "Ions (centroid)",
-                "Number of ions in the spectrum; spectra are centroided",
-                ions,
-            );
-            if let Some((_, h)) = hit {
-                row(
-                    "Overall score",
-                    "Score of the compared library hit",
-                    format!("{:.3}", h.overall),
-                );
-                row(
-                    "Spectrum score",
-                    "Similarity of the spectra",
-                    format!("{:.3}", h.spec_sim),
-                );
-                row(
-                    "RI score",
-                    "Similarity of the retention indices",
-                    h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")),
-                );
-            }
-        });
-        ui.separator();
-        peak_list(ui, &d.peaks, mz, trace);
-        ui.separator();
-        identify::hits_list(ui, run);
+        egui::ScrollArea::vertical().show(ui, |ui| body(ui, run, k, mz, trace));
     });
+}
+
+fn body(ui: &mut egui::Ui, run: &Run, k: usize, mz: &mut f32, trace: &mut Trace) {
+    ui.strong(format!("Component {}", k + 1));
+    let c = &run.components[k];
+    let d = component_detail(c, &run.peaks, &run.peak_masses);
+    let hit = shown_hit(run);
+    egui::Grid::new("component values").show(ui, |ui| {
+        let mut row = |name: &str, tip: &str, value: String| {
+            ui.label(name).on_hover_text(tip);
+            ui.label(value);
+            ui.end_row();
+        };
+        row(
+            "Mean S/N",
+            "Mean signal-to-noise of the ion peaks",
+            format!("{:.1}", d.mean_signal_to_noise),
+        );
+        row(
+            "Peak sharpness",
+            "Mean sharpness of the ion peaks",
+            format!("{:.2}", d.mean_sharpness),
+        );
+        let disc = if d.discrepancy < 0.0 {
+            "–".into()
+        } else {
+            format!("{:.1}", d.discrepancy)
+        };
+        row(
+            "Peak discrepancy",
+            "Mean peak quality (old \"Peak dis.indx\"); 0 is best",
+            disc,
+        );
+        // The rewrite reads centroid spectra only, so there is no profile count (architecture.md).
+        let ions = match hit {
+            Some((l, _)) => format!(
+                "{} found / {} library",
+                c.spectrum.len(),
+                l.spectrum.masses.len()
+            ),
+            None => format!("{} found", c.spectrum.len()),
+        };
+        row(
+            "Ions (centroid)",
+            "Number of ions in the spectrum; spectra are centroided",
+            ions,
+        );
+        if let Some((_, h)) = hit {
+            row(
+                "Overall score",
+                "Score of the compared library hit",
+                format!("{:.3}", h.overall),
+            );
+            row(
+                "Spectrum score",
+                "Similarity of the spectra",
+                format!("{:.3}", h.spec_sim),
+            );
+            row(
+                "RI score",
+                "Similarity of the retention indices",
+                h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")),
+            );
+        }
+    });
+    ui.separator();
+    peak_list(ui, &d.peaks, mz, trace);
+    ui.separator();
+    identify::hits_list(ui, run);
 }
 
 /// A right-aligned number cell, so decimals line up down the column.
