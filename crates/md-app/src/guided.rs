@@ -57,6 +57,10 @@ pub mod text {
         format!("Step {x} of {n}")
     }
 
+    pub fn result((runs, errors): (usize, usize)) -> String {
+        format!("Last run: {runs} runs, errors: {errors}. Finish shows the details.")
+    }
+
     pub fn finish_hint(window: &str) -> String {
         format!("Close the steps and open the window \"{window}\" with the values set")
     }
@@ -461,6 +465,9 @@ impl App {
             Step::StartBatch => {
                 let (cal, reference) = self.ri.for_search(self.library.as_deref());
                 (self.batch).job_row(ui, self.library.as_ref(), cal, reference);
+                if let Some(r) = self.batch.summary() {
+                    ui.label(text::result(r));
+                }
             }
             Step::MidMethod => self.mid.settings(ui),
             Step::MidRuns => {
@@ -473,6 +480,9 @@ impl App {
             Step::StartMid => {
                 let (cal, reference) = self.ri.for_search(self.library.as_deref());
                 (self.mid).start_row(ui, self.library.as_ref(), cal, reference);
+                if let Some(r) = self.mid.summary() {
+                    ui.label(text::result(r));
+                }
             }
         }
     }
@@ -488,5 +498,13 @@ mod tests {
             assert_eq!(Mode::from_key(m.key()), Some(m));
         }
         assert_eq!(Mode::from_key("wizard"), None);
+    }
+
+    #[test]
+    fn result_names_runs_and_errors() {
+        assert_eq!(
+            text::result((3, 1)),
+            "Last run: 3 runs, errors: 1. Finish shows the details."
+        );
     }
 }
