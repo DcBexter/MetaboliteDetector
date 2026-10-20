@@ -228,6 +228,25 @@ fn run(a: Args) -> Result<bool, String> {
         );
     }
     let rescan = a.rescan;
+    // How the table was made, for the settings file next to the output.
+    // File names only: the file may be shared and an absolute path would carry the user's directories.
+    let file = |p: &Path| {
+        p.file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into())
+    };
+    let named = |p: &Option<PathBuf>| p.as_deref().map_or("none".into(), file);
+    let mut how = vec![
+        ("LIBRARY", file(&a.library)),
+        ("SETTINGS_FILE", named(&a.settings)),
+        ("CALIBRATION", named(&a.calibration)),
+        (
+            "SHIFT_REFERENCE",
+            a.shift_reference.clone().unwrap_or_else(|| "none".into()),
+        ),
+        ("UNTARGETED", a.untargeted.to_string()),
+        ("RESCAN", rescan.to_string()),
+        ("RUNS_GIVEN", a.runs.len().to_string()),
+    ];
 
     // Open the output first: a wrong path must not cost a whole scan.
     let mut out: Box<dyn Write> = match &a.output {
@@ -248,6 +267,13 @@ fn run(a: Args) -> Result<bool, String> {
     let table =
         table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
+    how.extend([
+        ("RT_ONLY", prepared.is_rt_only().to_string()),
+        ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
+        ("RUNS_SCANNED", runs.len().to_string()),
+        ("UNKNOWN_SUBSTANCES", more.extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", more.rescanned.to_string()),
+    ]);
     let io = |e: std::io::Error| format!("output: {e}");
     table.write_csv(&mut out).map_err(io)?;
     out.flush().map_err(io)?;
@@ -259,7 +285,7 @@ fn run(a: Args) -> Result<bool, String> {
         table.write_groups_file(p).map_err(io)?;
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
-        ts.write_csv(&[], f).map_err(io)?;
+        ts.write_csv(&how, f).map_err(io)?;
         if !a.ion_integrals {
             // An older ions file would not match this results file.
             std::fs::remove_file(ions_path(p)).ok();
@@ -387,6 +413,13 @@ mod tests {
         assert!(run(args(&line).unwrap().unwrap()).unwrap());
         let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
         assert!(settings.contains("\nQUANT_ION_NUMBER,2\n"), "{settings}");
+        assert!(settings.contains("\nUNTARGETED,false\n"), "{settings}");
+        assert!(settings.contains("\nCALIBRATION,none\n"), "{settings}");
+        assert!(settings.contains("\nLIBRARY,lib.msl\n"), "{settings}");
+        assert!(
+            settings.contains("\nIONS_ADDED_BY_RESCAN,0\n"),
+            "{settings}"
+        );
         assert!(!dir.join("out.ions.csv").exists());
 
         // The ion integrals are written on request: a line per substance and quant ion.
@@ -481,6 +514,10 @@ NUM PEAKS: 12
             .map(|l| l.split(',').next().unwrap())
             .collect();
         assert_eq!(names, ["early", "Unknown 1"], "{csv}");
+        let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
+        assert!(settings.contains("\nUNTARGETED,true\n"), "{settings}");
+        assert!(settings.contains("\nUNKNOWN_SUBSTANCES,1\n"), "{settings}");
+        assert!(settings.contains("\nRUNS_SCANNED,1\n"), "{settings}");
 
         let shift = |extra: &str| run(args(&format!("{line} {extra}")).unwrap().unwrap());
         assert!(

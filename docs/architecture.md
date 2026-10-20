@@ -377,7 +377,11 @@ integral (`ion_integrals`, the same rule as the cell: largest peak with at least
 writes `FILE.settings.csv` (`Setting,Value`: the batch filters and `QUANT_*`, the normalisation and the number
 of removed runs and substances; `TableSettings::write_csv`) and, on request ("Export quant ions" /
 `md-cli --ion-integrals`), `FILE.ions.csv` (`Substance,Quant_ion,<run>...`, raw integrals, empty = not found;
-`Table::write_ions_csv`). Not ported yet: the ANOVA p-value column.
+`Table::write_ions_csv`); the settings file also names the library, RT-only mode, search cut-off and the
+number of scanned runs, unknown substances and ions added by the rescan (md-cli: library, settings and
+calibration file, shift reference, `--untargeted`, `--rescan`). `scripts/r/load_results.R` loads both next to the
+table as `settings` and `ions`. The scan result keeps an index per run (`Scan::index`), so the tooltip and the ion
+lines look up a hit in constant time. The md-cli file names files, not paths. Not ported yet: the ANOVA p-value column (#203).
 
 All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
