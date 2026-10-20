@@ -386,7 +386,8 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+            let mut out = ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+            out.textures_delta.clear();
         };
         for _ in 0..3 {
             step(&mut app, vec![]);
