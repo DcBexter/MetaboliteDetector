@@ -38,11 +38,12 @@ impl App {
             None => format!("{} components (click a dot)", r.components.len()),
         };
         format!(
-            "{} — {} scans — scan {} at {:.3} min{} (←/→ to step) — {shown} — {}",
+            "{} — {} scans — scan {} at {:.3} {}{} (←/→ to step) — {shown} — {}",
             r.path.display(),
             r.data.scan_count(),
             r.scan + 1,
-            r.minutes[r.scan],
+            self.view.time(r.minutes[r.scan]),
+            self.view.unit.label(),
             self.ri.ri_note(r, r.scan),
             self.load_note
         )
