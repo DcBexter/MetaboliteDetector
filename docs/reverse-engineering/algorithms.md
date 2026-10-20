@@ -855,6 +855,19 @@ Observed with objdump on `DataTableModel::getData` (0x4c88a2), `CompoundExporter
 - `CompoundExporter` writes the model generically: the header row, then every cell's display text. The separator is a TAB (0xa810ab), the line end `\n`, no quoting, despite the `*.csv` file filter. The new export uses comma and RFC 4180 quoting and leaves missing values empty instead of -1.
 - Find Compound: for each component's list of hits, keep a hit whose library compound has the same name (string compare) as the chosen one and an overall score of at least `LS_CUTOFF`; list (score, component), sorted descending (`qSort` with `qGreater`).
 
+## 7g. Component panel and split spectrum plot (ported in `crates/md-core/src/detail.rs`)
+
+Observed with objdump on the component panel labels, `Compound::getAveragePeakQuality`, `getAverageSignalToNoise`, `getPeakEssentials` and `SplitSpectrumPlot::setSplitData` (0x41d90a).
+
+- Peak dis.indx (peak discrepancy index): `getAveragePeakQuality`, the mean of `PeakEssential::getQuality` over the compound's `map<float mass, PeakEssential*>`. 0 is best. An empty map gives -1.0. The same value is needed for the quality filter of #58.
+- S/N: `getAverageSignalToNoise`, the mean of the signal-to-noise over the same map; 0 for an empty map.
+- Peak sharp.: the mean of `getSharpness` over `getPeakEssentials()`. The tooltip says "highest", but the code takes the mean.
+- The map holds one peak per mass. Two peaks of the same mass keep the first, which is the sharpest (§4.5). The rewrite does the same (`component_detail`).
+- The old panel lists at most 10 hits; the rewrite keeps the 15 of the hit table.
+- Split plot: `setSplitData` builds two curves. The first one is the found spectrum as is, the second one is the library spectrum with every intensity negated (`xorpd` with the sign mask), so the library hangs below the axis. Both are set with `QwtPlotCurve::setSamples`. Observed.
+- Not decoded (shortcuts in the rewrite): how the old difference mode computes its data, the `SpectrumMode` values, and the layout of `exportCSV` / `exportToClipBoard`. The rewrite subtracts the library from the found spectrum after the same normalisation (without one the base peak, because the found heights are counts and the library is scaled to 0..999; found minus library, on the union of both nominal masses) and exports both spectra and their difference as CSV; the clipboard gets the same text.
+- Ion counts: the rewrite reads centroid spectra only, so "ions" and "centroid ions" are the same number, and there is no profile switch (architecture.md).
+
 ## 7e. Adding a found compound to a library, copying RTs (Observed; ported in `crates/md-core/src/library_add.rs`)
 
 Read from the disassembly of `DialogAddLib::on_okButton_clicked` (0x4ca1be), `Ui_DialogAddLib::retranslateUi`, `LibrarySearch::addCompoundSpectrum` (0x627f88) and `MainWindow::copyRT` (0x3cacc2).

@@ -414,3 +414,35 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
         assert!(f.mids[1..].iter().all(|m| m.abs() < 0.03), "{:?}", f.mids);
     }
 }
+
+#[test]
+fn component_detail_of_a_real_run() {
+    use md_core::detail::{compare, component_detail};
+    use md_core::library::LibraryCompound;
+    use md_core::spectrum::Normalization;
+
+    let Some(path) = runs().into_iter().next() else {
+        return;
+    };
+    let c = md_core::andi::read(&path).unwrap();
+    let mut traces = IonTraces::new(&c).unwrap();
+    let peaks = traces.detect_peaks(&PeakSettings::default());
+    let masses: Vec<u32> = peaks
+        .iter()
+        .map(|p| traces.masses[p.row as usize])
+        .collect();
+    let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+    let k = comps
+        .iter()
+        .find(|k| k.peaks.len() > 3)
+        .expect("a component with ions");
+    let d = component_detail(k, &peaks, &masses);
+    assert!(d.peaks.len() <= k.peaks.len() && d.peaks.len() >= 3);
+    assert!(d.mean_signal_to_noise > 0.0 && d.mean_sharpness > 0.0 && d.discrepancy >= 0.0);
+    let mut lib = LibraryCompound::new("Self");
+    lib.spectrum.masses = k.spectrum.iter().map(|s| s.0 as f32).collect();
+    lib.spectrum.values = k.spectrum.iter().map(|s| s.1 as i32).collect();
+    let cmp = compare(&k.spectrum, &lib.spectrum, Normalization::BasePeak);
+    assert_eq!(cmp.found, cmp.library);
+    assert!(cmp.difference().iter().all(|d| *d == 0.0));
+}
