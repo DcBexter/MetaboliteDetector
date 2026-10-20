@@ -190,7 +190,8 @@ fn table(
     lib: &Library,
 ) -> Option<usize> {
     let mut clicked = None;
-    ui.scope(|ui| {
+    // Scrolls sideways when the window is narrower than the columns, as the batch table does.
+    egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         TableBuilder::new(ui)
             .id_salt("results table")

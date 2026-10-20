@@ -106,6 +106,11 @@ impl App {
                     |a| &mut a.batch.open,
                 ),
                 (
+                    "Mass isotopomer distributions…",
+                    "Labelling experiments: isotopomer distributions of the library's fragments across runs",
+                    |a| &mut a.mid.open,
+                ),
+                (
                     "Biomarker statistics…",
                     "Group comparison, box plots and PCA of the batch table",
                     |a| &mut a.statistics.open,
