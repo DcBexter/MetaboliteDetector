@@ -266,9 +266,12 @@ Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_
 components in parallel and then assigns library compounds greedily by best overall score, each library compound
 and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
-spectrum, so no fragment pre-filter is needed (table above).
+spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
+`library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
+(`PreparedLibrary::with_fragment_filter`, file-formats.md §6.3): only entries that share at least 4 of the 5
+strongest fragments of the component are scored, as in the old NIST search.
 
-The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl` path on the command line), identifies every
+The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl`/`.msp`/`.sdf` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
 above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
 spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
@@ -285,7 +288,8 @@ Conscious deviations:
   times / 1000 with the same sigma instead (§5.6), and with `LS_USE_RI` on it drops every entry more than 60 s
   away. That is not ported: times of different instruments and temperature programs are not comparable. The
   sample library `lib_aa.lbr` lists Glycine 3TMS at 418 s, the example runs elute it at 313 s, so the old rule
-  would remove the correct hit there.
+  would remove the correct hit there. The old NIST search drops entries without RI and finds nothing for a
+  component without RI; here those are scored by spectrum as well.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
   which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
@@ -294,8 +298,10 @@ Conscious deviations:
   no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
   yields the same assignments above it, because the greedy assignment takes pairs in descending score.
 - **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
-- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
-  not ported (semantics unknown, §5.9).
+- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM` and the Wave score variants are not ported (semantics
+  unknown, §5.9). The NIST pre-filter uses the old defaults `SQL_MAX_NUMBER_FRAGMENTS` 5 and
+  `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS` 3 as constants. A NIST file is opened like any other library; the old
+  separate NIST path and "NIST search..." action for one component are not ported.
 
 ## Batch quantification
 
@@ -434,7 +440,9 @@ The golden test found three porting errors in peak detection, now fixed:
 ## Libraries
 
 `md_core::library` reads the old binary `.lbr` libraries (gzip or raw, versions 2 to 5, layout in
-[file-formats.md](reverse-engineering/file-formats.md) §1) and imports and exports AMDIS MSL (§6).
+[file-formats.md](reverse-engineering/file-formats.md) §1), imports and exports AMDIS MSL (§6), and imports
+NIST text (`.sdf`, §6.3) and NIST MSP text (`.msp`, §6.4). NIST data is licensed and never committed; the
+tests use the synthetic `tests/data/synthetic-nist.sdf`.
 Library files come from users, so reading is a trust boundary: every length is checked against the
 remaining bytes before anything is allocated, check values are verified, gzip output is capped at 1 GiB,
 and errors are returned instead of panics. Versions 4 and 5 carry peaks and a model peak per compound
