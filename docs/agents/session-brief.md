@@ -25,6 +25,8 @@ specific to it; the rest is here. Shared rules live in the workflow kit and are 
 ## Flow
 
 1. `node .vendor/workflow-kit/scripts/board.mjs start ISSUE` (only for issues in Ready), then work on the branch it opens.
+   In a fresh worktree run `scripts/link-example-data.ps1` (or `.sh`) before testing: without the example data the golden tests
+   only print "skipped" and stay green.
 2. `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` are green. A UI change also
    gets the screenshot check from the [UI checklist](../ui-quality.md).
 3. `board.mjs done ISSUE PR` waits for CI and the automatic review; then `board.mjs done ISSUE PR FILE` with the handoff comment, then `board.mjs merge PR`.

@@ -31,6 +31,7 @@ From source (any OS with Rust): `cargo run --release -p metabolite-detector`.
 ```
 
 On Linux/macOS: `example-data/fetch.sh`. The runs land in `example-data/TargetSearchData/inst/gc-ms-data/`.
+Their library is `library.txt` in the same folder (TargetSearch format, RI on its FAME scale in ms): open it with **File → Open library…** or pass it to `md-cli --library`.
 
 ## Load runs
 
