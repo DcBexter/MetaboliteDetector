@@ -311,6 +311,14 @@ fn biomarker_table(
     clicked
 }
 
+#[cfg(test)]
+impl Statistics {
+    /// Compares replicate group `a` with `b`, for the screenshots.
+    pub fn compare(&mut self, a: &str, b: &str) {
+        self.sides = [vec![a.into()], vec![b.into()]];
+    }
+}
+
 impl Statistics {
     /// `table` is the batch table as shown (normalised), with a number that changes with it.
     pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>, z_scored: bool) {

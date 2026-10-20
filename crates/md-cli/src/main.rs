@@ -3,12 +3,15 @@
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
-use md_core::batch::{ShiftReference, TableSettings, complete_scan, scan_runs, table};
+use md_core::batch::{
+    RunResult, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs, settings_path,
+    table,
+};
 use md_core::library;
 use md_core::ri::RiCalibration;
 use md_core::search::{PreparedLibrary, SearchSettings};
@@ -26,7 +29,8 @@ Options:
   -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
   -o, --output FILE           CSV file (default: standard output); with --replicates the group of each
-                              run goes to FILE.groups.csv
+                              run goes to FILE.groups.csv,
+                              the settings used to FILE.settings.csv
   -j, --parallel N            runs in memory at once (default 4)
       --replicates REGEX      replicate group = first capture group of the file name
       --min-reproducibility F keep a substance only if a group quantifies it in this share of its runs
@@ -37,6 +41,7 @@ Options:
       --exclude-ions LIST     m/z ranges not picked as quant ions, e.g. 73,147-149 (default: QUANT_EXCL_IONS)
       --min-sn F              an ion counts only with at least this signal-to-noise ratio
       --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
+      --ion-integrals         also write the integral of every quant ion to FILE.ions.csv (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
       --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
@@ -58,6 +63,7 @@ struct Args {
     exclude_ions: Option<Vec<(f32, f32)>>,
     min_sn: Option<f32>,
     max_discrepancy: Option<f32>,
+    ion_integrals: bool,
     untargeted: bool,
     rescan: bool,
     shift_reference: Option<String>,
@@ -102,6 +108,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         exclude_ions: None,
         min_sn: None,
         max_discrepancy: None,
+        ion_integrals: false,
         untargeted: false,
         rescan: false,
         shift_reference: None,
@@ -146,6 +153,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--exclude-ions" => a.exclude_ions = Some(ranges(&text()?)?),
             "--min-sn" => a.min_sn = Some(num(0.0, 1e6)? as f32),
             "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
+            "--ion-integrals" => a.ion_integrals = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
             "--shift-reference" => a.shift_reference = Some(text()?),
@@ -156,6 +164,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
     a.library = library.ok_or("--library is required")?;
     if a.runs.is_empty() {
         return Err("no runs given".into());
+    }
+    if a.ion_integrals && a.output.is_none() {
+        return Err("--ion-integrals needs -o".into());
     }
     Ok(Some(a))
 }
@@ -233,9 +244,20 @@ fn run(a: Args) -> Result<bool, String> {
     for e in &errors {
         eprintln!("error: {e}");
     }
-    // The replicate groups go next to a CSV file; standard output has no room for a second table.
+    // Groups, settings and ion integrals go next to a CSV file; standard output has no room for more tables.
     if let Some(p) = &a.output {
         table.write_groups_file(p).map_err(io)?;
+        let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
+        let f = create(&settings_path(p)).map_err(io)?;
+        ts.write_csv(&[], f).map_err(io)?;
+        if !a.ion_integrals {
+            // An older ions file would not match this results file.
+            std::fs::remove_file(ions_path(p)).ok();
+        } else {
+            let by_column: Vec<&RunResult> = table.sources.iter().map(|i| &runs[*i]).collect();
+            let f = create(&ions_path(p)).map_err(io)?;
+            table.write_ions_csv(&by_column, &ts, f).map_err(io)?;
+        }
     }
     eprintln!(
         "{} runs scanned in {:.2?} ({} failed): {} substances",
@@ -359,6 +381,30 @@ mod tests {
         assert!(run(args(&format!("{line} --rescan")).unwrap().unwrap()).unwrap());
         let from_cmp = std::fs::read_to_string(dir.join("out.csv")).unwrap();
         assert_eq!(from_cmp, from_run.replace("ctrl_1.cdf", "ctrl_1.cmp"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn settings_and_ion_integrals_go_next_to_the_csv() {
+        let dir = std::env::temp_dir().join(format!("md-cli-files-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
+        assert!(settings.contains("\nQUANT_ION_NUMBER,2\n"), "{settings}");
+        assert!(!dir.join("out.ions.csv").exists());
+
+        // The ion integrals are written on request: a line per substance and quant ion.
+        assert!(run(args(&format!("--ion-integrals {line}")).unwrap().unwrap()).unwrap());
+        let ions = std::fs::read_to_string(dir.join("out.ions.csv")).unwrap();
+        assert!(
+            ions.starts_with("\u{feff}Substance,Quant_ion,ctrl_1.cdf\nearly,"),
+            "{ions}"
+        );
+        assert_eq!(ions.lines().count(), 1 + 2 * 2, "{ions}");
+        assert!(args("-l lib.msl --ion-integrals a.cdf").is_err());
+        // A later export without the flag removes the ions file, which no longer matches.
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        assert!(!dir.join("out.ions.csv").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

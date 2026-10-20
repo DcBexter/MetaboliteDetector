@@ -87,6 +87,23 @@ impl TofCalibration {
         s
     }
 
+    /// The calibration pairs (TOF bin, m/z) a `.mzcalib` file lists after its parameters; lines that
+    /// are not two numbers are skipped.
+    pub fn parse_pairs(text: &str) -> Vec<(f32, f64)> {
+        text.lines()
+            .skip_while(|l| !l.starts_with("Calibration table"))
+            .skip(1)
+            .filter_map(|l| {
+                let mut f = l.split_whitespace();
+                let (bin, mz) = (
+                    f.next()?.parse::<f32>().ok()?,
+                    f.next()?.parse::<f64>().ok()?,
+                );
+                (f.next().is_none() && bin.is_finite() && mz.is_finite()).then_some((bin, mz))
+            })
+            .collect()
+    }
+
     pub fn write(&self, path: impl AsRef<Path>, pairs: &[(f32, f64)]) -> Result<(), TofError> {
         let path = path.as_ref();
         std::fs::write(path, self.to_text(pairs)).map_err(|e| TofError::Io(path.to_path_buf(), e))
@@ -122,6 +139,24 @@ impl TofCalibration {
             false => Err(TofError::Singular),
         }
     }
+}
+
+/// The TOF bin of the peak near `near` in a summed bin spectrum (bin order): the intensity-weighted
+/// centre of the points at or above half of the highest one within `half_width` bins. None when
+/// the bins around `near` carry no signal.
+pub fn peak_bin(spectrum: &[(f32, f64)], near: f32, half_width: f32) -> Option<f32> {
+    let lo = spectrum.partition_point(|p| p.0 < near - half_width);
+    let hi = spectrum.partition_point(|p| p.0 <= near + half_width);
+    let window = &spectrum[lo..hi];
+    let top = window.iter().map(|p| p.1).fold(0.0, f64::max);
+    if top <= 0.0 {
+        return None;
+    }
+    let (weighted, total) = window
+        .iter()
+        .filter(|p| p.1 >= top / 2.0)
+        .fold((0.0, 0.0), |(w, t), p| (w + f64::from(p.0) * p.1, t + p.1));
+    Some((weighted / total) as f32)
 }
 
 /// C's `%.18g`, which `QTextStream::setRealNumberPrecision(18)` selects for doubles.
@@ -183,6 +218,26 @@ mod tests {
         assert_eq!(g18(1e18), "1e+18");
         assert_eq!(g18(-2.5), "-2.5");
         assert_eq!(g18(0.0), "0");
+    }
+
+    #[test]
+    fn pairs_come_back_from_the_file_text() {
+        let c = TofCalibration {
+            coefficients: vec![1.0, 2.0],
+        };
+        let pairs = [(1000.0, 28.0), (2500.5, 73.25)];
+        assert_eq!(TofCalibration::parse_pairs(&c.to_text(&pairs)), pairs);
+        assert!(TofCalibration::parse_pairs("Polynomial order: 0").is_empty());
+    }
+
+    #[test]
+    fn peak_bin_is_the_centre_of_the_peak_near_the_hint() {
+        let spectrum: Vec<(f32, f64)> = (990..1011)
+            .map(|b| (b as f32, 100.0 - 10.0 * ((b - 1000) as f64).abs()))
+            .chain([(5000.0, 1e9)])
+            .collect();
+        assert_eq!(peak_bin(&spectrum, 1003.0, 8.0), Some(1000.0));
+        assert_eq!(peak_bin(&spectrum, 3000.0, 8.0), None);
     }
 
     #[test]

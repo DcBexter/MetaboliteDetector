@@ -236,6 +236,7 @@ fn main() {
                         .collect(),
                     rescanned: false,
                     rescued: Vec::new(),
+                    alternatives: Vec::new(),
                 })
                 .collect(),
             unknown: Vec::new(),
