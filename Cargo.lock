@@ -1920,14 +1920,14 @@ dependencies = [
 
 [[package]]
 name = "md-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "md-core",
 ]
 
 [[package]]
 name = "md-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "nalgebra",
@@ -1963,7 +1963,7 @@ dependencies = [
 
 [[package]]
 name = "metabolite-detector"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui_extras",
