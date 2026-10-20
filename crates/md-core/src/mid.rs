@@ -3,6 +3,15 @@
 //! fragment with 0, 1, 2 … labelled atoms; the shares of that mix are the MID. Every correction is a
 //! linear least-squares fit; R² and confidence intervals come from the same fit as in the old program.
 
+mod frag;
+mod series;
+
+pub use frag::{FragExport, frag_export, parse_fragments};
+pub use series::{
+    CompoundMid, Fragment, FragmentMid, Method, Mids, determine, fragments, intensities,
+    mid_library,
+};
+
 use crate::isotope::{Formula, IsotopeTable};
 
 /// One fitted MID. `None` stands for the old program's `-1` ("not available").
