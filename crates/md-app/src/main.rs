@@ -19,6 +19,7 @@ mod layout;
 mod library_editor;
 mod loading;
 mod menu;
+mod mid;
 mod results;
 mod run_list;
 mod settings;
@@ -84,6 +85,7 @@ struct App {
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     statistics: statistics::Statistics,
+    mid: mid::MidWindow,
     results: results::Results,
     export: export::Export,
     view: view::View,
@@ -111,6 +113,7 @@ impl Default for App {
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             statistics: statistics::Statistics::default(),
+            mid: mid::MidWindow::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
@@ -196,6 +199,8 @@ impl App {
         let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
+        self.mid.analysis = self.settings.key();
+        self.mid.window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);

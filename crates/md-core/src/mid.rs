@@ -1,5 +1,5 @@
 //! Mass isotopomer distributions (MID) of labelled fragments, the old `tools::MIDSolver`
-//! (algorithms.md §8). A measured fragment spectrum `M+0 … M+n` is explained as a mix of the
+//! (algorithms.md §7g). A measured fragment spectrum `M+0 … M+n` is explained as a mix of the
 //! fragment with 0, 1, 2 … labelled atoms; the shares of that mix are the MID. Every correction is a
 //! linear least-squares fit; R² and confidence intervals come from the same fit as in the old program.
 

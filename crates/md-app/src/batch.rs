@@ -12,6 +12,8 @@ use md_core::batch::{
     Completed, RescanSettings, RunResult, ScanSettings, ShiftReference, Table, TableSettings,
     complete_scan, scan_runs, table,
 };
+use md_core::library::LibraryCompound;
+use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
@@ -194,21 +196,7 @@ impl Batch {
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
         );
-        // The library was prepared with the app's search settings, which differ only in the cutoff.
-        let s = ScanSettings {
-            peaks: self.analysis.0,
-            deconv: self.analysis.1.clone(),
-            search: SearchSettings {
-                cutoff: SearchSettings::default().cutoff,
-                ..lib.settings.clone()
-            },
-            calibration: cal.cloned(),
-            // Like the single-run search: only a substance with an RI can be the reference.
-            shift: cal
-                .and(reference)
-                .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
-            untargeted: self.options.untargeted,
-        };
+        let s = scan_settings(&self.analysis, lib, cal, reference, self.options.untargeted);
         let rescan = self.options.rescan.then(|| RescanSettings {
             window_s: self.options.rescan_window_s,
             ..Default::default()
@@ -419,9 +407,13 @@ impl Batch {
                     self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
-                    if let Some(note) = export_button(ui, shown) {
-                        self.note = note;
-                    }
+                    ui.horizontal(|ui| {
+                        let saved =
+                            export_button(ui, shown).or_else(|| frag_button(ui, shown, scan));
+                        if let Some(note) = saved {
+                            self.note = note;
+                        }
+                    });
                     table_view(ui, shown, &self.norm);
                 }
             }
@@ -434,6 +426,71 @@ impl Batch {
             None => {}
         }
     }
+}
+
+/// Scan settings of the app for `lib`; the MID window scans with the same.
+pub fn scan_settings(
+    analysis: &crate::settings::Key,
+    lib: &Library,
+    cal: Option<&RiCalibration>,
+    reference: Option<(&str, f64)>,
+    untargeted: bool,
+) -> ScanSettings {
+    // The library was prepared with the app's search settings, which differ only in the cutoff.
+    ScanSettings {
+        peaks: analysis.0,
+        deconv: analysis.1.clone(),
+        search: SearchSettings {
+            cutoff: SearchSettings::default().cutoff,
+            ..lib.settings.clone()
+        },
+        calibration: cal.cloned(),
+        // Like the single-run search: only a substance with an RI can be the reference.
+        shift: cal
+            .and(reference)
+            .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
+        untargeted,
+    }
+}
+
+/// "Export MIDs" of the old batch table: isotopomer shares of the fragments in each shown
+/// substance's `FRAG` feature. Returns a note after a save attempt.
+fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<String> {
+    if !ui
+        .button("Export MIDs (FRAG)…")
+        .on_hover_text("Total ion counts and isotopomer shares of the fragments in each substance's FRAG feature, e.g. (174/8)(261/5).")
+        .clicked()
+    {
+        return None;
+    }
+    let p = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name("mids.csv")
+        .save_file()?;
+    let lib = &scan.lib.compounds;
+    // Unknowns of an untargeted scan follow the library's entries.
+    let compounds: Vec<(usize, &LibraryCompound)> = (t.rows.iter())
+        .filter_map(|r| {
+            let c = lib
+                .get(r.compound)
+                .or_else(|| scan.extra.get(r.compound - lib.len()))?;
+            Some((r.compound, c))
+        })
+        .collect();
+    let e = frag_export(&scan.runs, &compounds);
+    let mut note = match std::fs::write(&p, &e.csv) {
+        Ok(()) => format!("Saved {}", p.display()),
+        Err(err) => format!("Export failed: {err}"),
+    };
+    for m in &e.errors {
+        note += &format!("\n{m}");
+    }
+    match e.warnings.len() {
+        0 => {}
+        1 => note += &format!("\n{}", e.warnings[0]),
+        n => note += &format!("\n{n} substances have no fragment (FRAG) defined."),
+    }
+    Some(note)
 }
 
 /// The export has the values the table shows. Returns a note after a save attempt.

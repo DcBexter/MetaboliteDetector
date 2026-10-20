@@ -34,7 +34,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | #23 |
 | 14 | Statistics | `BiomarkerDialog`, `tools::Statistics`, `BoxPlot`, `HistogramPlot` | Two-group biomarker table (means, ratio, p-value, hits), independent/paired samples, box plots. | #24 |
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | #24 |
-| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | #28 |
+| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | done (#28): four corrections, M1, tracer, result tree with CSV, FRAG export; plots and group statistics #141 |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
 | 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), MSL export as nominal / profile / FWHM done (#84, centroiding and Nominal merging: #114); editor #12; add compound / copy RTs done (#80, "Modify entry" spectrum merge not ported) |
 | 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | #21 |
@@ -64,7 +64,7 @@ by exactly one issue.
 | 18 | MSL export: merge peaks for Nominal, centroiding of profile spectra, FWHM edge cases | #114 |
 | 13 | Internal standard, summed signal, pool (with pool mapping export), z-score | #23 |
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
-| 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots | #28 |
+| 16 | MID wizard: MID plots, group statistics with StdErr, clipboard | #141 |
 | 20 | CSV results + R template instead of the embedded R console | #26 |
 | files | `.cmp` versions 1 to 3 (older releases, no sample) | — |
 | files | High-resolution runs (`getDataType() == 2`) | #34 |

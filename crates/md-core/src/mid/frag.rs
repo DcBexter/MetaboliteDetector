@@ -1,5 +1,5 @@
 //! "Export MIDs" of the batch table (old `BatchQuantificationResultWidget::exportMIDs`,
-//! algorithms.md §8.4): the `FRAG` feature of a substance, e.g. `(174/8)(261/5)`, names fragments
+//! algorithms.md §7g.5): the `FRAG` feature of a substance, e.g. `(174/8)(261/5)`, names fragments
 //! by first ion and number of ions, and the export lists their uncorrected isotopomer shares per run.
 
 use std::fmt::Write;

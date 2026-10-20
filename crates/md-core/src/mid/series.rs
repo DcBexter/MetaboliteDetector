@@ -1,8 +1,10 @@
-//! The MID wizard above the solver (old `MIDWizard`, `MIDCompoundSeries`, algorithms.md §8.3):
+//! The MID wizard above the solver (old `MIDWizard`, `MIDCompoundSeries`, algorithms.md §7g):
 //! fragments come from the library, intensities from a batch scan, and one of four corrections
 //! turns them into MIDs.
 
 use super::{MidFit, correct_by_formula, correct_by_reference, replicate_mean};
+use std::fmt::Write;
+
 use rayon::prelude::*;
 
 use crate::batch::{Found, RunResult};
@@ -106,6 +108,47 @@ pub struct CompoundMid {
 pub struct Mids {
     pub compounds: Vec<CompoundMid>,
     pub errors: Vec<String>,
+}
+
+impl Mids {
+    /// The result tree as CSV: a row `Name_ion (Mk)` per substance, fragment and isotopomer; per
+    /// column (a run, or the labelled group) the MID, then the CIs, then R², with the old
+    /// `outputMIDDataToStream` header labels `CI (…)` and `R2 (…)`. Cells without a value stay empty.
+    pub fn csv(&self, lib: &[LibraryCompound], columns: &[String]) -> String {
+        let mut s = String::from("Ion");
+        for (pre, post) in [("", ""), ("CI (", ")"), ("R2 (", ")")] {
+            columns
+                .iter()
+                .for_each(|c| _ = write!(s, "\t{pre}{c}{post}"));
+        }
+        s.push('\n');
+        let values: [fn(&MidFit, usize) -> Option<f64>; 3] = [
+            |x, k| x.mids.get(k).copied(),
+            |x, k| x.cis.get(k).copied().flatten(),
+            |x, _| x.r2,
+        ];
+        for c in &self.compounds {
+            for f in &c.fragments {
+                let n = (f.fits.iter().flatten())
+                    .map(|x| x.mids.len())
+                    .max()
+                    .unwrap_or(0);
+                for k in 0..n {
+                    _ = write!(s, "{}_{} (M{k})", lib[c.compound].name, f.lo as usize + k);
+                    for value in values {
+                        for fit in &f.fits {
+                            s.push('\t');
+                            if let Some(v) = fit.as_ref().and_then(|x| value(x, k)) {
+                                _ = write!(s, "{v}");
+                            }
+                        }
+                    }
+                    s.push('\n');
+                }
+            }
+        }
+        s
+    }
 }
 
 /// MIDs of every substance found in at least one run. `labelled` and `unlabelled` are indices into
@@ -244,4 +287,69 @@ fn per_run(
             _ => Ok(None),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::IonPeak;
+
+    fn run(ions: &[(u32, f64)]) -> RunResult {
+        RunResult {
+            path: "r".into(),
+            found: vec![Found {
+                compound: 0,
+                score: 1.0,
+                rt_s: 0.0,
+                ions: (ions.iter())
+                    .map(|&(mass, integral)| IonPeak {
+                        mass,
+                        integral,
+                        quality: 0.0,
+                        signal_to_noise: 0.0,
+                    })
+                    .collect(),
+                rescanned: false,
+            }],
+            unknown: Vec::new(),
+            calibration: None,
+        }
+    }
+
+    #[test]
+    fn uncorrected_group_skips_empty_runs_and_writes_csv() {
+        let mut c = LibraryCompound::new("Ala");
+        c.formulas.push((11, 10, "C2".into()));
+        let runs = [
+            run(&[(10, 3.0), (11, 1.0)]),
+            run(&[(10, 1.0), (11, 1.0)]),
+            run(&[(10, 0.0)]),
+        ];
+        let table = IsotopeTable::standard();
+        let m = determine(
+            &runs,
+            &[c.clone()],
+            &[0, 1, 2],
+            &[],
+            Method::Uncorrected,
+            "C",
+            &table,
+        );
+        assert!(m.errors.is_empty());
+        let f = &m.compounds[0].fragments[0];
+        assert_eq!((f.lo, f.hi), (10, 11));
+        let fit = f.fits[0].as_ref().unwrap();
+        // Mean of (0.75, 0.25) and (0.5, 0.5); the all-zero third run does not count.
+        assert_eq!(fit.mids, [0.625, 0.375]);
+        // 1.96 * sd / sqrt(n) with sd = 0.125 * sqrt(2), n = 2.
+        let ci = 1.96 * 0.125;
+        assert!((fit.cis[0].unwrap() - ci).abs() < 1e-12);
+        assert_eq!(
+            m.csv(&[c], &["labelled".into()]),
+            format!(
+                "Ion\tlabelled\tCI (labelled)\tR2 (labelled)\nAla_10 (M0)\t0.625\t{ci}\t\nAla_11 (M1)\t0.375\t{}\t\n",
+                fit.cis[1].unwrap()
+            )
+        );
+    }
 }

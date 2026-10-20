@@ -34,6 +34,10 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/cmp.rs            saved components of the old version (.cmp): read and write
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
+  src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
+  src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
+  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, CSV) and the
+                        FRAG "Export MIDs" of the batch table
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
@@ -50,6 +54,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
+  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, CSV
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/layout.rs         list/details split; a test checks no control covers another or is cut off
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
@@ -65,7 +70,6 @@ crates/md-cli/          headless batch quantification (binary `md-cli`), depends
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: modules in `md-core` for normalisation and MID.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
@@ -577,6 +581,19 @@ non-targeted tables. The sign of a component is chosen so its largest loading is
 tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
 [algorithms.md](reverse-engineering/algorithms.md) §7f. The window
 (`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
+
+## Mass isotopomer distributions (MID)
+
+`md_core::mid` follows the old MID wizard (algorithms.md §7g). `mid_library` keeps the library substances
+with fragments (sum formula per ion range) and makes every fragment ion a quant ion; the app scans the
+chosen runs against it like a batch, with the rescan filling fragment ions that were not deconvoluted,
+and `determine` turns the integrals into MIDs. Uncorrected and reference correction give one MID per
+fragment over the labelled (and unlabelled) runs; library spectrum and sum formula give one per run.
+Substances are solved in parallel (rayon); `examples/perf.rs` times 1 000 substances × 200 runs. The batch
+window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. `(174/8)(261/5)`, from the
+shown table (`mid::frag_export`). Methods 2 and 3 are tested against the old `MIDCompoundSeries`
+(`tests/mid_series.rs`, harness `docs/reverse-engineering/tools/isotopes/make-midseries.sh`), the solver
+against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0 ≈ 1).
 
 ## Settings
 
