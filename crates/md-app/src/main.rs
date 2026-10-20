@@ -34,6 +34,7 @@ mod style;
 mod tof_calibration;
 #[cfg(test)]
 mod ui_tests;
+mod update;
 mod vector;
 mod view;
 
@@ -52,6 +53,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             style::apply(&cc.egui_ctx);
             let mut app = App::default();
+            app.updater.start(&cc.egui_ctx);
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
                     app.open_library(&cc.egui_ctx, path);
@@ -108,6 +110,7 @@ struct App {
     export: export::Export,
     view: view::View,
     spectrum_mode: detail::Mode,
+    updater: update::Updater,
 }
 
 impl Default for App {
@@ -139,6 +142,7 @@ impl Default for App {
             export: export::Export::default(),
             view: view::View::default(),
             spectrum_mode: detail::Mode::default(),
+            updater: update::Updater::default(),
         }
     }
 }
@@ -214,7 +218,7 @@ impl App {
         self.update_nist(ctx);
     }
 
-    /// The floating windows opened from the Analysis menu.
+    /// The floating windows opened from the Analysis and Help menus.
     fn windows(&mut self, ctx: &egui::Context) {
         self.ri
             .window(ctx, &self.runs, self.active, self.library.as_deref());
@@ -237,5 +241,6 @@ impl App {
         self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);
         self.library_editor(ctx);
+        self.updater.window(ctx);
     }
 }

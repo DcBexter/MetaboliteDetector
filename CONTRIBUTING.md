@@ -17,7 +17,8 @@ SonarQube Cloud token as the repository secret `SONAR_TOKEN`.
 
 Open Sonar issues of main, or of pull request N: `scripts/sonar-open.sh [N]` (needs Node, no token).
 
-Release: raise `version` in the root `Cargo.toml` on main, then tag that commit `vX.Y.Z` and push the tag.
+Release: raise `version` in the root `Cargo.toml` on main, then tag that commit `v` + exactly that version
+(`vX.Y.Z`, or `vX.Y.Z-rc1` for `X.Y.Z-rc1`, so the updater sees the final release as newer) and push the tag.
 `.github/workflows/release.yml` builds the portable Windows exe, the MSI (`installer/metabolite-detector.wxs`,
 WiX 6) and the Linux tar.gz, and publishes them as a pre-release. MSI versions are numeric, so `vX.Y.Z-rc1`
 installs as `X.Y.Z` and replaces an installed `X.Y.Z` either way: tag no rc after its final release.

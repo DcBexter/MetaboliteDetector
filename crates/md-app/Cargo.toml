@@ -8,9 +8,19 @@ license.workspace = true
 eframe.workspace = true
 egui_extras.workspace = true
 egui_plot.workspace = true
+flate2.workspace = true
 md-core.workspace = true
 png.workspace = true
 rfd.workspace = true
+semver.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+ureq.workspace = true
+
+# PowerShell -EncodedCommand for the MSI update helper; already in the tree through ureq.
+[target.'cfg(windows)'.dependencies]
+base64.workspace = true
 
 [lints]
 workspace = true

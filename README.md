@@ -12,6 +12,10 @@ a Windows installer (`.msi`, installs for the current user without admin rights 
 desktop shortcuts), a portable Windows `.exe` that runs without installing, and a Linux `.tar.gz` with the app
 and `md-cli` (built on Ubuntu 24.04, needs glibc 2.39 or newer).
 
+The app updates itself from these releases: Help → Check for updates… looks for a newer one, and once a
+day at start it checks by itself (switch off under Help). An update installs only after you click, is
+verified against the release's SHA-256 checksums and restarts the app.
+
 Example data (15 public GC-MS runs, ~90 MB, not in git): run `example-data/fetch.sh`, or
 `.\example-data\fetch.ps1` on Windows. Then:
 

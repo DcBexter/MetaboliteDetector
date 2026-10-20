@@ -13,6 +13,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | File dialogs | rfd | Native dialogs on every OS. |
 | NetCDF | `netcdf3` (pure Rust) | ANDI-MS files are NetCDF-3; no libnetcdf/HDF5 C dependency to ship on Windows. |
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
+| Updates | `ureq` (rustls), `serde_json`, `sha2`, `semver`, `tar` + `flate2`, app only | `ureq`: HTTPS to the GitHub API and release assets without a system TLS library; `serde_json`: read the release list; `sha2`: verify downloads against `SHA256SUMS.txt`; `semver`: order versions incl. pre-releases; `tar`: unpack the Linux tar.gz. See [Updates](#updates). |
 | R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and the planned md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
 
 ## Layout
@@ -735,6 +736,26 @@ In the app (`crates/md-app/src/settings.rs`, Analysis → Settings…) edits go 
 Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
 dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
 New runs open with the applied settings.
+
+## Updates
+
+`crates/md-app/src/update.rs` (Help menu, #235): `update/release.rs` holds the pure parts (newest
+non-draft release above the running version from the GitHub releases JSON, `SHA256SUMS.txt` lookup,
+asset name per install kind, install kind from the exe path, `update.txt` settings), `update/install.rs`
+the network and file work. Release builds check at start when enabled and the last check is a day old;
+debug builds never check on their own and never install. Settings: `update.txt` (`auto=1`,
+`last_check=<unix s>`) in `%APPDATA%\MetaboliteDetector` or `$XDG_CONFIG_HOME/metabolite-detector` (else `~/.config/metabolite-detector`).
+
+After the click the app downloads `SHA256SUMS.txt` and the one asset named for its platform and version
+over HTTPS, and installs nothing unless the SHA-256 matches:
+
+- MSI (exe in `%LocalAppData%\Programs\MetaboliteDetector` or, with `ALLUSERS=1`, `%ProgramFiles%\MetaboliteDetector`):
+  saved to a fresh temp dir; a hidden PowerShell (`-EncodedCommand`, paths as environment variables) waits for the
+  app to exit, runs `msiexec /i … /passive /norestart`, removes the temp dir and starts the exe again.
+- Portable exe (anywhere else on Windows): written as `<exe>.new`, the running exe renamed to `<exe>.old`, the new
+  one moved in and started; the next start deletes `<exe>.old`.
+- Linux tar.gz: `metabolite-detector` (the running exe) and `md-cli` next to it, if present, are written as
+  `<file>.new` with the mode of the file it replaces and renamed over the originals only once all are written.
 
 ## Build and test
 

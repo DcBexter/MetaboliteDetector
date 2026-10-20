@@ -42,11 +42,12 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#v}; else v=0.0.0; fi
-          # The binaries report the Cargo version, so a tag must match it (CONTRIBUTING: bump, then tag).
+          # The binaries report the Cargo version and the updater compares it, rc suffix included,
+          # so a tag must match it exactly (CONTRIBUTING: bump, then tag).
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             cargo_v=$(cargo metadata --format-version 1 --no-deps --locked \
               | jq -r '.packages[] | select(.name == "md-cli") | .version')
-            if [ "${v%%-*}" != "${cargo_v%%-*}" ]; then
+            if [ "$v" != "$cargo_v" ]; then
               echo "::error::Tag $GITHUB_REF_NAME does not match Cargo version $cargo_v"; exit 1
             fi
           fi
