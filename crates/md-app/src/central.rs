@@ -90,7 +90,7 @@ fn trace_plot(
     view: &View,
     cursor_min: f64,
     trace: fn(&Run) -> &[f64],
-    marks: &[[f64; 2]],
+    (marks, apexes): (&[[f64; 2]], &[f64]),
     labels: &[identify::Label],
 ) -> Option<(f64, f64)> {
     // Neither a run colour nor the dots' red, so the triangles stand out from the lines.
@@ -145,6 +145,8 @@ fn trace_plot(
                 p.points(
                     Points::new("components", marks.iter().map(at).collect::<Vec<_>>()).radius(3.0),
                 );
+            }
+            if !apexes.is_empty() {
                 // Triangles on the x axis: bigger click targets than the dots.
                 // With Auto Y off and the plot fitting its items itself, a triangle below the data
                 // would lower the range every frame, so it sits on the lowest data point.
@@ -152,9 +154,9 @@ fn trace_plot(
                     Some((low, _)) if !view.auto_y && p.auto_bounds().y => low,
                     _ => y_lo + 8.0 * (y_hi - y_lo) / p.response().rect.height().max(1.0) as f64,
                 };
-                let tri = marks
+                let tri = apexes
                     .iter()
-                    .map(|m| [view.time(m[0]), y])
+                    .map(|&t| [view.time(t), y])
                     .collect::<Vec<_>>();
                 p.points(
                     Points::new("components", tri)
@@ -364,8 +366,14 @@ impl App {
         // The old "Axes labels" switch hides the y titles of the chromatograms.
         let axes = self.settings.appearance.axes_labels;
         let y_title = |label: String| if axes { label } else { String::new() };
+        let apexes: Vec<f64> = run
+            .components
+            .iter()
+            .map(|k| run.minutes[k.apex_scan as usize])
+            .collect();
         if self.trace != Trace::Sic {
             // Components of the active run as dots on its TIC; not on the derivative, whose y differs.
+            // The triangles on the time axis need no y, so they stay in every view.
             let marks: Vec<[f64; 2]> = run
                 .components
                 .iter()
@@ -391,7 +399,7 @@ impl App {
                 &self.view,
                 cursor,
                 |r| &r.tic,
-                &marks,
+                (&marks, &apexes),
                 &labels,
             );
         }
@@ -411,7 +419,7 @@ impl App {
                 &self.view,
                 cursor,
                 |r| &r.sic,
-                &[],
+                (&[], &apexes),
                 &[],
             );
             clicked = clicked.or(sic);
