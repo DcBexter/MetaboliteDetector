@@ -278,7 +278,7 @@ impl Settings {
             {
                 // The old file has no Auto: it gets the width of the shown run.
                 let mut file = self.draft.clone();
-                (file.an_deconvolution_width).get_or_insert_with(|| times.map_or(1.0, auto_width));
+                (file.an_deconvolution_width).get_or_insert_with(|| auto_width(times.unwrap_or_default()));
                 self.note = Some(
                     std::fs::write(&path, file.to_bytes())
                         .map(|()| format!("Saved {}", path.display()))
@@ -395,7 +395,7 @@ impl Settings {
                 let check = ui.checkbox(&mut auto, "Auto");
                 if check.labelled_by(label.id).on_hover_text(&hint).changed() {
                     // A set width starts from the automatic one.
-                    d.an_deconvolution_width = (!auto).then(|| times.map_or(1.0, auto_width));
+                    d.an_deconvolution_width = (!auto).then(|| auto_width(times.unwrap_or_default()));
                 }
                 match &mut d.an_deconvolution_width {
                     Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),

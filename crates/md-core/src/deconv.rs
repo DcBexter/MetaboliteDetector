@@ -51,14 +51,18 @@ impl DeconvSettings {
 /// #242, where 1 scan cut the substances into pieces.
 pub const AUTO_WIDTH_S: f64 = 0.5;
 
-/// Automatic `AN_DECONVOLUTION_WIDTH`: [`AUTO_WIDTH_S`] in scans at the mean scan interval, between
-/// the old 1 scan and the limit 100. Rounded to 0.1 scans, so 20 scans/s with float noise in the
-/// times still gives exactly 10 (the filter length truncates).
+/// Automatic `AN_DECONVOLUTION_WIDTH`: [`AUTO_WIDTH_S`] in scans at the median scan interval (a gap
+/// in the recording does not count), between the old 1 scan and the limit 100. Rounded to 0.1
+/// scans, so 20 scans/s with float noise in the times still gives exactly 10 (the filter length
+/// truncates). 1 scan without a usable interval.
 pub fn auto_width(scan_times_s: &[f64]) -> f64 {
-    let (Some(a), Some(b)) = (scan_times_s.first(), scan_times_s.last()) else {
+    let mut steps: Vec<f64> = scan_times_s.windows(2).map(|t| t[1] - t[0]).collect();
+    if steps.is_empty() {
         return 1.0;
-    };
-    let w = AUTO_WIDTH_S * (scan_times_s.len() - 1) as f64 / (b - a);
+    }
+    let mid = steps.len() / 2;
+    let (_, dt, _) = steps.select_nth_unstable_by(mid, f64::total_cmp);
+    let w = AUTO_WIDTH_S / *dt;
     if w.is_finite() && w > 0.0 {
         (w.clamp(1.0, 100.0) * 10.0).round() / 10.0
     } else {
@@ -454,6 +458,10 @@ pub(crate) mod tests {
         assert_eq!(auto_width(&times(5.0)), 2.5);
         assert_eq!(auto_width(&times(1.0)), 1.0);
         assert_eq!(auto_width(&times(1e4)), 100.0);
+        // A 10 min gap (solvent delay) does not lower the rate.
+        let mut gap = times(20.0);
+        gap[1000..].iter_mut().for_each(|t| *t += 600.0);
+        assert_eq!(auto_width(&gap), 10.0);
         for bad in [&[][..], &[5.0], &[5.0, 5.0], &[5.0, 4.0], &[0.0, f64::NAN]] {
             assert_eq!(auto_width(bad), 1.0, "{bad:?}");
         }
