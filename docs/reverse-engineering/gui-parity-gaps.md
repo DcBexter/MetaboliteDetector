@@ -50,7 +50,7 @@ is S4 (#253).
 | Settings: Identification: Compound Lib path, NIST path, Cutoff score (0.85), Similarity-score radio (combined / spectrum / RI), Use scaled lib | RI tolerance, pure/impure, use-RI/use-spec checkboxes; scaled lib and the SF_* values are "stored, not used" | Gap: cutoff, score-mode choice, persisted library paths, scaled lib; check against #242 first |
 | Settings: Max. RI difference shown as 10.0 in the old dialog | New RI tolerance 20 | Check: same key `LS_RI_DIFF`? The RI wizard sets it to 20 during calibration |
 | Settings: Centroid (SF_*), baseline adjustment | SF_* "stored, not used"; baseline toggle missing | Gap if the centroid path is part of the detector |
-| QSettings: window size/position, dock state, recent files, library path persist | Only the update check persists | **Gap**: persist settings and layout |
+| QSettings: window size/position, dock state, recent files, library path persist | Settings, panels, sizes, window, recent runs and library paths persist; 3.3 values are imported once (#253) | Fine |
 | Help button (F1) in Settings | Hover texts | Fine |
 | Context menus, drag and drop | None | Modern additions, not parity |
 | Language: English only | English only | New request: DE/EN switch |
@@ -68,7 +68,7 @@ is S4 (#253).
 2. ~~Detected Peaks plot (ion profiles of the selected component).~~ Done in #251.
 3. ~~Detected vs. library compound side by side, scan/RT entry.~~ Done in #251.
 4. Help → About, File → Quit, keyboard shortcuts.
-5. Persisted settings, window layout, recent files, library paths.
+5. ~~Persisted settings, window layout, recent files, library paths.~~ Done in #253.
 6. Settings scope: cutoff score, score mode, scaled lib, centroid values, baseline adjustment, appearance options; settle the RI tolerance default.
 7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
 8. DE/EN language switch.

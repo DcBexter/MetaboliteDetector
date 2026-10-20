@@ -55,20 +55,8 @@ fn now() -> u64 {
     (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)).map_or(0, |d| d.as_secs())
 }
 
-/// `%APPDATA%\MetaboliteDetector`, else `$XDG_CONFIG_HOME` or `~/.config` + `/metabolite-detector`.
 fn config_path() -> Option<PathBuf> {
-    let env = |k| {
-        std::env::var_os(k)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-    };
-    let dir = if cfg!(windows) {
-        env("APPDATA")?.join("MetaboliteDetector")
-    } else {
-        (env("XDG_CONFIG_HOME").or_else(|| Some(env("HOME")?.join(".config"))))?
-            .join("metabolite-detector")
-    };
-    Some(dir.join("update.txt"))
+    Some(crate::persist::config_dir()?.join("update.txt"))
 }
 
 /// Only x64 builds are published.

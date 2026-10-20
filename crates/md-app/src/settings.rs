@@ -65,6 +65,17 @@ pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
 }
 
 impl Settings {
+    /// The saved settings at start, checked by `persist`.
+    pub fn restore(&mut self, s: GcmsSettings) {
+        self.draft = s.clone();
+        self.applied = s;
+    }
+
+    /// Opens the dialog with a message about the saved or imported settings.
+    pub fn show_note(&mut self, note: Result<String, String>) {
+        (self.note, self.open) = (Some(note), true);
+    }
+
     pub fn key(&self) -> Key {
         (self.applied.peak(), self.applied.deconv())
     }

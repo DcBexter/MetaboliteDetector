@@ -26,6 +26,7 @@ mod library_editor;
 mod loading;
 mod menu;
 mod mid;
+mod persist;
 mod plot_export;
 mod results;
 mod run_list;
@@ -43,18 +44,21 @@ mod view;
 use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
+    let file = persist::config_dir().map(|d| d.join("app.ron"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MetaboliteDetector")
             .with_inner_size([1200.0, 800.0]),
+        persistence_path: file.clone(),
         ..Default::default()
     };
     let result = eframe::run_native(
         "MetaboliteDetector",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
             let mut app = App::default();
+            persist::restore(&mut app, &cc.egui_ctx, cc.storage, file.as_deref());
             app.updater.start(&cc.egui_ctx);
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
@@ -115,6 +119,7 @@ struct App {
     spectrum_mode: detail::Mode,
     updater: update::Updater,
     panels: layout::Panels,
+    saved: persist::Saved,
     /// Detected Peaks also draws the modelled profile of each ion.
     model_profile: bool,
     /// Run whose TIC zoom is shown; another run starts unzoomed.
@@ -153,6 +158,7 @@ impl Default for App {
             spectrum_mode: detail::Mode::default(),
             updater: update::Updater::default(),
             panels: layout::Panels::default(),
+            saved: persist::Saved::default(),
             model_profile: false,
             plotted: None,
         }
@@ -223,6 +229,10 @@ impl eframe::App for App {
         self.central_panel(ui);
         // Last, so the frame holds every plot that asked for an export.
         self.poll_export(ui.ctx());
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(persist::KEY, persist::text(self));
     }
 }
 

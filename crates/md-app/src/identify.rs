@@ -178,10 +178,14 @@ impl App {
                 .add_filter("NIST text", &["sdf", "SDF", "msp", "MSP"])
                 .pick_file()
         {
-            let s = self.settings.applied.search();
-            self.nist.hits = None;
-            self.nist.job = Some(spawn(ui.ctx(), move || load(&path, s, true).map(Arc::new)));
+            self.open_nist(ui.ctx(), path);
         }
+    }
+
+    pub fn open_nist(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let s = self.settings.applied.search();
+        self.nist.hits = None;
+        self.nist.job = Some(spawn(ctx, move || load(&path, s, true).map(Arc::new)));
     }
 
     /// Takes a loaded NIST library and prepares it again when the search settings change.
