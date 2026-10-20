@@ -100,9 +100,14 @@ impl Updater {
     }
 
     fn check(&mut self, ctx: &egui::Context, manual: bool) {
-        if !matches!(self.state, State::Checking { .. } | State::Installing(..)) {
-            let rx = spawn(ctx, || install::check(&current()));
-            self.state = State::Checking { rx, manual };
+        match &mut self.state {
+            // A click during the automatic check still gets its error shown.
+            State::Checking { manual: m, .. } => *m |= manual,
+            State::Installing(..) => {}
+            _ => {
+                let rx = spawn(ctx, || install::check(&current()));
+                self.state = State::Checking { rx, manual };
+            }
         }
     }
 
@@ -110,6 +115,15 @@ impl Updater {
         if let Some(p) = &self.path {
             self.config.write(p);
         }
+    }
+
+    /// Saves only the check time, re-read from the file so another window's switch survives.
+    fn save_last_check(&mut self) {
+        if let Some(p) = &self.path {
+            self.config = Config::read(p);
+        }
+        self.config.last_check = now();
+        self.save();
     }
 
     pub fn menu(&mut self, ui: &mut egui::Ui) {
@@ -139,8 +153,7 @@ impl Updater {
                 };
                 self.state = match result.and_then(|r| r) {
                     Ok(found) => {
-                        self.config.last_check = now();
-                        self.save();
+                        self.save_last_check();
                         // A found update opens the window: the notice, which installs nothing by itself.
                         self.open |= found.is_some();
                         found.map_or(State::UpToDate, State::Available)

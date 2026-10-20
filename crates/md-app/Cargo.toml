@@ -18,6 +18,10 @@ sha2.workspace = true
 tar.workspace = true
 ureq.workspace = true
 
+# PowerShell -EncodedCommand for the MSI update helper; already in the tree through ureq.
+[target.'cfg(windows)'.dependencies]
+base64.workspace = true
+
 [lints]
 workspace = true
 

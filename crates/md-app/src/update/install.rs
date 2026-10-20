@@ -114,23 +114,32 @@ fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(
     std::fs::create_dir(&dir)
         .and_then(|()| std::fs::write(&msi, data))
         .map_err(|e| format!("Could not save {}: {e}", msi.display()))?;
-    // The ping is a ~2 s wait so msiexec does not meet the exe still running.
-    let all = if all_users { " ALLUSERS=1" } else { "" };
-    let script = format!(
-        "/c ping -n 3 127.0.0.1 >nul & msiexec /i \"{}\" /passive /norestart{all} & start \"\" \"{}\"",
-        msi.display(),
-        exe.display()
-    );
-    hidden_cmd(&script)
+    msi_helper(&dir, &msi, all_users, exe)
 }
 
+/// Hidden PowerShell that waits for this process to exit, runs msiexec, removes the temp dir and
+/// starts `exe`. Paths travel as environment variables, so no shell ever parses them.
 #[cfg(windows)]
-fn hidden_cmd(script: &str) -> Result<(), String> {
+fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(), String> {
+    use base64::Engine;
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // Raw, because cmd parses its own quotes and Rust's argument escaping would break them.
-    Command::new("cmd")
-        .raw_arg(script)
+    let all = if all_users { " ALLUSERS=1" } else { "" };
+    let script = format!(
+        "Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue\n\
+         Start-Process msiexec.exe -Wait -ArgumentList ('/i \"{{0}}\" /passive /norestart{all}' -f $env:MD_MSI)\n\
+         Remove-Item -LiteralPath $env:MD_DIR -Recurse -Force -ErrorAction SilentlyContinue\n\
+         Start-Process -FilePath $env:MD_EXE",
+        pid = std::process::id()
+    );
+    // -EncodedCommand (UTF-16LE, base64) needs no quoting and is not subject to the execution policy.
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+        .env("MD_MSI", msi)
+        .env("MD_DIR", dir)
+        .env("MD_EXE", exe)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(drop)
@@ -138,7 +147,7 @@ fn hidden_cmd(script: &str) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn hidden_cmd(_: &str) -> Result<(), String> {
+fn msi_helper(_: &Path, _: &Path, _: bool, _: &Path) -> Result<(), String> {
     Err("The MSI installs only on Windows".into())
 }
 
@@ -179,8 +188,13 @@ pub fn replace_from_tar_gz(archive: &[u8], exe: &Path) -> io::Result<()> {
         }
         return Err(e);
     }
-    for (_, path, _) in &targets {
-        std::fs::rename(side(path, ".new"), path)?;
+    for (i, (_, path, _)) in targets.iter().enumerate() {
+        if let Err(e) = std::fs::rename(side(path, ".new"), path) {
+            for (_, rest, _) in &targets[i..] {
+                std::fs::remove_file(side(rest, ".new")).ok();
+            }
+            return Err(e);
+        }
     }
     Ok(())
 }

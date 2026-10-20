@@ -750,8 +750,8 @@ After the click the app downloads `SHA256SUMS.txt` and the one asset named for i
 over HTTPS, and installs nothing unless the SHA-256 matches:
 
 - MSI (exe in `%LocalAppData%\Programs\MetaboliteDetector` or, with `ALLUSERS=1`, `%ProgramFiles%\MetaboliteDetector`):
-  saved to a fresh temp dir; a hidden `cmd` waits ~2 s for the app to exit, runs `msiexec /i … /passive /norestart`
-  and starts the exe again.
+  saved to a fresh temp dir; a hidden PowerShell (`-EncodedCommand`, paths as environment variables) waits for the
+  app to exit, runs `msiexec /i … /passive /norestart`, removes the temp dir and starts the exe again.
 - Portable exe (anywhere else on Windows): written as `<exe>.new`, the running exe renamed to `<exe>.old`, the new
   one moved in and started; the next start deletes `<exe>.old`.
 - Linux tar.gz: `metabolite-detector` (the running exe) and `md-cli` next to it, if present, are written as

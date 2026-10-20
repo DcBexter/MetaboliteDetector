@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 md-core = { path = "crates/md-core" }
+base64 = "0.23.1"
 eframe = "0.37"
 egui_extras = { version = "0.37", default-features = false }
 egui_kittest = "0.37"
