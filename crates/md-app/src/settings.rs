@@ -397,7 +397,7 @@ fn bool_row(ui: &mut egui::Ui, name: &str, hint: &str, v: &mut bool) {
 }
 
 /// Editable list of inclusive m/z ranges.
-fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
+pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(name).on_hover_text(hint);

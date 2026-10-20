@@ -137,7 +137,20 @@ fn main() {
     let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
     println!(
         "batch, one run end to end ({} substances found): {:?}",
-        found.len(),
+        found.found.len(),
+        t.elapsed()
+    );
+    // Untargeted: the same run, also keeping the components without library hit.
+    let u = ScanSettings {
+        untargeted: true,
+        ..s
+    };
+    let t = Instant::now();
+    let both = scan_chromatogram(c.clone(), &prepared, &u).unwrap();
+    println!(
+        "batch untargeted, one run ({} substances, {} unknown): {:?}",
+        both.found.len(),
+        both.unknown.len(),
         t.elapsed()
     );
 }

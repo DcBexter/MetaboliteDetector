@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
-use md_core::batch::{RunResult, ScanSettings, Table, TableSettings, scan_runs, table};
+use md_core::batch::{
+    Completed, RescanSettings, RunResult, ScanSettings, ShiftReference, Table, TableSettings,
+    complete_scan, scan_runs, table,
+};
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
@@ -16,7 +19,7 @@ use md_core::search::SearchSettings;
 use crate::identify::Library;
 use crate::spawn;
 
-type Scanned = Option<(Vec<RunResult>, Vec<String>)>;
+type Scanned = Option<(Vec<RunResult>, Vec<String>, Completed)>;
 
 struct Job {
     total: usize,
@@ -30,6 +33,9 @@ struct Job {
 struct Scan {
     lib: Arc<Library>,
     runs: Vec<RunResult>,
+    /// Unknown substances pooled by an untargeted scan; they follow the library's entries.
+    extra: Vec<md_core::library::LibraryCompound>,
+    rescanned: usize,
     errors: Vec<String>,
     took: Duration,
 }
@@ -67,9 +73,18 @@ impl Default for Norm {
     }
 }
 
+/// Options of the scan itself: changing them needs a new run of the batch.
+#[derive(Clone, PartialEq)]
+struct ScanOptions {
+    untargeted: bool,
+    rescan: bool,
+    rescan_window_s: f64,
+}
+
 pub struct Batch {
     pub open: bool,
     paths: Vec<PathBuf>,
+    options: ScanOptions,
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     settings: TableSettings,
@@ -94,6 +109,11 @@ impl Default for Batch {
             paths: Vec::new(),
             // 15 example runs: 1.1 s with 1, 0.17 s with 4 (90 MiB), 0.10 s with 15 (189 MiB).
             parallel: 4,
+            options: ScanOptions {
+                untargeted: false,
+                rescan: false,
+                rescan_window_s: RescanSettings::default().window_s,
+            },
             settings: TableSettings::default(),
             analysis: Default::default(),
             job: None,
@@ -113,23 +133,27 @@ impl Batch {
         ctx: &egui::Context,
         lib: Option<&Arc<Library>>,
         cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
     ) {
         self.poll(ctx);
         let mut open = self.open;
         egui::Window::new("Batch quantification")
             .open(&mut open)
             .default_size([900.0, 600.0])
-            .show(ctx, |ui| self.contents(ui, lib, cal));
+            .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
         let Some(job) = &self.job else { return };
         match job.rx.try_recv() {
-            Ok(Some((runs, errors))) => {
+            Ok(Some((runs, mut errors, done))) => {
+                errors.extend(done.errors);
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
                     runs,
+                    extra: done.extra,
+                    rescanned: done.rescanned,
                     errors,
                     took: job.started.elapsed(),
                 });
@@ -146,7 +170,13 @@ impl Batch {
         self.job = None;
     }
 
-    fn start(&mut self, ctx: &egui::Context, lib: &Arc<Library>, cal: Option<&RiCalibration>) {
+    fn start(
+        &mut self,
+        ctx: &egui::Context,
+        lib: &Arc<Library>,
+        cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
+    ) {
         let (done, cancel) = (
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(false)),
@@ -160,7 +190,19 @@ impl Batch {
                 ..lib.settings.clone()
             },
             calibration: cal.cloned(),
+            // Like the single-run search: only a substance with an RI can be the reference.
+            shift: cal.and(reference).and_then(|(name, cutoff)| {
+                let compound =
+                    (lib.compounds.iter()).position(|c| c.name == name && c.spectrum.ri >= 0.0)?;
+                Some(ShiftReference { compound, cutoff })
+            }),
+            untargeted: self.options.untargeted,
         };
+        let rescan = self.options.rescan.then(|| RescanSettings {
+            window_s: self.options.rescan_window_s,
+            ..Default::default()
+        });
+        let quant = self.settings.quant.clone();
         let (paths, l, d, c, parallel) = (
             self.paths.clone(),
             lib.clone(),
@@ -169,7 +211,17 @@ impl Batch {
             self.parallel,
         );
         let rx = spawn(ctx, move || {
-            scan_runs(&paths, &l.prepared, &s, parallel, &d, &c)
+            let (mut runs, errors) = scan_runs(&paths, &l.prepared, &s, parallel, &d, &c)?;
+            let more = complete_scan(
+                &mut runs,
+                &l.compounds,
+                &s,
+                &quant,
+                rescan.as_ref(),
+                parallel,
+                &c,
+            )?;
+            Some((runs, errors, more))
         });
         self.job = Some(Job {
             total: self.paths.len(),
@@ -186,6 +238,7 @@ impl Batch {
         ui: &mut egui::Ui,
         lib: Option<&Arc<Library>>,
         cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
     ) {
         ui.horizontal(|ui| {
             if ui.button("Add runs…").clicked()
@@ -237,13 +290,57 @@ impl Batch {
             ui.label("Min. quant ions found");
             ui.add(egui::DragValue::new(&mut s.min_ions).range(1..=20));
             ui.end_row();
+            ui.label("Min. signal-to-noise of an ion");
+            ui.add(
+                egui::DragValue::new(&mut s.min_sn)
+                    .range(0.0..=1e6)
+                    .speed(0.1),
+            );
+            ui.end_row();
+            ui.label("Max. discrepancy index");
+            let mut limit = s.max_discrepancy.is_finite();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut limit, "");
+                let mut v = if limit { s.max_discrepancy } else { 0.0 };
+                ui.add_enabled(limit, egui::DragValue::new(&mut v).range(0.0..=1e6).speed(0.1))
+                    .on_hover_text("A value counts only if the mean peak quality of its ions is at most this.");
+                s.max_discrepancy = if limit { v } else { f32::INFINITY };
+            });
+            ui.end_row();
+            ui.label("Untargeted");
+            ui.checkbox(&mut self.options.untargeted, "also list unidentified components")
+                .on_hover_text("Components without library hit are pooled over all runs into unknown substances. Applies to the next scan.");
+            ui.end_row();
+            ui.label("Rescan missing ions");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.options.rescan, "search the ion traces");
+                ui.add_enabled(
+                    self.options.rescan,
+                    egui::DragValue::new(&mut self.options.rescan_window_s)
+                        .range(0.0..=1e4)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Search window around the expected retention times. Applies to the next scan, with the quant ions chosen now.");
+            });
+            ui.end_row();
         });
+        crate::settings::ranges(
+            ui,
+            "QUANT_EXCL_IONS",
+            "Ion ranges (m/z from–to) never picked as quant ions.",
+            &mut s.quant.excluded,
+        );
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
                 let d = job.done.load(Relaxed);
+                let text = match d >= job.total {
+                    // Pooling and the rescan run after the last file.
+                    true => "pooling and rescanning…".into(),
+                    false => format!("{d} / {} runs", job.total),
+                };
                 ui.add(
                     egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
-                        .text(format!("{d} / {} runs", job.total))
+                        .text(text)
                         .desired_width(300.0),
                 );
                 if ui.button("Cancel").clicked() {
@@ -257,7 +354,7 @@ impl Batch {
                     .clicked()
                     && let Some(l) = ready
                 {
-                    self.start(ui.ctx(), l, cal);
+                    self.start(ui.ctx(), l, cal, reference);
                 }
                 match lib {
                     Some(l) => ui.label(format!(
@@ -276,18 +373,20 @@ impl Batch {
         });
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
-            let t =
-                table(&scan.runs, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
+            let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)
+                .map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
             self.shown = None;
             self.times = None;
         }
         ui.separator();
         ui.label(format!(
-            "{} runs scanned in {:.2?} against {}",
+            "{} runs scanned in {:.2?} against {}; {} unknown substances, {} ions added by the rescan",
             scan.runs.len(),
             scan.took,
-            scan.lib.name
+            scan.lib.name,
+            scan.extra.len(),
+            scan.rescanned
         ));
         for e in &scan.errors {
             ui.colored_label(ui.visuals().error_fg_color, e);

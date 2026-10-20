@@ -100,36 +100,48 @@ impl PreparedLibrary {
             ris: Vec::new(),
             rt_only,
         };
-        let mut peaks = Vec::new();
         for c in library {
-            // shortcut: rounds to nominal mass and sums, because the old getBinnedCentroidCompound is not
-            // decoded (§5.9) and components are unit-mass; high-resolution search needs the old binning.
-            peaks.clear();
-            peaks.extend(
-                c.spectrum
-                    .masses
-                    .iter()
-                    .zip(&c.spectrum.values)
-                    .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v >= 0)
-                    .map(|(m, v)| (m.round() as u32, *v as f64)),
-            );
-            peaks.sort_unstable_by_key(|p| p.0);
-            let mut norm = 0.0;
-            for chunk in peaks.chunk_by(|a, b| a.0 == b.0) {
-                let mass = chunk[0].0;
-                if s.filtered(mass) {
-                    continue;
-                }
-                let v = s.scale(mass, chunk.iter().map(|p| p.1).sum());
-                lib.masses.push(mass);
-                lib.values.push(v);
-                norm += v * v;
-            }
-            lib.offsets.push(lib.masses.len());
-            lib.norms.push(norm);
-            lib.ris.push(known_ri(ri(c)));
+            lib.push_with(c, s, ri);
         }
         lib
+    }
+
+    /// Appends one entry, scaled like the others (the entry gets the next index).
+    pub fn push(&mut self, c: &LibraryCompound, s: &SearchSettings) {
+        self.push_with(c, s, |c| c.spectrum.ri);
+    }
+
+    fn push_with(
+        &mut self,
+        c: &LibraryCompound,
+        s: &SearchSettings,
+        ri: fn(&LibraryCompound) -> f64,
+    ) {
+        // shortcut: rounds to nominal mass and sums, because the old getBinnedCentroidCompound is not
+        // decoded (§5.9) and components are unit-mass; high-resolution search needs the old binning.
+        let mut peaks: Vec<(u32, f64)> = c
+            .spectrum
+            .masses
+            .iter()
+            .zip(&c.spectrum.values)
+            .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v >= 0)
+            .map(|(m, v)| (m.round() as u32, *v as f64))
+            .collect();
+        peaks.sort_unstable_by_key(|p| p.0);
+        let mut norm = 0.0;
+        for chunk in peaks.chunk_by(|a, b| a.0 == b.0) {
+            let mass = chunk[0].0;
+            if s.filtered(mass) {
+                continue;
+            }
+            let v = s.scale(mass, chunk.iter().map(|p| p.1).sum());
+            self.masses.push(mass);
+            self.values.push(v);
+            norm += v * v;
+        }
+        self.offsets.push(self.masses.len());
+        self.norms.push(norm);
+        self.ris.push(known_ri(ri(c)));
     }
 
     /// Built with [`Self::new_rt_only`].

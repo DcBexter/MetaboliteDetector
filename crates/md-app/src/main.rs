@@ -170,7 +170,9 @@ impl App {
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
-        self.batch.window(ctx, self.library.as_ref(), cal);
+        let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
+        self.batch
+            .window(ctx, self.library.as_ref(), cal, reference);
         self.isotopes.window(ctx);
         self.library_editor(ctx);
     }

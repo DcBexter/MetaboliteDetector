@@ -376,6 +376,8 @@ impl GcmsSettings {
                 ..self.search()
             },
             calibration,
+            shift: None,
+            untargeted: false,
         }
     }
 
