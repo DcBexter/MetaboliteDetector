@@ -27,7 +27,8 @@ substance x run table as CSV. Exit code 2: the table is written, but some runs c
 
 Options:
   -l, --library FILE          library (required)
-  -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
+  -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults, but the
+                              deconvolution width follows each run's scan rate: 0.5 s, at least 1 scan)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
   -o, --output FILE           CSV file (default: standard output); with groups (--replicates, --sample-table) the group of each
                               run goes to FILE.groups.csv and the statistics of the groups (mean, rel.

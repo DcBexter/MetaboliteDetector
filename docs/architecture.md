@@ -192,7 +192,12 @@ peaks of the example runs:
 matched filter (`AN_DECONVOLUTION_WIDTH` scans) marks regions above 5, and each region becomes a component.
 Its model peak is the sum of the sharpest clean peaks (quality ≤ 10, at most a quarter); every ion trace is
 fitted as `c0 + c1 * scan + c2 * model`, and `c2 * max(model)` is that ion's height in the spectrum.
-Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults. The app runs
+Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults; the golden tests
+use it. Deviation (#279): the defaults of app and CLI (`GcmsSettings::default()`) set the width to automatic,
+`deconv::auto_width`: 0.5 s at the run's mean scan interval, at least the old 1 scan, at most 100. 3.3 always uses
+1 scan, which cuts the substances of a 20 scans/s run into pieces (#242). A width from a loaded settings file, the
+imported 3.3 settings or the saved app settings (`AN_DECONVOLUTION_WIDTH=auto` or a number) is a set one and wins;
+the old file format has no "auto", so **Save…** writes the width of the shown run (1 without one). The app runs
 peak detection and deconvolution after loading and marks each component on the TIC; a click near a dot
 shows its deconvoluted spectrum.
 

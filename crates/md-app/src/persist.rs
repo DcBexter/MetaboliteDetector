@@ -67,6 +67,8 @@ pub fn config_dir() -> Option<PathBuf> {
 /// A field of [`GcmsSettings`] as read from and written to a line.
 enum Field<'a> {
     F64(&'a mut f64),
+    /// A number, or `auto` for `None`.
+    Auto(&'a mut Option<f64>),
     F32(&'a mut f32),
     I32(&'a mut i32),
     Bool(&'a mut bool),
@@ -106,7 +108,7 @@ const FIELDS: [(&str, Access); 35] = [
         Field::F64(&mut s.an_min_peak_height)
     }),
     ("AN_DECONVOLUTION_WIDTH", |s| {
-        Field::F64(&mut s.an_deconvolution_width)
+        Field::Auto(&mut s.an_deconvolution_width)
     }),
     ("AN_NUMBER_BINS", |s| Field::I32(&mut s.an_number_bins)),
     ("AN_MIN_PEAK_NUMBER", |s| {
@@ -161,6 +163,11 @@ impl Field<'_> {
     fn parse(self, v: &str) -> bool {
         match self {
             Field::F64(f) => put(f, v),
+            Field::Auto(f) if v == "auto" => {
+                *f = None;
+                true
+            }
+            Field::Auto(f) => v.parse().map(|x| *f = Some(x)).is_ok(),
             Field::F32(f) => put(f, v) || variant_f32(v).map(|x| *f = x).is_some(),
             Field::I32(f) => put(f, v),
             Field::Bool(f) => put(f, v),
@@ -172,6 +179,7 @@ impl Field<'_> {
     fn text(self) -> String {
         match self {
             Field::F64(f) => f.to_string(),
+            Field::Auto(f) => f.map_or("auto".into(), |x| x.to_string()),
             Field::F32(f) => f.to_string(),
             Field::I32(f) => f.to_string(),
             Field::Bool(f) => f.to_string(),
@@ -638,6 +646,11 @@ size=@Size(1591 800)
         assert_eq!(s.ls_resolution, 0.3);
         assert_eq!(s.an_peak_threshold_end, -5.0);
         assert_eq!(s.ls_cutoff, 0.85);
+        assert_eq!(
+            s.an_deconvolution_width,
+            Some(1.0),
+            "a saved width beats the automatic one (#279)"
+        );
         let shown = app.settings.appearance;
         assert_eq!((shown.axes_labels, shown.peak_labels), (false, true));
         let run = std::path::absolute("/data/run 1.bin").unwrap();
@@ -695,9 +708,12 @@ size=@Size(1591 800)
         app.saved.remember(std::env::temp_dir().join("a=b.cdf"));
         app.saved.extra.push(("language".into(), "de".into()));
         let text = text(&app);
+        assert!(text.contains("\nAN_DECONVOLUTION_WIDTH=auto\n"), "{text}");
         let (back, bad) = apply_text(&text, own_entries);
         assert!(bad.is_empty(), "{bad:?}");
         assert_eq!(back.settings.applied, app.settings.applied);
+        let set = apply_text("AN_DECONVOLUTION_WIDTH=2.5\n", own_entries).0;
+        assert_eq!(set.settings.applied.an_deconvolution_width, Some(2.5));
         assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
