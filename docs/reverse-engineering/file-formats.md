@@ -738,7 +738,10 @@ keys (`Synon:`) are joined with `\n`. Retention index: the old program reads onl
 `Retention_index:` as a feature (checked with its own import and export on a synthetic file: the export writes
 `RETENTION_INDEX: 1817.1` and `RI:-1.0000`). The rewrite deviates on purpose for MoNA and MS-DIAL files:
 `Retention_index:`, `RetentionIndex:` and `Retention index:` (any case) set the retention index when no `RI:` is
-given; `RI:` wins in either order, and a spelling without a number stays a feature. Notations inside comments
+given; `RI:` wins in either order (a spelling before `RI:` is dropped, one after it stays a feature), and a spelling
+without a finite number stays a feature. Libraries that mix RI scales (the MoNA GC-MS export has Kovats/alkane values
+around 1300 and FiehnLib FAME values in ms above 100000) keep every value; with an RI search the entries on the other
+scale from the calibration score 0 and drop out, where before they were searched by spectrum alone. Notations inside comments
 (`RI=`) are not read.
 
 ### Unknowns (section 6)

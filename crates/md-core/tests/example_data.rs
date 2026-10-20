@@ -416,7 +416,12 @@ fn mona_msp_finds_the_targets_with_ri() {
         total[1]
     );
     if !runs.is_empty() {
-        assert_eq!(total[1][1], 0, "an RI hit is more than 3 sigma off");
+        // By construction the RI score drops every hit counted as wrong; the point is that the
+        // spectrum alone does not.
+        assert!(
+            total[0][1] > total[1][1],
+            "the RI score removed no wrong hit"
+        );
         assert!(total[1][0] <= total[0][0]);
         assert!(total[1][2] >= total[0][2], "RI lost targets");
     }

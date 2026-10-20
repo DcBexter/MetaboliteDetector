@@ -588,7 +588,7 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
             // MSP spellings the old program keeps as features; an explicit `RI:` or an unreadable
             // number wins over them.
             "RETENTION_INDEX" | "RETENTIONINDEX" | "RETENTION INDEX"
-                if c.spectrum.ri < 0.0 && value.parse::<f64>().is_ok() =>
+                if c.spectrum.ri < 0.0 && value.parse::<f64>().is_ok_and(f64::is_finite) =>
             {
                 c.spectrum.ri = num(value)?;
             }
@@ -1550,8 +1550,6 @@ mod tests {
         assert_eq!(again, lib);
     }
 
-    /// The old `importMSL` leaves RT and RI at -1 (unknown) when a record has none; 0 stays 0.
-    /// Checked with the old binary (docs/reverse-engineering/tools/golden/make-msl-export.sh).
     /// MSP files (MoNA, MS-DIAL) write the retention index as `Retention_index:`, which the old program
     /// only keeps as a feature. Synthetic records, no library data.
     #[test]
@@ -1577,16 +1575,24 @@ Name: d
 Retention_index: n/a
 Num Peaks: 1
 73 999
+
+Name: e
+Retention_index: inf
+Num Peaks: 1
+73 999
 ";
         let lib = parse_msl(text).unwrap();
         let ri: Vec<_> = lib.iter().map(|c| c.spectrum.ri).collect();
         // `RI:` wins over a spelling, whatever the order; a spelling with no number stays a feature.
-        assert_eq!(ri, [1817.1, 1500.0, 1500.0, -1.0]);
+        assert_eq!(ri, [1817.1, 1500.0, 1500.0, -1.0, -1.0]);
+        assert_eq!(lib[4].features["RETENTION_INDEX"], "inf");
         assert!(!lib[0].features.contains_key("RETENTION_INDEX"));
         assert_eq!(lib[2].features["RETENTION_INDEX"], "1700");
         assert_eq!(lib[3].features["RETENTION_INDEX"], "n/a");
     }
 
+    /// The old `importMSL` leaves RT and RI at -1 (unknown) when a record has none; 0 stays 0.
+    /// Checked with the old binary (docs/reverse-engineering/tools/golden/make-msl-export.sh).
     #[test]
     fn missing_rt_and_ri_are_unknown() {
         let text = "NAME: a
