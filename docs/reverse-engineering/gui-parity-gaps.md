@@ -64,9 +64,9 @@ is S4 (#253).
 
 ## 5. Not yet covered by any issue
 
-1. Results list always visible and usable without a library (bug, section 2).
-2. Detected Peaks plot (ion profiles of the selected component).
-3. Detected vs. library compound side by side, scan/RT entry.
+1. ~~Results list always visible and usable without a library (bug, section 2).~~ Done in #251.
+2. ~~Detected Peaks plot (ion profiles of the selected component).~~ Done in #251.
+3. ~~Detected vs. library compound side by side, scan/RT entry.~~ Done in #251.
 4. Help → About, File → Quit, keyboard shortcuts.
 5. Persisted settings, window layout, recent files, library paths.
 6. Settings scope: cutoff score, score mode, scaled lib, centroid values, baseline adjustment, appearance options; settle the RI tolerance default.
@@ -74,6 +74,6 @@ is S4 (#253).
 8. DE/EN language switch.
 9. GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.
 10. Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).
-11. TIC zoom stays stale after switching runs; a click does not snap to a nearby component when it is just over 3 scans away.
+11. ~~TIC zoom stays stale after switching runs; a click does not snap to a nearby component when it is just over 3 scans away.~~ Done in #251.
 
 Already covered elsewhere: #241, #242, #243 (zoom buttons, "?" help, MSL export, bigger Settings window), #244, #245, #246, #247, #248.
