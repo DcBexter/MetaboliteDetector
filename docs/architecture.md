@@ -36,8 +36,8 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
-  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, CSV) and the
-                        FRAG "Export MIDs" of the batch table
+  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
+                        statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
@@ -54,10 +54,11 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
-  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, CSV
+  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/layout.rs         list/details split, side panels, where tool windows first open; a test opens every
-                        window and checks no control covers another or is cut off
+                        window and checks no control covers another, is cut off or reaches past
+                        the screen
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
@@ -154,9 +155,11 @@ precomputed kernel; `detect_peaks_matched` runs the same detector on a single tr
 Conscious deviations from the old app; the golden test (below) shows that none of them changes the
 peaks of the example runs:
 
-- **Traces per nominal mass.** m/z is rounded and points of one nominal mass in a scan are summed. The
-  old app's trace construction for ANDI data is unknown; the example runs are unit-resolution, so this
-  matches them. High-resolution data needs exact-mass traces and `reorderPeaks` (§4.2).
+- **Traces per nominal mass.** Not a deviation: `IonTraces::new` centroids every scan like the old CDF
+  import (§4.1), then sums the centroids per nominal mass. On unit-resolution runs with integer
+  intensities centroiding changes nothing. Exact-mass traces (`IonTraces::exact`) plus `reorder_peaks` (§4.2) are what the old app does
+  for FastFlight runs. The deconvolution still keys spectra by nominal mass, so exact masses merge there
+  (shortcut in `deconv.rs`).
 - **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
   `DataProvider::getGlobalNoiseFactor` (§2.3). On all 15 example runs the old app logs
   "Error determining nf. Using nf=1", so 1.0 is what it uses there. Data where the old app finds another
@@ -337,7 +340,8 @@ rescan:
   substance without any value left drops out of the table.
 - **Untargeted** (`ScanSettings::untargeted`, then `add_unknowns`): components without library hit are kept
   per run and pooled over all runs into a temporary library (`Unknown n`, the mean spectrum of its members);
-  `table` takes it as `extra`.
+  `table` takes it as `extra`. The components of a run are scored in parallel against the library as it
+  was before the run; 12 000 unknowns in 20 runs take 0.07 s on 32 logical cores and 0.47 s on one thread (`examples/perf.rs`).
 - **Rescan** (`rescan_runs`): a substance found in at least a quarter of the runs gets its missing quant ions
   from the ion traces of the runs' files, within ΔRI (`SearchSettings::ri_diff`) around the expected
   position (old `ResultSeries::scanIons`).
@@ -388,7 +392,22 @@ Opening a run in the app uses `cmp::saved_components` and `ri::saved_calibration
 becomes the run's own calibration. A `.calib` has no RT shift, so it drops a shift stored in the `.idx`;
 it wins because it is the file the user saved last (the app's "Save .calib" suggests that name). A `.cmp`
 whose apex times do not match the run's scan times, a broken file and versions 1 to 3 of `.cmp` (no sample
-to decode them from) only give a warning: the run opens with its own analysis.
+to decode them from) only give a warning: the run opens with its own analysis. The ion peaks of the file
+become the run's `Peak` list (`cmp::SavedComponents`), so the component panel shows S/N, sharpness and
+discrepancy for loaded components too (#126); a saved peak has no ion-trace row (`Peak::row` is 0).
+
+**Save and load (#107).** The Results window writes the components of the active run
+(`cmp::compounds_of_components`, `write_cmp`; default name `<run>.cmp` next to the run, where opening finds
+it again) and loads a `.cmp` in place of them (`cmp::components_from_file`; selection and hits are reset and
+the library search runs again). Like the old file, it keeps one ion peak per mass (the sharpest, as the panel
+counts), ascending by mass, so a loaded component lists its peaks in that order. The model peak has the scan
+range and values only and the name stays empty: the old program accepts that and gives the component a
+numeric name when it reads it (Observed, `make-reference.sh --reread`; apart from that name, `time_stamp` and
+the check value it rewrites our files byte for byte). Settings changes re-analyse and replace loaded components.
+A `.cmp` is also a batch input (`batch::scan_runs`, file picker and `md-cli`): its components are searched
+as saved, with RI and shift correction from the apex times; there is no raw data, so `rescan_runs` skips it.
+A saved component keeps one peak per mass, so where a run has two peaks of a quant mass and only the second
+passes `--min-sn`, the table of the `.cmp` lacks that value.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 
@@ -445,6 +464,14 @@ tie: the filtered traces are integers with broad, smooth tops, so the parabola v
 a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
 deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
 all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
+
+A third reference, `old-md-3.3-high-resolution.tsv`, covers a synthetic high-resolution run made from 7235eg04:
+- every m/z moves up by 0.047;
+- a second fragment at 147.089 repeats the 147 trace 5 scans later.
+
+To regenerate it, run `make-reference.sh --high-resolution`. The run itself (`example-data/high-resolution/`) is not committed. The test builds the run in memory from eg04, and the script writes it as a CDF for the old app with an ignored test (`write_high_resolution_run`).
+
+The old CDF import centroids such scans to nominal masses (§4.1). The port does the same, so all peaks and components match with no known difference.
 
 The test fails when one of these counts grows.
 
@@ -625,7 +652,11 @@ and `determine` turns the integrals into MIDs. Uncorrected and reference correct
 fragment over the labelled (and unlabelled) runs; library spectrum and sum formula give one per run.
 Substances are solved in parallel (rayon); `examples/perf.rs` times 1 000 substances × 200 runs. The batch
 window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. `(174/8)(261/5)`, from the
-shown table (`mid::frag_export`). Methods 2 and 3 are tested against the old `MIDCompoundSeries`
+shown table (`mid::frag_export`). The worker also computes the mean and standard error of the labelled
+runs (`mid::group_stat`, per-run methods) and the old result window's text exports (`Mids::run_text`,
+`stats_text`, `group_text`, numbers in Qt's `%g` via `mid::qt_g`); the window shows them as table
+columns and bar plots and saves or copies the texts. Methods 2 and 3, the statistics and both per-run
+exports are tested against the old `MIDCompoundSeries`
 (`tests/mid_series.rs`, harness `docs/reverse-engineering/tools/isotopes/make-midseries.sh`), the solver
 against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0 ≈ 1).
 

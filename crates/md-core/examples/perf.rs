@@ -5,12 +5,16 @@
 
 use std::time::Instant;
 
-use md_core::batch::{Found, IonPeak, RunResult, ScanSettings, scan_chromatogram};
+use std::sync::atomic::AtomicBool;
+
+use md_core::batch::{
+    Found, IonPeak, RunResult, ScanSettings, Unknown, add_unknowns, scan_chromatogram,
+};
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::isotope::IsotopeTable;
 use md_core::library::{LibraryCompound, parse_msl};
 use md_core::mid::{Method, determine, frag_export};
-use md_core::peaks::{Detector, IonTraces, PeakSettings};
+use md_core::peaks::{Detector, IonTraces, PeakSettings, reorder_peaks};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 use md_core::{Chromatogram, decimate};
 
@@ -106,6 +110,38 @@ fn main() {
         "matched peaks ({}) + deconvolution ({} components): {:?}",
         m.len(),
         mc.len(),
+        t.elapsed()
+    );
+
+    // The same run at high resolution: two exact masses 0.04 apart per nominal mass.
+    let hr = Chromatogram {
+        mz: c
+            .mz
+            .iter()
+            .map(|m| {
+                let i = *m - 50.0;
+                50.0 + (i / 2.0).floor() + 0.04 * (i % 2.0)
+            })
+            .collect(),
+        ..c.clone()
+    };
+    let t = Instant::now();
+    let mut hr_traces = IonTraces::exact(&hr).unwrap();
+    let ht = t.elapsed();
+    let mut hp = hr_traces.detect_peaks(&PeakSettings::default());
+    reorder_peaks(
+        &mut hp,
+        &hr_traces,
+        10.0,
+        0.05,
+        PeakSettings::default().number_bins,
+    );
+    let hc = deconvolute(&hr_traces, &hp, &DeconvSettings::default());
+    println!(
+        "high resolution: traces ({}) {ht:?}, peaks ({}) + reorder + deconvolution ({} components): {:?}",
+        hr_traces.len(),
+        hp.len(),
+        hc.len(),
         t.elapsed()
     );
 
@@ -224,4 +260,51 @@ fn main() {
         e.csv.len() / 1024,
         t.elapsed()
     );
+    pool_unknowns();
+}
+
+/// Untargeted pooling (`add_unknowns`) with many unknown components: 20 runs share a pool of
+/// n / 4 distinct spectra, so the temporary library grows to several thousand entries.
+fn pool_unknowns() {
+    let mut seed = 12345_u64;
+    let mut rnd = move |n: u64| {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) % n
+    };
+    for n in [3_000_usize, 6_000, 12_000] {
+        let base: Vec<Vec<(u32, u32)>> = (0..n / 4)
+            .map(|_| {
+                let mut s: Vec<(u32, u32)> = (0..12)
+                    .map(|_| (50 + rnd(350) as u32, 100 + rnd(9_900) as u32))
+                    .collect();
+                s.sort_unstable_by_key(|p| p.0);
+                s.dedup_by_key(|p| p.0);
+                s
+            })
+            .collect();
+        let mut runs: Vec<RunResult> = (0..20)
+            .map(|r| RunResult {
+                path: format!("run{r}.cdf").into(),
+                unknown: (0..n / 20)
+                    .map(|k| Unknown {
+                        rt_s: k as f64,
+                        ri: None,
+                        spectrum: base[rnd(base.len() as u64) as usize].clone(),
+                        ions: Vec::new(),
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .collect();
+        let s = ScanSettings::default();
+        let t = Instant::now();
+        let lib = add_unknowns(&mut runs, 0, &s, &AtomicBool::new(false)).unwrap();
+        println!(
+            "pool {n} unknowns in 20 runs ({} groups): {:?}",
+            lib.len(),
+            t.elapsed()
+        );
+    }
 }

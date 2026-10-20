@@ -192,12 +192,13 @@ fn screenshots() {
     wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
 
     type Toggle = fn(&mut App) -> &mut bool;
-    let windows: [(&str, Toggle); 5] = [
+    let windows: [(&str, Toggle); 6] = [
         ("07-settings", |a| &mut a.settings.open),
         ("08-calibration", |a| &mut a.ri.open),
         ("09-batch", |a| &mut a.batch.open),
         ("10-isotopes", |a| &mut a.isotopes.open),
         ("11-library-editor", |a| &mut a.editor.open),
+        ("12-results", |a| &mut a.results.open),
     ];
     for (name, open) in windows {
         *open(h.state_mut()) = true;
@@ -205,9 +206,12 @@ fn screenshots() {
         if name == "11-library-editor" {
             h.get_by_label("Edit open library").click();
             h.run_steps(2);
+            // The run list and the editor's list both show "Compound at"; click the first entry of the
+            // editor's list (its left column), not whatever the tree ends with.
+            let win = h.get_by_label_contains("Library editor").rect();
             h.get_all(by().label_contains("Compound at"))
-                .last()
-                .unwrap()
+                .find(|n| win.contains_rect(n.rect()) && n.rect().min.x < win.min.x + 40.0)
+                .expect("no compound in the library editor list")
                 .click();
             h.run_steps(2);
         }

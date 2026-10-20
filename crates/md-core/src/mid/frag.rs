@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use regex::Regex;
 
-use super::MAX_FRAGMENT_IONS;
+use super::{MAX_FRAGMENT_IONS, qt_g};
 use crate::batch::{Found, RunResult};
 use crate::library::LibraryCompound;
 
@@ -64,7 +64,7 @@ pub fn frag_export(runs: &[RunResult], compounds: &[(usize, &LibraryCompound)]) 
     for &(i, c) in compounds.iter().filter(|(_, c)| frag(c).is_some()) {
         csv.push_str(&c.name);
         for f in found(i) {
-            _ = write!(csv, "\t{}", f.map_or(-1.0, |f| f.rt_s / 60.0));
+            _ = write!(csv, "\t{}", qt_g(f.map_or(-1.0, |f| f.rt_s / 60.0)));
         }
         csv.push('\n');
     }
@@ -96,7 +96,7 @@ pub fn frag_export(runs: &[RunResult], compounds: &[(usize, &LibraryCompound)]) 
             let sums: Vec<f64> = (hits.iter())
                 .map(|f| (ion..ion + size).map(|m| integral(*f, m)).sum())
                 .collect();
-            sums.iter().for_each(|s| _ = write!(csv, "\t{s}"));
+            sums.iter().for_each(|s| _ = write!(csv, "\t{}", qt_g(*s)));
             csv.push('\n');
             mine.push(sums);
         }
@@ -113,7 +113,7 @@ pub fn frag_export(runs: &[RunResult], compounds: &[(usize, &LibraryCompound)]) 
             for m in ion..ion + size {
                 _ = write!(csv, "{}_{m} (M{})", c.name, m - ion);
                 for (f, total) in hits.iter().zip(sums) {
-                    _ = write!(csv, "\t{}", integral(*f, m) / total);
+                    _ = write!(csv, "\t{}", qt_g(integral(*f, m) / total));
                 }
                 csv.push('\n');
             }
@@ -179,7 +179,7 @@ mod tests {
             e.csv,
             "Retention Times (Min)\nMetabolite\ta\tb.cdf\t\nAla\t1.5\t-1\n\
              \nTotal ion counts\nFragment\ta\tb.cdf\t\nAla_10\t4\t0\n\
-             \nMass Isotopomer Abundances\nIon\ta\tb.cdf\nAla_10 (M0)\t0.75\tNaN\nAla_11 (M1)\t0.25\tNaN\n\n"
+             \nMass Isotopomer Abundances\nIon\ta\tb.cdf\nAla_10 (M0)\t0.75\tnan\nAla_11 (M1)\t0.25\tnan\n\n"
         );
         assert_eq!(
             e.warnings,

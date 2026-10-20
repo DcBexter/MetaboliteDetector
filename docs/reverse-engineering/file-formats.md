@@ -155,6 +155,7 @@ File naming (Observed)
   0x6e7d00 appends ".idx" to `cache_file` and opens `out|trunc|binary`.
 - `CdfImporter::importData` 0x7cc4cc creates the writer with `DataType = 2` (Observed: `mov $0x2,%edx`
   before the `GCMSDiskScanWriter(char const*, DataType)` call at 0x7cc512).
+- Every scan is centroided before it is written (`CdfImporter::scanAdd`, algorithms.md §4.1). The stored masses are nominal: on a synthetic run with exact masses all 4400 scans hold the centroids rounded to whole numbers.
 
 ### 2.1 Scan record (data file)
 
@@ -244,7 +245,7 @@ seeks to the record offset for the intensities and to `masses_ptr` for the masse
 does that and checks each record header against its index entry.
 
 ### Unknowns (section 2)
-- `DataType` enum names for the values (2 is what `CdfImporter` writes).
+- `DataType` enum names for the values. 2 is what `CdfImporter` writes (nominal masses); `FastFlightImporter` writes 1 or 0 (exact masses), algorithms.md §4.1.
 - `setCompressionParameter` default thresholds and the meaning of the BaselineStatistics fields.
 - Whether `writeIndexFile` can write another magic or other type sizes (only the reader was disassembled).
 - None for the TOF polynomial: `FilteredDataProvider` maps `m/z = (f32) poly(bin as f64)`, which `md_core::diskscan` applies (section 4.3).
@@ -260,7 +261,9 @@ Verified on 15 reference files the old 3.3 binary wrote itself (`tools/golden/ma
 `MD_RESULTS`, never committed): every field below decodes, every value matches the old program's own
 getters (`raw.tsv`, 9 digits) and `md_core::cmp` writes the payload back byte for byte. The old program
 reads files written by `md_core::cmp` (`make-reference.sh --reread`): rewriting them gives the same payload
-except `time_stamp`, which it also changes when it rereads its own files (Observed).
+except `time_stamp`, which it also changes when it rereads its own files (Observed). A component with an empty
+name (md-core writes none: the rewrite has no name for it) gets a 15-digit number as name when the old program
+reads it, and the check value (§3.2, item 13) follows (Observed on two example runs, 34 components).
 
 ### 3.1 File container
 
