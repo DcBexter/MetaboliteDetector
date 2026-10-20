@@ -51,12 +51,13 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
+  src/layout.rs         list/details split; a test checks no control covers another or is cut off
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
   src/statistics.rs     biomarker statistics window: two-group table, box plots, PCA plots
-  src/style.rs          app-wide look egui lacks (symbol font fallback); rules in DESIGN.md
+  src/style.rs          app-wide look egui lacks (symbol font fallback, solid scroll bars, window margin); rules in DESIGN.md
   src/ui_tests.rs       glyph check for UI strings; ignored headless screenshot test (docs/ui-quality.md)
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
   src/main.rs           options, settings/library/calibration loading, CSV output

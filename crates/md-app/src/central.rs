@@ -155,25 +155,27 @@ impl App {
     }
 
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
             ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
             ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
-            ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                ui.label("m/z");
-                ui.add(
-                    egui::DragValue::new(&mut self.mz)
-                        .range(1.0..=2000.0)
-                        .max_decimals(2),
-                );
-                ui.label("±");
-                ui.add(
-                    egui::DragValue::new(&mut self.tolerance)
-                        .range(0.0..=10.0)
-                        .speed(0.05)
-                        .max_decimals(2),
-                );
-            });
+            // Each control on its own, not in a nested scope, so the row can wrap between them.
+            let sic = self.trace != Trace::Tic;
+            ui.add_enabled(sic, egui::Label::new("m/z"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.mz)
+                    .range(1.0..=2000.0)
+                    .max_decimals(2),
+            );
+            ui.add_enabled(sic, egui::Label::new("±"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.tolerance)
+                    .range(0.0..=10.0)
+                    .speed(0.05)
+                    .max_decimals(2),
+            );
         });
     }
 
