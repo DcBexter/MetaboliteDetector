@@ -139,7 +139,7 @@ pub fn anova(groups: &[Vec<f64>]) -> Option<f64> {
     if k <= 1 {
         return Some(1.0);
     }
-    if groups.iter().any(|g| g.is_empty()) {
+    if groups.iter().any(Vec::is_empty) {
         return None;
     }
     let all: Vec<f64> = groups.iter().flatten().copied().collect();
