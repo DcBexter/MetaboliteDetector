@@ -242,3 +242,17 @@ fn screenshots() {
     h.run_steps(3);
     shots.save(&mut h, "13-mid-results");
 }
+
+#[test]
+#[ignore = "needs a GPU; writes target/ui-snapshots"]
+fn tof_calibration_screenshot() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ui-snapshots");
+    std::fs::create_dir_all(&dir).unwrap();
+    let shots = Shots { dir };
+    for (theme, tag) in [(egui::Theme::Dark, "dark"), (egui::Theme::Light, "light")] {
+        let mut h = harness(theme);
+        h.state_mut().tof = crate::tof_calibration::TofWindow::demo();
+        h.run_steps(3);
+        shots.save(&mut h, &format!("14-tof-calibration-{tag}"));
+    }
+}

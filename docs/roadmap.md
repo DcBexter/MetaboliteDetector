@@ -64,6 +64,7 @@ parallel loops, pixel-bounded drawing and a perf case per new algorithm.
 [Milestone](https://github.com/DcBexter/MetaboliteDetector/milestone/8)
 
 - [FastFlight TOF import and m/z calibration (F2, F3)](https://github.com/DcBexter/MetaboliteDetector/issues/29)
+- [FastFlight centroiding, CDF export and TOF calibration window](https://github.com/DcBexter/MetaboliteDetector/issues/148)
 - [Old `.bin`/`.idx` reader, NetCDF export](https://github.com/DcBexter/MetaboliteDetector/issues/30)
 
 ## Reverse-engineering status
