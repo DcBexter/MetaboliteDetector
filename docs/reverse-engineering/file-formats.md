@@ -530,6 +530,15 @@ Not serialized by `GCMSSettings::toStream` (Observed by absence in the write seq
 AN_MODELED_VALUES_FOR_INTEGRATION, AN_MIN_HEIGHT_BP, LS_CUTOFF, LS_MASS_FILTER, LS_IDENTIFICATION_ALGORITHM,
 SQL_MAX_NUMBER_FRAGMENTS, SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS.
 
+`SQL_MAX_NUMBER_FRAGMENTS` and `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS` (Observed, disassembly) are set in the
+settings dialog (`SettingsDialog::updateGUI` / `applySettings`) and stored by the app's QSettings under the
+same key names (`MainWindow::saveSettings` / `readSettings`), not in this file. `LS_IDENTIFICATION_ALGORITHM` (Observed, disassembly): only two loads exist, in `getGCMSSettingsObject`
+(0x6d683a) and in `SQLLibrary::getLibraryHits` (0x6e30cc); no instruction stores to it or takes its
+address, so it keeps its zero-initialised `.bss` value 0 in every session. 0 is the path ported and verified
+in §6.3 (the two spectrum scores, vtable +0x18 and +0x10). 1 scores fragments (`getSpectrumFragments` of
+the query with bin width 2, then one virtual score call), 2 a dot product (`scaleCompound_dot` on both
+spectra, then mass overlap counts); both are unreachable in the shipped app and are not ported.
+
 Note: `LS_CUTOFF` (default 0.8) and the SQL fields are not persisted by this path. The brief asks whether
 they are stored elsewhere; this pass did not check that (Unknown).
 
@@ -555,8 +564,8 @@ a possible bug in the legacy writer (Inferred from the decompile). The checksum 
 
 ### Unknowns (section 5)
 - Whether `fromStream` validates the checksum and whether it accepts files without the trailing set.
-- Persistence of LS_CUTOFF, AN_MODELED_VALUES_FOR_INTEGRATION and the SQL_* fields (not in this stream).
-- Exact types of LS_RESOLUTION (f32 inferred) and LS_IDENTIFICATION_ALGORITHM (enum width 4 inferred).
+- Persistence of LS_CUTOFF and AN_MODELED_VALUES_FOR_INTEGRATION (not in this stream; SQL_* are QSettings).
+- Exact type of LS_RESOLUTION (f32 inferred); LS_IDENTIFICATION_ALGORITHM is compared as a 32-bit int.
 - Whether the AN_MAX_BASE_DEV static write in GCMSSettingsObject is intentional.
 
 ---
@@ -696,7 +705,9 @@ disassembly and Verified against the stored rows):
 Pre-filter (`SQLLibrary::getPotentialHits` 0x6e2350): the query's fragments are sorted by summed intensity,
 strongest first (`compare_intens`), and the first `SQL_MAX_NUMBER_FRAGMENTS` = 5 are matched against the
 stored ions with `frag = ion`. A compound is a candidate with `hits > SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`
-(3), so at least 4 shared fragments (Verified: 4 shared → candidate, 3 shared → not). The tolerance
+(3), so at least 4 shared fragments (Verified: 4 shared → candidate, 3 shared → not). Both values come
+from the settings dialog (§5); the rewrite has them in `SearchSettings::max_fragments` and
+`min_equal_fragments`. The tolerance
 argument is never read. Query ions below m/z 70 are not dropped: a query whose strongest fragments lie
 below 70 (41/42, 43/44, 55/56, 57/58) finds no candidate, because the library side never stores them
 (Verified: no candidate and 0 hits in the old binary, the same in the rewrite). The candidates are then
@@ -717,7 +728,8 @@ keys (`Synon:`) are joined with `\n`. Retention-index notations in comments are 
 ### Unknowns (section 6)
 - Full MSL line grammar, rt/ri key names, and handling of multiple spectra per block.
 - Whether `NUM PEAKS` is trusted or recounted.
-- NIST: duplicate m/z in one record, ties in the fragment order, `LS_IDENTIFICATION_ALGORITHM` 1 and 2.
+- NIST: duplicate m/z in one record, ties in the fragment order. (`LS_IDENTIFICATION_ALGORITHM` 1 and 2
+  are unreachable, §5.)
 - Encoding of MSL and NIST files.
 
 ---
@@ -728,7 +740,7 @@ keys (`Synon:`) are joined with `\n`. Retention-index notations in comments are 
 2. .cmp: versions 1 to 3 (no sample); meaning of `count` and of the model peak's ion code.
 3. .calib: encoding only (layout, unit and members verified, section 4.1).
 4. .mzcalib: encoding; automatic calibration. FastFlight: time unit, the meaning of `b`, the compressing path.
-5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF and SQL_* fields.
+5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF (SQL_* are QSettings).
 6. LBR: Peak<int,float> records of version 2/3 compounds with peaks (decoded otherwise, section 1).
 7. MSL: most functions undecoded; grammar inferred from strings. NIST: decoded (6.3) except the gaps in its list.
 8. Ghidra no-return truncations hide the tail of several readers (fromStream, readIndexFile, readTOFCalibData,

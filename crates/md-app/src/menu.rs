@@ -34,6 +34,7 @@ impl App {
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         self.open_chromatograms_button(ui);
         self.open_library_button(ui);
+        self.open_nist_button(ui);
         if ui
             .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
             .on_hover_text("Close every open run")
