@@ -1,5 +1,6 @@
 //! Natural isotope calculator window: formula in, M+0, M+1, … out.
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::isotope::{IsotopeTable, parse_formula};
 
@@ -26,6 +27,7 @@ impl Isotopes {
     pub fn window(&mut self, ctx: &egui::Context) {
         let mut open = self.open;
         egui::Window::new("Natural isotopes")
+            .tool_window(ctx, 5, [340.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui));
         self.open = open;

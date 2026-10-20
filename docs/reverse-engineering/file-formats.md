@@ -261,7 +261,9 @@ Verified on 15 reference files the old 3.3 binary wrote itself (`tools/golden/ma
 `MD_RESULTS`, never committed): every field below decodes, every value matches the old program's own
 getters (`raw.tsv`, 9 digits) and `md_core::cmp` writes the payload back byte for byte. The old program
 reads files written by `md_core::cmp` (`make-reference.sh --reread`): rewriting them gives the same payload
-except `time_stamp`, which it also changes when it rereads its own files (Observed).
+except `time_stamp`, which it also changes when it rereads its own files (Observed). A component with an empty
+name (md-core writes none: the rewrite has no name for it) gets a 15-digit number as name when the old program
+reads it, and the check value (§3.2, item 13) follows (Observed on two example runs, 34 components).
 
 ### 3.1 File container
 

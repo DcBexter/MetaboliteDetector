@@ -56,8 +56,8 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/isotopes.rs       natural isotope calculator window
   src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, CSV
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
-  src/layout.rs         list/details split, side panels; a test opens every window and checks no control
-                        covers another or is cut off
+  src/layout.rs         list/details split, side panels, where tool windows first open; a test opens every
+                        window and checks no control covers another or is cut off
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
@@ -380,7 +380,22 @@ Opening a run in the app uses `cmp::saved_components` and `ri::saved_calibration
 becomes the run's own calibration. A `.calib` has no RT shift, so it drops a shift stored in the `.idx`;
 it wins because it is the file the user saved last (the app's "Save .calib" suggests that name). A `.cmp`
 whose apex times do not match the run's scan times, a broken file and versions 1 to 3 of `.cmp` (no sample
-to decode them from) only give a warning: the run opens with its own analysis.
+to decode them from) only give a warning: the run opens with its own analysis. The ion peaks of the file
+become the run's `Peak` list (`cmp::SavedComponents`), so the component panel shows S/N, sharpness and
+discrepancy for loaded components too (#126); a saved peak has no ion-trace row (`Peak::row` is 0).
+
+**Save and load (#107).** The Results window writes the components of the active run
+(`cmp::compounds_of_components`, `write_cmp`; default name `<run>.cmp` next to the run, where opening finds
+it again) and loads a `.cmp` in place of them (`cmp::components_from_file`; selection and hits are reset and
+the library search runs again). Like the old file, it keeps one ion peak per mass (the sharpest, as the panel
+counts), ascending by mass, so a loaded component lists its peaks in that order. The model peak has the scan
+range and values only and the name stays empty: the old program accepts that and gives the component a
+numeric name when it reads it (Observed, `make-reference.sh --reread`; apart from that name, `time_stamp` and
+the check value it rewrites our files byte for byte). Settings changes re-analyse and replace loaded components.
+A `.cmp` is also a batch input (`batch::scan_runs`, file picker and `md-cli`): its components are searched
+as saved, with RI and shift correction from the apex times; there is no raw data, so `rescan_runs` skips it.
+A saved component keeps one peak per mass, so where a run has two peaks of a quant mass and only the second
+passes `--min-sn`, the table of the `.cmp` lacks that value.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 

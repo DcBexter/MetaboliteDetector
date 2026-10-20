@@ -17,8 +17,9 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc or
-old .bin) and writes the substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
+Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc, old
+.bin or saved components .cmp, which are not deconvoluted again and cannot be rescanned) and writes the
+substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
 
 Options:
   -l, --library FILE          library (required)
@@ -329,6 +330,36 @@ mod tests {
             p("out.csv"),
             p("ctrl_1.cdf")
         )
+    }
+
+    #[test]
+    fn a_saved_cmp_is_a_run_too() {
+        use md_core::deconv::deconvolute;
+        use md_core::peaks::IonTraces;
+
+        let dir = std::env::temp_dir().join(format!("md-cli-cmp-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let from_run = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+
+        let c = md_core::read_run(&dir.join("ctrl_1.cdf")).unwrap();
+        let g = GcmsSettings::default();
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&g.peak());
+        let comps = deconvolute(&traces, &peaks, &g.deconv());
+        let masses: Vec<u32> = peaks
+            .iter()
+            .map(|p| traces.masses[p.row as usize])
+            .collect();
+        let saved =
+            md_core::cmp::compounds_of_components(&comps, &masses, &peaks, &c.scan_times_s, &[]);
+        md_core::cmp::write_cmp(dir.join("ctrl_1.cmp"), &saved).unwrap();
+
+        let line = line.replace("ctrl_1.cdf", "ctrl_1.cmp");
+        assert!(run(args(&format!("{line} --rescan")).unwrap().unwrap()).unwrap());
+        let from_cmp = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert_eq!(from_cmp, from_run.replace("ctrl_1.cdf", "ctrl_1.cmp"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
