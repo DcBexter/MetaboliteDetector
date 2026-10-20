@@ -444,9 +444,15 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     app.saved.nist = path(&v);
                     true
                 }
-                ("", "mode") => crate::guided::Mode::from_key(&v)
-                    .map(|m| (app.guided.mode, app.guided.ask) = (m, false))
-                    .is_some(),
+                ("", "mode") => {
+                    let m = crate::guided::Mode::from_key(&v);
+                    match m {
+                        Some(m) => (app.guided.mode, app.guided.ask) = (m, false),
+                        // Maybe from a newer version: kept until the user answers.
+                        None => app.saved.extra.push((key.clone(), v)),
+                    }
+                    m.is_some()
+                }
                 (_, "recent" | "rc_open_file") => {
                     recent.extend(path(&v));
                     true
@@ -535,7 +541,13 @@ pub fn text(app: &App) -> String {
         let p = std::path::absolute(&p).unwrap_or(p);
         Some((k.to_owned(), p.to_str()?.to_owned()))
     }));
-    lines.extend(app.saved.extra.iter().cloned());
+    // An answered question replaces a kept unknown `mode`.
+    let answered = !app.guided.ask;
+    lines.extend(
+        (app.saved.extra.iter())
+            .filter(|(k, _)| !(answered && k == "mode"))
+            .cloned(),
+    );
     // A line break would split a value into a second, wrong line.
     (lines.into_iter())
         .filter(|(_, v)| !v.contains(['\n', '\r']))
@@ -821,6 +833,21 @@ size=@Size(1591 800)
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
         assert_eq!(back.saved.extra, app.saved.extra);
+    }
+
+    #[test]
+    fn unknown_mode_is_asked_again_and_kept_until_answered() {
+        let (mut app, bad) = apply_text("mode=wizard\n", own_entries);
+        assert_eq!(bad, ["mode"]);
+        // `apply_text` starts from the default; the real start sets `ask` before reading.
+        app.guided.ask = true;
+        assert!(super::text(&app).contains("mode=wizard\n"));
+        (app.guided.mode, app.guided.ask) = (crate::guided::Mode::Expert, false);
+        let text = super::text(&app);
+        assert!(
+            text.contains("mode=expert\n") && !text.contains("wizard"),
+            "{text}"
+        );
     }
 
     #[test]
