@@ -260,6 +260,9 @@ impl Calibration {
                 });
                 self.job = Some((source, job));
             }
+            if self.job.is_some() {
+                ui.spinner();
+            }
             if ui.button("Load .calib…").clicked()
                 && let Some(path) = calib_dialog().pick_file()
             {
@@ -291,8 +294,13 @@ impl Calibration {
         ui.collapsing("Calibration mix from the library", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Add");
-                ui.text_edit_singleline(&mut self.mix_filter);
+                ui.text_edit_singleline(&mut self.mix_filter).on_hover_text(
+                    "Part of a library compound name; only compounds with an RI are offered",
+                );
             });
+            if self.mix.is_empty() && self.mix_filter.is_empty() {
+                ui.weak("Type a name to pick the substances of your calibration mix.");
+            }
             let filter = self.mix_filter.to_lowercase();
             if !filter.is_empty() {
                 let found: Vec<_> = (lib.compounds.iter())
@@ -322,8 +330,9 @@ impl Calibration {
                 return;
             };
             let button = egui::Button::new(format!("Find the mix in {}", run.name));
+            let searching = self.mix_job.is_some();
             if ui
-                .add_enabled(!self.mix.is_empty() && self.mix_job.is_none(), button)
+                .add_enabled(!self.mix.is_empty() && !searching, button)
                 .on_hover_text(
                     "Going through the mix by RI, each substance takes the next component in time \
                      order that the library search finds for it",
@@ -344,6 +353,12 @@ impl Calibration {
                     Ok(find_mix(mix, &comps, &data.scan_times_s, &s))
                 });
                 self.mix_job = Some((source, job));
+            }
+            if searching {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Searching the mix…");
+                });
             }
         });
     }
@@ -384,10 +399,17 @@ impl Calibration {
                             ui.checkbox(&mut r.used, "");
                             // A mix substance that was not found has no time yet: red until it gets one.
                             let name = egui::RichText::new(&r.name);
-                            ui.label(match r.used || r.rt_min > 0.0 {
+                            let found = r.used || r.rt_min > 0.0;
+                            let text = match found {
                                 true => name,
                                 false => name.color(ui.visuals().error_fg_color),
-                            });
+                            };
+                            let label = ui.label(text);
+                            if !found {
+                                label.on_hover_text(
+                                    "Not found in the run: enter its time or leave it unused",
+                                );
+                            }
                             let t = egui::DragValue::new(&mut r.rt_min)
                                 .speed(0.001)
                                 .range(0.0..=f64::MAX)
