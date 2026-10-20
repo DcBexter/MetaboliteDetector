@@ -2,6 +2,8 @@
 
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
+
+use crate::plot_export::Area;
 use md_core::decimate;
 
 use crate::{App, Run, Trace, color, detail, export, identify, view::View};
@@ -288,8 +290,7 @@ impl App {
             );
             clicked = clicked.or(sic);
         }
-        self.export.chromatograms =
-            egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
+        self.export.chromatograms = Area::since(ui, top);
         self.view.bounds_in = None;
         clicked
     }
@@ -360,7 +361,6 @@ impl App {
             detail::pick_ion(&mut self.mz, &mut self.trace, ion);
         }
         // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
-        self.export.spectrum =
-            egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
+        self.export.spectrum = Area::since(ui, top);
     }
 }
