@@ -785,7 +785,7 @@ z-score:   z = (v - mean(row)) / sqrt(variance(row))    # row = one compound ove
 Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 
 - A run without a value stays `None` after every mode.
-- For `total`, a missing value adds nothing (same as the old 0).
+- For `total`, a missing value adds nothing (same as the old 0). Substances dropped by the reproducibility filter are not in the table, so they are not in the sum either (not checked whether the old program sums before its filter).
 - Missing values of a pool run are skipped in the mean/median, and missing values are skipped in the z-score statistics (the old 0 would drag the mean down). `z_score` needs two values and a non-zero spread, else the row is `None`.
 - Acquisition time: the app uses the file date; the old program reads the date stored in the file.
 - Not ported: the old program scales each ion row of the tree view; the table here has one summed row per substance.

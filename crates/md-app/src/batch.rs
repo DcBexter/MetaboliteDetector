@@ -82,6 +82,8 @@ pub struct Batch {
     norm: Norm,
     /// `table` normalised as `norm` says.
     shown: Option<(Norm, Table)>,
+    /// File dates of the table's runs and how many could not be read; read once per table.
+    times: Option<(Vec<i64>, usize)>,
     note: String,
 }
 
@@ -99,6 +101,7 @@ impl Default for Batch {
             table: None,
             norm: Norm::default(),
             shown: None,
+            times: None,
             note: String::new(),
         }
     }
@@ -277,6 +280,7 @@ impl Batch {
                 table(&scan.runs, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
             self.shown = None;
+            self.times = None;
         }
         ui.separator();
         ui.label(format!(
@@ -291,9 +295,11 @@ impl Batch {
         match self.table.as_ref().map(|t| &t.1) {
             Some(Ok(t)) => {
                 norm_controls(ui, &mut self.norm, t);
+                pool_notes(ui, &self.norm, t, &scan.runs, &mut self.times);
                 if self.shown.as_ref().is_none_or(|s| s.0 != self.norm) {
                     let n = &self.norm;
-                    let shown = apply(t, &mode(n, t, &scan.runs), n.z_score);
+                    let times = self.times.as_ref().map(|t| t.0.as_slice());
+                    let shown = apply(t, &mode(n, t, times.unwrap_or_default()), n.z_score);
                     self.shown = Some((n.clone(), shown));
                 }
                 if let Some((_, shown)) = &self.shown {
@@ -443,9 +449,7 @@ fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
     }
 }
 
-/// The old program orders runs by acquisition date; the file date stands in for it.
-/// shortcut: files are found by name, so equal names in different folders are not told apart.
-fn mode(n: &Norm, t: &Table, runs: &[RunResult]) -> Normalization {
+fn mode(n: &Norm, t: &Table, times: &[i64]) -> Normalization {
     match n.kind {
         Kind::None => Normalization::None,
         Kind::TotalSignal => Normalization::TotalSignal,
@@ -455,28 +459,61 @@ fn mode(n: &Norm, t: &Table, runs: &[RunResult]) -> Normalization {
                 .position(|r| Some(r.compound) == n.standard)
                 .unwrap_or(usize::MAX),
         ),
-        Kind::Pool => {
-            let times = t
-                .runs
-                .iter()
-                .map(|name| {
-                    runs.iter()
-                        .find(|r| {
-                            r.path
-                                .file_name()
-                                .is_some_and(|f| f.to_string_lossy() == *name)
-                        })
-                        .and_then(|r| std::fs::metadata(&r.path).ok()?.modified().ok())
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_secs() as i64)
-                })
-                .collect();
-            Normalization::Pool(Pool {
-                group: n.pool_group.clone(),
-                times,
-                nearest: n.pool_nearest,
-                median: n.pool_median,
-            })
-        }
+        Kind::Pool => Normalization::Pool(Pool {
+            group: n.pool_group.clone(),
+            times: times.to_vec(),
+            nearest: n.pool_nearest,
+            median: n.pool_median,
+        }),
+    }
+}
+
+/// The old program orders runs by acquisition date; the file date stands in for it.
+/// shortcut: files are found by name, so equal names in different folders are not told apart.
+fn run_times(t: &Table, runs: &[RunResult]) -> (Vec<i64>, usize) {
+    let by_name: std::collections::HashMap<_, _> = runs
+        .iter()
+        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), &r.path)))
+        .collect();
+    let mut missing = 0;
+    let times = t
+        .runs
+        .iter()
+        .map(|name| {
+            by_name
+                .get(name)
+                .and_then(|p| std::fs::metadata(p).ok()?.modified().ok())
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or_else(
+                    || {
+                        missing += 1;
+                        0
+                    },
+                    |d| d.as_secs() as i64,
+                )
+        })
+        .collect();
+    (times, missing)
+}
+
+/// Reads the run dates once and warns when the pool settings cannot work.
+fn pool_notes(
+    ui: &mut egui::Ui,
+    n: &Norm,
+    t: &Table,
+    runs: &[RunResult],
+    times: &mut Option<(Vec<i64>, usize)>,
+) {
+    if n.kind != Kind::Pool {
+        return;
+    }
+    let (_, missing) = times.get_or_insert_with(|| run_times(t, runs));
+    if *missing > 0 {
+        ui.label(format!(
+            "No file date for {missing} runs; they count as time 0."
+        ));
+    }
+    if !t.groups.contains(&n.pool_group) {
+        ui.label("No run is in the pool group: every normalised value is empty.");
     }
 }
