@@ -61,6 +61,7 @@ mod tests {
             sic_job: None,
             components: Vec::new(),
             peak_masses: Vec::new(),
+            peaks: Vec::new(),
             analysis: settings::Analysis::new(app.settings.key()),
             scan: 0,
             component: None,
