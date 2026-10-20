@@ -177,10 +177,8 @@ peaks of the example runs:
   bin coordinates; at an exact half-bin tie and on a flat top (three equal values) the fit's rounding
   decides the result. `quadfit` rebuilds that fit bit for bit from black-box outputs of the old binary,
   without GSL code (`docs/reverse-engineering/gsl-clean-room.md`), so ties and flat tops land where the
-  old app puts them. With the default 10 bins per scan it matches on every scan up to 1 000 000; with
-  other bin counts about 1 in 10 000 fits differs by 1–2 ulp, which can only move a tie. Above bins ×
-  scan ≈ 9.4e7 the x² entry may round differently from the old `pow` (shortcut in `quadfit.rs`;
-  both in issue 290).
+  old app puts them, for every bin count while bins × scan stays below 9.4e7. Above, the x² entry may
+  round differently from the old `pow` (shortcut in `quadfit.rs`).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
