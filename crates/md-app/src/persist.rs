@@ -33,6 +33,8 @@ pub struct Saved {
 
 impl Saved {
     pub fn remember(&mut self, path: PathBuf) {
+        // Absolute, so a command-line `a.cdf` and the same file from the dialog are one entry.
+        let path = std::path::absolute(&path).unwrap_or(path);
         self.recent.retain(|p| p != &path);
         self.recent.insert(0, path);
         self.recent.truncate(RECENT);
@@ -621,7 +623,8 @@ size=@Size(1591 800)
         );
         assert_eq!(s.ls_resolution, 0.3);
         assert_eq!(s.an_peak_threshold_end, -5.0);
-        assert_eq!(app.saved.recent, [PathBuf::from("/data/run 1.bin")]);
+        let run = std::path::absolute("/data/run 1.bin").unwrap();
+        assert_eq!(app.saved.recent, [run]);
         assert_eq!(app.saved.library, None);
         // Kept for later, the GUI blob is not.
         assert_eq!(app.saved.extra, [("LS_CUTOFF".into(), "0.85".into())]);

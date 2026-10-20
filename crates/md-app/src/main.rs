@@ -45,7 +45,9 @@ mod view;
 use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
-    let file = persist::config_dir().map(|d| d.join("app.ron"));
+    // Without our config dir eframe would pick its own; name it, so `restore` checks that file too.
+    let file = (persist::config_dir().or_else(|| eframe::storage_dir("MetaboliteDetector")))
+        .map(|d| d.join("app.ron"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MetaboliteDetector")
