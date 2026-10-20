@@ -16,6 +16,9 @@ impl Table {
         let pick_cells = |v: &Vec<Option<f64>>| cols.iter().map(|c| v[*c]).collect();
         Table {
             runs: pick(&self.runs),
+            sources: (cols.iter())
+                .filter_map(|c| self.sources.get(*c).copied())
+                .collect(),
             groups: pick(&self.groups),
             rows: (self.rows.iter())
                 .map(|r| super::Row {
@@ -63,6 +66,7 @@ mod tests {
         };
         Table {
             runs: vec!["a".into(), "b".into(), "c".into()],
+            sources: vec![0, 1, 2],
             groups: vec!["x".into(), "x".into(), "y".into()],
             rows: vec![
                 row(4, [Some(1.0), None, Some(3.0)]),
@@ -76,6 +80,7 @@ mod tests {
         let t = table().select_runs(&[2, 0, 9]);
         assert_eq!(t.runs, ["c", "a"]);
         assert_eq!(t.groups, ["y", "x"]);
+        assert_eq!(t.sources, [2, 0]);
         assert_eq!(t.rows[0].values, [Some(3.0), Some(1.0)]);
         assert_eq!(t.rows[1].values, [None, Some(10.0)]);
         assert_eq!(t.rows[1].rts_s, [None, Some(67.0)]);

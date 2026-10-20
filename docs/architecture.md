@@ -276,8 +276,17 @@ and each component at most once. `SearchSettings::default()` holds the old `LS_*
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
 spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
 `library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
-(`PreparedLibrary::with_fragment_filter`, file-formats.md §6.3): only entries that share at least 4 of the 5
-strongest fragments of the component are scored, as in the old NIST search.
+(`PreparedLibrary::with_fragment_filter`, file-formats.md §6.3): only entries that share more than
+`min_equal_fragments` (3) of the `max_fragments` (5) strongest fragments of the component are scored, as in
+the old NIST search. Both are in the settings dialog ("Number of fragments", "Minimum number of identical
+frag."; old `SQL_*`).
+
+File → Open NIST library loads a second library next to the normal one, always with the pre-filter (old
+`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on the
+UI thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
+entries) and its NIST hits are listed below the library hits, which stay
+as they are (old "NIST search..."). The NIST hits belong to that component and spectrum; a re-analysis hides
+them.
 
 The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl`/`.msp`/`.sdf` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
@@ -306,10 +315,12 @@ Conscious deviations:
   no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
   yields the same assignments above it, because the greedy assignment takes pairs in descending score.
 - **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
-- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM` and the Wave score variants are not ported (semantics
-  unknown, §5.9). The NIST pre-filter uses the old defaults `SQL_MAX_NUMBER_FRAGMENTS` 5 and
-  `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS` 3 as constants. A NIST file is opened like any other library; the old
-  separate NIST path and "NIST search..." action for one component are not ported.
+- `LS_USE_SCALED_LIB` and the Wave score variants are not ported (semantics unknown, §5.9).
+  `LS_IDENTIFICATION_ALGORITHM` is not ported either: the old app never writes it, so only algorithm 0 (the
+  ported one) runs there (file-formats.md §5).
+- **Settings are not kept between sessions.** The old app stores the NIST path (`rc_lib_nist_file`) and the
+  `SQL_*` values with QSettings; the rewrite keeps no app preferences yet, so the NIST library is opened per
+  session and the two values hold until the app closes (loading an old settings file keeps them).
 
 ## Batch quantification
 
@@ -656,8 +667,10 @@ shown table (`mid::frag_export`). The worker also computes the mean and standard
 runs (`mid::group_stat`, per-run methods) and the old result window's text exports (`Mids::run_text`,
 `stats_text`, `group_text`, numbers in Qt's `%g` via `mid::qt_g`); the window shows them as table
 columns and bar plots and saves or copies the texts. Methods 2 and 3, the statistics and both per-run
-exports are tested against the old `MIDCompoundSeries`
-(`tests/mid_series.rs`, harness `docs/reverse-engineering/tools/isotopes/make-midseries.sh`), the solver
+exports are tested against the old `MIDCompoundSeries`, methods 0 and 1 and the group export against the
+old `MIDWizard::Calculate` and `MIDResultWidget` (`tests/mid_series.rs`, harness
+`docs/reverse-engineering/tools/isotopes/make-midseries.sh`; the old program computes but never shows the
+group results, algorithms.md §7g.2), the solver
 against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0 ≈ 1).
 
 ## Settings
