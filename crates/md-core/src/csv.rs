@@ -27,7 +27,7 @@ pub fn write_columns(out: &mut impl Write, header: &[&str], columns: &[&[f64]]) 
 }
 
 /// RFC 4180 quoting for names that contain a separator, quote or line break.
-fn quote(s: &str) -> String {
+pub fn quote(s: &str) -> String {
     if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {

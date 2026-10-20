@@ -13,6 +13,7 @@ pub mod library;
 pub mod library_add;
 pub mod normalize;
 pub mod peaks;
+pub mod results;
 pub mod ri;
 pub mod search;
 pub mod settings;
