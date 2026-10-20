@@ -54,7 +54,7 @@ impl Analysis {
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
     let mut traces = IonTraces::new(data).map_err(|e| e.to_string())?;
-    let peaks = traces.detect_peaks(&key.0);
+    let peaks = traces.detect_all_peaks(&key.0);
     let mut components = deconvolute(&traces, &peaks, &key.1);
     components.sort_by_key(|k| k.apex_scan);
     let masses = peaks

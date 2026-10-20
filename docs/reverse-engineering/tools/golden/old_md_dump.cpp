@@ -52,10 +52,15 @@ void run(FILE* out, const char* cdf, const char* work) {
     std::string name = std::strrchr(cdf, '/') ? std::strrchr(cdf, '/') + 1 : cdf;
     std::string stem = std::string(work) + "/" + name.substr(0, name.rfind('.'));
 
-    alignas(16) static char importer[1 << 16];
-    fn<void (*)(void*, const char*)>(CDF_IMPORTER_CTOR)(importer, cdf);
-    fn<void (*)(void*, const char*)>(CDF_IMPORT_DATA)(importer, stem.c_str());
-    fn<void (*)(void*)>(CDF_IMPORTER_DTOR)(importer);
+    // A disk-scan cache (.bin + .idx) is opened as it is, e.g. one with exact masses (DataType 1).
+    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".bin") == 0) {
+        stem = std::string(cdf, std::strlen(cdf) - 4);
+    } else {
+        alignas(16) static char importer[1 << 16];
+        fn<void (*)(void*, const char*)>(CDF_IMPORTER_CTOR)(importer, cdf);
+        fn<void (*)(void*, const char*)>(CDF_IMPORT_DATA)(importer, stem.c_str());
+        fn<void (*)(void*)>(CDF_IMPORTER_DTOR)(importer);
+    }
 
     void* scan = ::operator new(0x390);  // size from MainWindow / CompoundDetector::detect
     fn<void (*)(void*, const char*, bool, bool, void*)>(DISK_SCAN_CTOR)(scan, stem.c_str(), false, false, nullptr);
@@ -169,12 +174,12 @@ int reread(int argc, char** argv) {
     return 0;
 }
 
-// usage: LD_PRELOAD=old_md_dump.so metabolitedetector_app WORK_DIR OUT.tsv RUN.cdf...
+// usage: LD_PRELOAD=old_md_dump.so metabolitedetector_app WORK_DIR OUT.tsv RUN.cdf|RUN.bin...
 //        LD_PRELOAD=old_md_dump.so metabolitedetector_app --reread IN OUT [IN OUT]...
 int dump_main(int argc, char** argv, char**) {
     if (argc >= 2 && std::strcmp(argv[1], "--reread") == 0) return reread(argc, argv);
     if (argc < 4) {
-        std::fprintf(stderr, "usage: %s WORK_DIR OUT.tsv RUN.cdf...\n", argv[0]);
+        std::fprintf(stderr, "usage: %s WORK_DIR OUT.tsv RUN.cdf|RUN.bin...\n", argv[0]);
         return 2;
     }
     FILE* out = std::fopen(argv[2], "w");

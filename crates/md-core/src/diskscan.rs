@@ -30,6 +30,7 @@ struct Entry {
     masses_ptr: u64,
     rt_ms: f64,
     n: usize,
+    data_type: u32,
 }
 
 /// Reads a run from its `.bin` and `.idx` files; `path` may name either (or the bare stem).
@@ -90,10 +91,13 @@ fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
         }
     }
     let times = entries.iter().map(|e| e.rt_ms / 1000.0).collect();
-    andi::build(times, &index, &count, mz, intensity).map_err(|e| match e {
+    let mut run = andi::build(times, &index, &count, mz, intensity).map_err(|e| match e {
         AndiError::Inconsistent(s) => DiskScanError::Corrupt(s),
         other => DiskScanError::Corrupt(other.to_string()),
-    })
+    })?;
+    // Only the CDF import writes DataType 2 (nominal masses); FastFlight writes 0 or 1.
+    run.exact_masses = entries.iter().any(|e| e.data_type != 2);
+    Ok(run)
 }
 
 /// The RI calibration stored in a run's `.idx` (the old RI wizard writes it there); `path` may name
@@ -150,15 +154,16 @@ fn read_index(
         .map(|_| {
             let (scan, pos, masses_ptr) = (r.u32()?, r.u64()?, r.u64()?);
             let _tic = r.f64()?;
-            let (rt_ms, n) = (r.f64()?, r.u32()? as usize);
+            let (rt_ms, n, data_type) = (r.f64()?, r.u32()? as usize, r.u32()?);
             let e = Entry {
                 scan,
                 pos,
                 masses_ptr,
                 rt_ms,
                 n,
+                data_type,
             };
-            r.take(4 + 5 * 8)?; // DataType, per-scan BaselineStatistics
+            r.take(5 * 8)?; // per-scan BaselineStatistics
             Ok(e)
         })
         .collect::<Result<_, _>>()
@@ -274,6 +279,12 @@ mod tests {
         assert_eq!(c.scan_times_s, vec![1.5, 2.0]);
         assert_eq!(c.offsets, vec![0, 2, 3]);
         assert_eq!(c.spectrum(0), (&[73.0, 147.0][..], &[10.0, 5.0][..]));
+        assert!(!c.exact_masses, "DataType 2: the CDF import");
+        // A FastFlight cache (DataType 1) keeps exact masses.
+        let mut ff = idx.clone();
+        let entry = idx.len() - 84;
+        ff[entry + 40..entry + 44].copy_from_slice(&1u32.to_le_bytes());
+        assert!(parse(&ff, &bin).unwrap().exact_masses);
         let stored = read_index(&idx).unwrap().0;
         assert_eq!(stored, wizard_calibration());
         assert_eq!(stored.calibration().unwrap().ri(1.85), 1050.0);

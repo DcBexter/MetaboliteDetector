@@ -40,6 +40,7 @@ fn main() {
                 (k % 997) as f32 * 0.05 + 20_000.0 * (-x * x / 8.0).exp()
             })
             .collect(),
+        exact_masses: false,
     };
     let points = c.mz.len();
     println!(

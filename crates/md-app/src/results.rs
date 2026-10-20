@@ -466,6 +466,7 @@ pub(crate) mod tests {
                 model_share: 1.0,
                 integral: 5.0,
             }],
+            exact_spectrum: Vec::new(),
         };
         Run {
             path: "a.cdf".into(),
@@ -475,6 +476,7 @@ pub(crate) mod tests {
                 offsets: vec![0; 4],
                 mz: Vec::new(),
                 intensity: Vec::new(),
+                exact_masses: false,
             }),
             minutes: vec![0.0, 1.0, 2.0],
             tic: vec![0.0; 3],

@@ -48,8 +48,12 @@ pub struct Component {
     pub last_scan: u32,
     /// Model peak: summed raw intensities of the model peaks for each scan in `first_scan..=last_scan`.
     pub model: Vec<f64>,
-    /// Deconvoluted spectrum as (nominal mass, modelled apex height), ascending mass.
+    /// Deconvoluted spectrum as (nominal mass, modelled apex height), ascending mass. The exact masses
+    /// of a high-resolution run are merged per nominal mass (the sharpest kept).
     pub spectrum: Vec<(u32, u32)>,
+    /// The same as (exact mass, height), ascending: the old `map<float,int>`, one entry per m/z trace.
+    /// On unit-mass data the nominal masses of `spectrum`.
+    pub exact_spectrum: Vec<(f32, u32)>,
     /// Ion peaks behind the spectrum, sharpest first. Like the old code a peak can appear twice (§4.5).
     pub peaks: Vec<FittedPeak>,
 }
@@ -229,22 +233,28 @@ fn fit_component(
         return None;
     }
 
-    // A mass seen twice keeps its first (sharpest) height; the base peak counts all of them.
-    // shortcut: keyed by nominal mass, so the exact masses of a high-resolution run merge here (the
-    // old map keeps each exact mass); exact spectra need float masses in `.cmp` and library search.
+    // A mass seen twice keeps its first (sharpest) height; the base peak counts all of them. Keyed by
+    // trace row, i.e. by exact mass, like the old map.
+    let row = |k: usize| peaks[k].row;
     let bp = fitted.iter().map(|f| f.2).max().unwrap_or(0);
-    let mut spectrum = BTreeMap::new();
+    let mut exact = BTreeMap::new();
     for f in &fitted {
+        exact.entry(row(f.0)).or_insert(f.2);
+    }
+    exact.retain(|_, h| *h as f64 >= s.min_height_bp * bp as f64);
+    // shortcut: `.cmp` and library search read the nominal spectrum; exact masses there need the
+    // undecoded `getBinnedCentroidCompound` and real high-resolution data (follow-up of #173).
+    let mut spectrum = BTreeMap::new();
+    for f in fitted.iter().filter(|f| exact.contains_key(&row(f.0))) {
         spectrum.entry(mass(f.0)).or_insert(f.2);
     }
-    spectrum.retain(|_, h| *h as f64 >= s.min_height_bp * bp as f64);
     Some(Component {
         first_scan: first,
         apex_scan: first + apex as u32,
         last_scan: last,
         peaks: fitted
             .iter()
-            .filter(|f| spectrum.contains_key(&mass(f.0)))
+            .filter(|f| exact.contains_key(&row(f.0)))
             .map(|&(peak, model_share, _, integral)| FittedPeak {
                 peak,
                 model_share,
@@ -252,6 +262,9 @@ fn fit_component(
             })
             .collect(),
         spectrum: spectrum.into_iter().collect(),
+        exact_spectrum: (exact.into_iter())
+            .map(|(r, h)| (traces.mz[r as usize], h))
+            .collect(),
         model,
     })
 }
@@ -357,6 +370,7 @@ pub(crate) mod tests {
                 .flat_map(|_| (50..74).map(|m| m as f32))
                 .collect(),
             intensity,
+            exact_masses: false,
         };
         (c, s)
     }
