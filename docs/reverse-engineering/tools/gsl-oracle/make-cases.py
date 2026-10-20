@@ -8,8 +8,8 @@ Feeds N random precise-apex fits (scan, bins, three intensities) through run.sh 
 line: x0 x1 x2 y0 y1 y2 c0 c1 c2 as IEEE bit patterns in hex. The outputs come from the old program:
 keep them local, do not commit them.
 """
+import hashlib
 import os
-import random
 import struct
 import subprocess
 import sys
@@ -17,20 +17,27 @@ import sys
 here = os.path.dirname(os.path.abspath(__file__))
 bits = lambda v: '%016x' % struct.unpack('<Q', struct.pack('<d', v))[0]
 f32 = lambda v: struct.unpack('<f', struct.pack('<f', v))[0]
-rng = random.Random(250)  # reproducible test cases, not security
+
+
+def pick(case, name, lo, hi):
+    """An integer in [lo, hi] from a hash of (case, name): the same cases on every run."""
+    h = hashlib.blake2b(f'{case} {name}'.encode(), digest_size=8).digest()
+    return lo + int.from_bytes(h, 'little') % (hi - lo + 1)
+
+
 n = int(sys.argv[1]) if len(sys.argv) > 1 else 100000
 inputs = []
-for _ in range(n):
-    bins = rng.choice([10, 10, 10, rng.randint(1, 100)])
-    scan = rng.choice([rng.randint(1, 100), rng.randint(1, 10000), rng.randint(1, 1000000)])
-    k = rng.random()
-    if k < 0.5:  # integer intensities, often near-ties
-        y = [float(rng.randint(0, 60000)) for _ in range(3)]
-    elif k < 0.8:  # f32 intensities, also negative like matched-filter output
-        y = [f32(rng.uniform(-1e4, 1e5)) for _ in range(3)]
+for i in range(n):
+    bins = [10, 10, 10, pick(i, 'bins', 1, 100)][pick(i, 'b', 0, 3)]
+    scan = pick(i, 'scan', 1, [100, 10000, 1000000][pick(i, 's', 0, 2)])
+    k = pick(i, 'kind', 0, 9)
+    if k < 5:  # integer intensities, often near-ties
+        y = [float(pick(i, f'y{j}', 0, 60000)) for j in range(3)]
+    elif k < 8:  # f32 intensities, also negative like matched-filter output
+        y = [f32(-1e4 + pick(i, f'y{j}', 0, 2**53) / 2**53 * 1.1e5) for j in range(3)]
     else:  # flat tops
-        y = [float(rng.randint(0, 1000))] * 3
-    inputs.append([float(bins * (scan - 1 + i)) for i in range(3)] + y)
+        y = [float(pick(i, 'y', 0, 1000))] * 3
+    inputs.append([float(bins * (scan - 1 + j)) for j in range(3)] + y)
 text = ''.join('fit ' + ' '.join(v.hex() for v in a) + '\n' for a in inputs)
 out = subprocess.run([os.path.join(here, 'run.sh')], input=text, capture_output=True, text=True, check=True).stdout
 lines = out.splitlines()
