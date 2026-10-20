@@ -33,6 +33,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
+  src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
   examples/perf.rs      performance smoke test on synthetic large runs
   examples/batch.rs     batch quantification timing on real files
@@ -52,6 +53,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
+  src/statistics.rs     biomarker statistics window: two-group table, box plots, PCA plots
   src/style.rs          app-wide look egui lacks (symbol font fallback); rules in DESIGN.md
   src/ui_tests.rs       glyph check for UI strings; ignored headless screenshot test (docs/ui-quality.md)
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
@@ -60,7 +62,7 @@ crates/md-cli/          headless batch quantification (binary `md-cli`), depends
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: modules in `md-core` for normalisation, MID and statistics.
+Planned additions: modules in `md-core` for normalisation and MID.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
@@ -516,6 +518,22 @@ active run (TIC and/or SIC, every scan, not the decimated plot points) and the s
 chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plot as PNG. PNG is a crop of
 egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
 renamed.
+
+## Biomarker statistics and PCA
+
+`md_core::stats` works on the batch table as shown (after normalisation, so the same numbers as the
+Batch window). `compare` takes two lists of replicate groups and gives, per substance, hits, mean, SD,
+ratio and a two-sided p-value: Welch's t-test over all runs (old "independent"), over one mean per
+replicate group (old "not independent"), or a paired t-test (new). A missing value counts as 0 by
+default, like the old program. The t distribution is our own regularised incomplete beta function; no
+statistics crate. `five_numbers` gives min, quartiles (R type 7) and max for the box plots. `pca`
+excludes the pool runs, z-scores each substance, and takes the SVD of the runs × substances matrix with
+`nalgebra` (pure Rust, `std` only, no BLAS). This equals the old covariance eigen-decomposition and
+scales with the number of runs squared, not the number of substances squared, which matters for
+non-targeted tables. The sign of a component is chosen so its largest loading is positive. Values are
+tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
+[algorithms.md](reverse-engineering/algorithms.md) §7f. The window
+(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
 
 ## Settings
 
