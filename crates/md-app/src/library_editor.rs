@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Plot};
-use md_core::library::{LibraryCompound, save_mdlib};
+use md_core::library::{LibraryCompound, MslType, save_mdlib, write_msl_as};
 
 mod add;
 
@@ -104,6 +104,39 @@ impl LibraryEditor {
         Some(path)
     }
 
+    /// "Export MSL" with the three types of the old export dialog; only `.msl` files are written.
+    fn export_menu(&mut self, ui: &mut egui::Ui, stem: &str) {
+        ui.menu_button("Export MSL", |ui| {
+            for (kind, label) in [
+                (MslType::Nominal, "MSL Nominal"),
+                (MslType::Profile, "MSL Profile"),
+                (MslType::Fwhm, "MSL FWHM"),
+            ] {
+                if ui.button(label).clicked() {
+                    ui.close();
+                    let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MSL library files", &["msl"])
+                        .set_file_name(format!("{stem}.msl"))
+                        .save_file()
+                    else {
+                        return;
+                    };
+                    let text = write_msl_as(&self.compounds, kind);
+                    self.error = if path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("msl"))
+                    {
+                        std::fs::write(&path, text)
+                            .err()
+                            .map(|e| format!("{}: {e}", path.display()))
+                    } else {
+                        Some(format!("{}: export as .msl.", path.display()))
+                    };
+                }
+            }
+        });
+    }
+
     /// Draws the editor; returns the file it saved, if any.
     fn contents(
         &mut self,
@@ -131,11 +164,16 @@ impl LibraryEditor {
             {
                 saved = self.save(path);
             }
-            let stem = Path::new(&self.name).file_stem().unwrap_or_default();
+            let stem = Path::new(&self.name)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            self.export_menu(ui, &stem);
             if ui.button("Save as…").clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("MetaboliteDetector library", &["mdlib"])
-                    .set_file_name(format!("{}.mdlib", stem.to_string_lossy()))
+                    .set_file_name(format!("{stem}.mdlib"))
                     .save_file()
             {
                 // The native dialog asked before replacing a file; only a .mdlib target is written.
