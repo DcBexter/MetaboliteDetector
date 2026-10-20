@@ -75,12 +75,11 @@ pub fn deconvolute(traces: &IonTraces, peaks: &[Peak], s: &DeconvSettings) -> Ve
     let nb = s.number_bins.max(1) as usize;
     let len = nb * (traces.scan_count() + 1) + 1;
     // §4.4: apex intensities summed per sub-scan bin, with the peaks of each bin (counting sort keeps
-    // the old order: by trace, then scan). Without a precise apex the old field keeps the apex scan.
+    // the old order: by trace, then scan). Without a precise apex the old field stays 0 (bin 0).
     let bin_of: Vec<Option<usize>> = peaks
         .iter()
         .map(|p| {
-            let t = p.precise_apex.unwrap_or(p.apex_scan as f32) as f64;
-            let b = (nb as f64 * t + 0.5) as usize;
+            let b = (nb as f64 * p.interpolated_max_scan() + 0.5) as usize;
             (b < len).then_some(b)
         })
         .collect();

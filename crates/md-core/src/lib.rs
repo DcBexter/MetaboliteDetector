@@ -18,6 +18,7 @@ pub mod library_add;
 pub mod mid;
 pub mod normalize;
 pub mod peaks;
+mod quadfit;
 pub mod results;
 pub mod ri;
 pub mod search;

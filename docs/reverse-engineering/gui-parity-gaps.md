@@ -10,8 +10,8 @@ Rule: parity means every old **function** can be reached somewhere. It does not 
 |---|---|
 | `golden_old_md` / `example_data` / `old_results` (old `.cmp`, `.calib`, `raw.tsv` written by the old binary) | all pass |
 | GUI spot check `7235eg06` | old 18 components = new 18 components; TIC heights agree (about 0.8 M at 5.92 min) |
-| Default detector | 241/246 components identical; 5 differ on precise-apex ties (GSL SVD rounding, see `architecture.md`) |
-| Matched filter | 2657/2807 identical; 43 missing, 38 extra, 66 other ions, 41 other heights; same cause |
+| Default detector | 246/246 components identical (clean-room fit, #250) |
+| Matched filter | 2807/2807 identical (#250) |
 | Library search scores | open: #242 (scores 0.05–0.15, few hits); #248 (TargetSearch library does not open) comes first |
 
 ## 2. Main window: what users miss first
@@ -72,7 +72,7 @@ is S4 (#253).
 6. Settings scope: cutoff score, score mode, scaled lib, centroid values, baseline adjustment, appearance options; settle the RI tolerance default.
 7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
 8. DE/EN language switch.
-9. GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.
+9. ~~GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.~~ Done in #250 (rare rest: #290).
 10. ~~Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).~~ Done in #243.
 11. ~~TIC zoom stays stale after switching runs; a click does not snap to a nearby component when it is just over 3 scans away.~~ Done in #251.
 
