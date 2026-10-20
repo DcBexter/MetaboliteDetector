@@ -22,6 +22,7 @@ mod library_editor;
 mod loading;
 mod menu;
 mod mid;
+mod plot_export;
 mod results;
 mod run_list;
 mod settings;
@@ -31,6 +32,7 @@ mod style;
 mod tof_calibration;
 #[cfg(test)]
 mod ui_tests;
+mod vector;
 mod view;
 
 use jobs::{poll_job, spawn};
@@ -185,6 +187,8 @@ impl eframe::App for App {
             self.nist_search();
         }
         self.central_panel(ui);
+        // Last, so the frame holds every plot that asked for an export.
+        self.poll_export(ui.ctx());
     }
 }
 
@@ -197,7 +201,6 @@ impl App {
         }
         self.update_identification(ctx);
         self.update_nist(ctx);
-        self.poll_export();
     }
 
     /// The floating windows opened from the Analysis menu.

@@ -190,6 +190,9 @@ fn screenshots() {
     h.get_by_label("File").click();
     h.run_steps(2);
     shots.save(&mut h, "05-menu-file");
+    h.get_by_label("Export chromatogram").click();
+    h.run_steps(2);
+    shots.save(&mut h, "05b-menu-export-plot");
     h.key_press(egui::Key::Escape);
     h.get_by_label("Analysis").click();
     h.run_steps(2);

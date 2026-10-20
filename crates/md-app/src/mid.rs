@@ -722,6 +722,7 @@ fn fragment_plot(
     }
     let width = 0.8 / series.len().max(1) as f64;
     let whisker = ui.visuals().text_color();
+    let top = ui.cursor().min;
     Plot::new(("mid plot", id))
         .height(160.0)
         .legend(Legend::default())
@@ -757,6 +758,11 @@ fn fragment_plot(
             }
             p.box_plot(BoxPlot::new("", errors).allow_hover(false));
         });
+    crate::plot_export::button(
+        ui,
+        crate::plot_export::Area::since(ui, top),
+        &format!("mid-{}-{}", id.0 + 1, id.1 + 1),
+    );
 }
 
 #[cfg(test)]
