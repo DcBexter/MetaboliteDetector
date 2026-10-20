@@ -496,7 +496,9 @@ the open library or a new one: create, delete and rename compounds, add the sele
 active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
 comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
-and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. After a
+and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. "Export MSL" writes the library as AMDIS text in the three
+types of the old export dialog (Nominal, Profile, FWHM; `library::write_msl_as`, file-formats.md §6.2) and only to a
+`.msl` file. After a
 save the app opens the saved library, so the next search uses the edits.
 
 **Growing a library from runs** (`md_core::library_add`, old `DialogAddLib` and `copyRT`, algorithms.md §7e).
