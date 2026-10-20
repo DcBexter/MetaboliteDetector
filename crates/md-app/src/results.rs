@@ -246,8 +246,14 @@ fn table(
             .sense(egui::Sense::click())
             .resizable(true)
             // The name takes the room the fixed columns leave; a longer one is cut (the row's
-            // tooltip has it whole) so the scores stay in view.
-            .column(Column::remainder().at_least(106.0).clip(true))
+            // tooltip has it whole) so the scores stay in view. Not resizable: egui keeps a resizable
+            // column's first width, so it would stop following the window.
+            .column(
+                Column::remainder()
+                    .at_least(106.0)
+                    .clip(true)
+                    .resizable(false),
+            )
             // Widths that fit the 720 px a window gets at 1280 px, each with room for the sort
             // arrow (a column never shrinks again); right-aligned cells would make automatic
             // columns grow to the window.
