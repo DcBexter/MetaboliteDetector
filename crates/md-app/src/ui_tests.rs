@@ -206,9 +206,12 @@ fn screenshots() {
         if name == "11-library-editor" {
             h.get_by_label("Edit open library").click();
             h.run_steps(2);
+            // The run list and the editor's list both show "Compound at"; click the first entry of the
+            // editor's list (its left column), not whatever the tree ends with.
+            let win = h.get_by_label_contains("Library editor").rect();
             h.get_all(by().label_contains("Compound at"))
-                .last()
-                .unwrap()
+                .find(|n| win.contains_rect(n.rect()) && n.rect().min.x < win.min.x + 40.0)
+                .expect("no compound in the library editor list")
                 .click();
             h.run_steps(2);
         }
