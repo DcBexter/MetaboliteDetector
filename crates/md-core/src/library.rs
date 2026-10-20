@@ -1380,6 +1380,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "a test of many cases: each assert counts, and Sonar skips tests"
+    )]
     fn mdlib_rejects_broken_files() {
         let h = "MetaboliteDetector library 1\n";
         let line = |body: &str| match parse_mdlib(&format!("{h}{body}")) {
