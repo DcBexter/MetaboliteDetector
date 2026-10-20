@@ -84,7 +84,7 @@ impl Results {
             return;
         }
         let lib = &lib;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Find substance");
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
