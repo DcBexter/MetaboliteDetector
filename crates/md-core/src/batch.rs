@@ -677,6 +677,25 @@ mod tests {
     }
 
     #[test]
+    fn an_old_groups_file_is_removed_when_there_are_no_groups() {
+        let dir = std::env::temp_dir().join(format!("md-groups-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("results.csv");
+        let mut t = Table {
+            runs: vec!["a.cdf".into()],
+            groups: vec!["ctrl".into()],
+            rows: vec![],
+        };
+        let written = t.write_groups_file(&csv).unwrap().unwrap();
+        assert!(written.exists());
+        t.groups = vec![String::new()];
+        assert_eq!(t.write_groups_file(&csv).unwrap(), None);
+        assert!(!written.exists());
+        // Nothing to remove is not an error.
+        assert_eq!(t.write_groups_file(&csv).unwrap(), None);
+    }
+
+    #[test]
     fn csv_reports_a_failing_flush() {
         struct Full;
         impl std::io::Write for Full {
