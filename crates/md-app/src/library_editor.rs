@@ -54,6 +54,36 @@ fn ions_text(ions: &[f32]) -> String {
 }
 
 /// Quant ions are a sorted set like the old `std::set<float>`.
+/// A "known" checkbox and, when ticked, a number field. Unknown is stored as -1 (the old program's
+/// value); `unit` converts the stored value to what the field shows. True when the value changed.
+fn optional_value(ui: &mut egui::Ui, value: &mut f64, unit: f64, speed: f64, hover: &str) -> bool {
+    ui.horizontal(|ui| {
+        let mut changed = false;
+        let mut known = *value >= 0.0;
+        if ui
+            .checkbox(&mut known, "known")
+            .on_hover_text(hover)
+            .changed()
+        {
+            *value = if known { 0.0 } else { -1.0 };
+            changed = true;
+        }
+        if known {
+            let mut shown = *value / unit;
+            let drag = egui::DragValue::new(&mut shown)
+                .speed(speed)
+                .range(0.0..=f64::MAX)
+                .clamp_existing_to_range(false);
+            if ui.add(drag).changed() {
+                *value = shown * unit;
+                changed = true;
+            }
+        }
+        changed
+    })
+    .inner
+}
+
 fn parse_ions(text: &str) -> Option<Vec<f32>> {
     let mut ions = (text.split([' ', ',', ';']).filter(|s| !s.is_empty()))
         .map(|s| s.parse::<f32>().ok().filter(|m| m.is_finite() && *m > 0.0))
@@ -294,60 +324,24 @@ impl LibraryEditor {
 
                 // The old program stores -1 for an unknown RT or RI; 0 is a real value.
                 ui.label("RT (min)");
-                ui.horizontal(|ui| {
-                    let mut known = c.spectrum.rt_ms >= 0.0;
-                    if ui
-                        .checkbox(&mut known, "known")
-                        .on_hover_text(
-                            "Untick when the retention time is unknown. 0 is a real value.",
-                        )
-                        .changed()
-                    {
-                        c.spectrum.rt_ms = if known { 0.0 } else { -1.0 };
-                        changed = true;
-                    }
-                    if known {
-                        let mut minutes = c.spectrum.rt_ms / 60_000.0;
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut minutes)
-                                    .speed(0.01)
-                                    .range(0.0..=f64::MAX)
-                                    .clamp_existing_to_range(false),
-                            )
-                            .changed()
-                        {
-                            c.spectrum.rt_ms = minutes * 60_000.0;
-                            changed = true;
-                        }
-                    }
-                });
+                changed |= optional_value(
+                    ui,
+                    &mut c.spectrum.rt_ms,
+                    60_000.0,
+                    0.01,
+                    "Untick when the retention time is unknown. 0 is a real value.",
+                );
                 ui.end_row();
 
                 // The search treats a negative RI as unknown.
                 ui.label("RI");
-                ui.horizontal(|ui| {
-                    let mut known = c.spectrum.ri >= 0.0;
-                    if ui
-                        .checkbox(&mut known, "known")
-                        .on_hover_text(
-                            "Untick when the retention index is unknown. 0 is a real value.",
-                        )
-                        .changed()
-                    {
-                        c.spectrum.ri = if known { 0.0 } else { -1.0 };
-                        changed = true;
-                    }
-                    if known {
-                        changed |= ui
-                            .add(
-                                egui::DragValue::new(&mut c.spectrum.ri)
-                                    .range(0.0..=f64::MAX)
-                                    .clamp_existing_to_range(false),
-                            )
-                            .changed();
-                    }
-                });
+                changed |= optional_value(
+                    ui,
+                    &mut c.spectrum.ri,
+                    1.0,
+                    1.0,
+                    "Untick when the retention index is unknown. 0 is a real value.",
+                );
                 ui.end_row();
 
                 ui.label("Quant ions");
