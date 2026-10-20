@@ -761,8 +761,20 @@ config dir (below), on exit and every 30 s: egui's memory (panel sizes, tool win
 geometry and, under the key `metabolite-detector`, our `KEY=value` lines. These hold every `GcmsSettings`
 field under its old key (`LS_RI_DIFF=10`, ranges as `73:75;147:148`, `PEAK_DETECTOR=default` or
 `matched <width> <threshold>`), `panel.<area>` for the View menu, `library`, `nist_library` and `recent`
-(newest first, at most 10; File → Open recent). Keys the version does not know are written back unchanged;
-`mode` (S7) and `language` (S8) are reserved for those features.
+(newest first, at most 10; File → Open recent) and `mode` (`guided` or `expert`, S7). Keys the version does
+not know are written back unchanged; `language` (S8) is reserved for that feature.
+
+## Guided mode
+
+`crates/md-app/src/guided.rs` (S7, #256). Without a saved `mode` the start asks (a modal, Guided
+preselected); the answer is saved, and Help and Settings switch it. The mode is published to the egui context
+each frame; `guided::advanced` puts expert options of the Settings, RI calibration, batch and MID windows in
+an "Advanced" section, closed in Guided and open in Expert mode (salted with the mode, so a switch resets it).
+Analysis → Step by step starts one of four flows (RI calibration, component detection, batch quantification,
+MID) in its own window: "Step x of n", Back, Next (once the step's input is there), Skip, and Finish or "Open
+the window". Each step draws a building block of the expert window (`Calibration::contents`, `Batch::runs_row`,
+`MidWindow::settings`, …) on the same state, so the flow ends in that window with its values set. Every
+string of the module is in `guided::text` for the translation (S8).
 
 Every value is checked at start: a bad value keeps its default, and each field `GcmsSettings::validate`
 names falls back to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our

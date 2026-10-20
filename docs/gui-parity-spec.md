@@ -109,6 +109,8 @@ Principle: every function of MetaboliteDetector 3.3 can be reached. The look may
   - Each ends in the expert window with the values set.
 - The step flows reuse the expert windows' building blocks; there is no second implementation.
 - In Guided mode, expert options sit under a collapsed "Advanced". In Expert mode, it is open. Every function stays reachable in both modes.
+- **Result (#256):** Analysis → Step by step starts the flows; component detection is the batch with
+  "Save components as .cmp" switched on. Design and files: [architecture.md](architecture.md#guided-mode).
 
 ## S8 Language
 
