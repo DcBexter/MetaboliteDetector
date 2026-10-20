@@ -263,6 +263,14 @@ impl Results {
         false
     }
 
+    pub fn note(&self) -> &str {
+        &self.note
+    }
+
+    pub fn set_note(&mut self, note: String) {
+        self.note = note;
+    }
+
     /// Asks for a `.cmp` file and writes the components of `run` there (button and Ctrl+S).
     pub fn save(&mut self, run: &Run, cal: Option<&RiCalibration>) {
         if let Some(p) = dialog(run).save_file() {
@@ -270,6 +278,8 @@ impl Results {
                 Ok(n) => format!("Saved {n} components to {}", p.display()),
                 Err(e) => format!("Save failed: {e}"),
             };
+        } else {
+            self.note.clear();
         }
     }
 
