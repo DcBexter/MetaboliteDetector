@@ -7,8 +7,11 @@ use eframe::egui;
 use egui_plot::{Bar, BarChart, Plot};
 use md_core::library::{LibraryCompound, save_mdlib};
 
+mod add;
+
 use crate::App;
 use crate::identify::Library;
+use add::{AddDialog, RtDialog, Source};
 
 #[derive(Default)]
 pub struct LibraryEditor {
@@ -28,6 +31,9 @@ pub struct LibraryEditor {
     /// Replacement of the edited library that waits for "Discard" of unsaved changes.
     pending: Option<Replace>,
     error: Option<String>,
+    /// "Add component" and "Copy retention times" while they are open.
+    add: Option<AddDialog>,
+    rt: Option<RtDialog>,
 }
 
 #[derive(Clone, Copy)]
@@ -103,7 +109,7 @@ impl LibraryEditor {
         &mut self,
         ui: &mut egui::Ui,
         library: Option<&Library>,
-        component: Option<LibraryCompound>,
+        source: Option<Source>,
     ) -> Option<PathBuf> {
         let mut saved = None;
         ui.horizontal(|ui| {
@@ -158,12 +164,13 @@ impl LibraryEditor {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         ui.separator();
+        self.add_windows(ui.ctx());
 
         crate::layout::list_and_details(
             ui,
             "library compounds",
             self,
-            |ed, ui| ed.list(ui, component),
+            |ed, ui| ed.list(ui, source.as_ref()),
             |ed, ui| match ed.selected {
                 Some(i) => {
                     egui::ScrollArea::vertical().show(ui, |ui| ed.details(ui, i));
@@ -176,22 +183,29 @@ impl LibraryEditor {
         saved
     }
 
-    fn list(&mut self, ui: &mut egui::Ui, component: Option<LibraryCompound>) {
+    fn list(&mut self, ui: &mut egui::Ui, source: Option<&Source>) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("New compound").clicked() {
                 self.compounds.push(LibraryCompound::new("New compound"));
                 self.dirty = true;
                 self.select(Some(self.compounds.len() - 1));
             }
+            let src = source.filter(|s| s.component().is_some());
             if ui
-                .add_enabled(component.is_some(), egui::Button::new("Add component"))
-                .on_hover_text("The selected component of the active run: spectrum, RT and RI.")
+                .add_enabled(src.is_some(), egui::Button::new("Add component…"))
+                .on_hover_text("The selected component of the active run: spectrum, RT, RI and quant ions.")
                 .clicked()
-                && let Some(c) = component
+                && let Some(src) = src
             {
-                self.compounds.push(c);
-                self.dirty = true;
-                self.select(Some(self.compounds.len() - 1));
+                self.start_add(ui.ctx(), src);
+            }
+            if ui
+                .add_enabled(source.is_some(), egui::Button::new("Copy RTs…"))
+                .on_hover_text("Copy RT and RI of the assigned components of the active run into this library.")
+                .clicked()
+                && let Some(src) = source
+            {
+                self.start_rt_copy(ui.ctx(), src);
             }
             if let Some(i) = self.selected
                 && ui.button("Delete").clicked()
@@ -392,7 +406,13 @@ impl App {
         if !self.editor.open {
             return;
         }
-        let component = self.selected_component();
+        let run = self.runs.get(self.active);
+        let source = run.map(|run| Source {
+            run,
+            ri: self.ri.for_run(run),
+            quant: self.settings.applied.quant(),
+            search: self.settings.applied.search(),
+        });
         let ed = &mut self.editor;
         let name = if ed.name.is_empty() {
             "new library"
@@ -409,34 +429,13 @@ impl App {
             .open(&mut open)
             .default_size([760.0, 520.0])
             .show(ctx, |ui| {
-                saved = ed.contents(ui, self.library.as_deref(), component);
+                saved = ed.contents(ui, self.library.as_deref(), source);
             });
         ed.open = open;
         // The app searches with the saved library from now on.
         if let Some(path) = saved {
             self.open_library(ctx, path);
         }
-    }
-
-    /// The selected component of the active run as a new library compound.
-    fn selected_component(&self) -> Option<LibraryCompound> {
-        let run = self.runs.get(self.active)?;
-        let k = &run.components[run.component?];
-        let rt_s = run.data.scan_times_s[k.apex_scan as usize];
-        let mut c = LibraryCompound::new(&format!("{} {:.3} min", run.name, rt_s / 60.0));
-        let s = &mut c.spectrum;
-        (s.scan, s.rt_ms) = (k.apex_scan, rt_s * 1000.0);
-        s.ri = self.ri.for_run(run).map_or(-1.0, |cal| cal.ri(rt_s));
-        (s.masses, s.values) = (k.spectrum.iter())
-            .map(|&(m, h)| (m as f32, i32::try_from(h).unwrap_or(i32::MAX)))
-            .unzip();
-        // Like an MSL import: one source spectrum, so it is also the combined spectrum.
-        c.comb_spec = (s.masses.iter().copied())
-            .zip(s.values.iter().copied())
-            .collect();
-        c.ion_freq = s.masses.iter().map(|&m| (m, 1)).collect();
-        c.sources.push(format!("Added from {}", run.name));
-        Some(c)
     }
 }
 
