@@ -10,17 +10,19 @@ pub struct Centroids {
     pub mz: Vec<f32>,
     /// Peak area above its baseline, truncated to an integer like the old `int` intensity.
     pub intensity: Vec<i32>,
-    /// Number of points at or above half of the peak maximum (the old "FWHM" is a point count).
+    /// Number of points at or above `SF_FWHM` times the peak maximum (the old "FWHM" is a point count).
     pub fwhm: Vec<f64>,
 }
 
 /// Thresholds of `getCentroidSpectrum`: slope that starts a peak, slope that ends it, and the
-/// allowed baseline deviation in standard deviations.
+/// allowed baseline deviation in standard deviations; `fwhm` (`SF_FWHM`) is the share of the peak
+/// maximum a point must reach to count in the centroid mass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CentroidSettings {
     pub threshold_begin: f64,
     pub threshold_end: f64,
     pub max_base_dev: f64,
+    pub fwhm: f64,
 }
 
 impl From<&GcmsSettings> for CentroidSettings {
@@ -29,6 +31,7 @@ impl From<&GcmsSettings> for CentroidSettings {
             threshold_begin: s.sf_centroid_threshold_begin,
             threshold_end: s.sf_centroid_threshold_end,
             max_base_dev: s.sf_centroid_max_base_dev,
+            fwhm: s.sf_fwhm,
         }
     }
 }
@@ -39,6 +42,7 @@ impl Default for CentroidSettings {
             threshold_begin: 10.0,
             threshold_end: -5.0,
             max_base_dev: 30.0,
+            fwhm: 0.5,
         }
     }
 }
@@ -154,7 +158,7 @@ pub fn centroid(mz: &[f32], intensity: &[i32], s: &CentroidSettings) -> Centroid
                 i += 1;
             }
             if end != 0 && end - start > 2 && top != start && top != end {
-                peak(mz, v, start, end, top, &mut out);
+                peak(mz, v, start, end, top, s.fwhm, &mut out);
             }
         }
         i += 1;
@@ -165,13 +169,21 @@ pub fn centroid(mz: &[f32], intensity: &[i32], s: &CentroidSettings) -> Centroid
 /// `createSpectrumPeak`, `determineIntegral` and `determineCentroid` for the points `first..=last`;
 /// `top` is the highest point the slope search found. The old area is the plain sum of the points:
 /// the peak baseline is still unset when it is taken.
-fn peak(mz: &[f32], v: &[i32], first: usize, last: usize, top: usize, out: &mut Centroids) {
+fn peak(
+    mz: &[f32],
+    v: &[i32],
+    first: usize,
+    last: usize,
+    top: usize,
+    fwhm: f64,
+    out: &mut Centroids,
+) {
     let w = &v[first..=last];
     let max = (first..=last).fold(top, |m, k| if v[k] > v[m] { k } else { m });
-    let half = 0.5 * f64::from(v[max]);
+    let least = fwhm * f64::from(v[max]);
     let (mut weighted, mut total, mut count) = (0.0f64, 0.0f64, 0.0);
     for (k, y) in w.iter().enumerate() {
-        if f64::from(*y) >= half {
+        if f64::from(*y) >= least {
             weighted += f64::from(mz[first + k] * *y as f32);
             total += f64::from(*y);
             count += 1.0;

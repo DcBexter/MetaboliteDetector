@@ -83,7 +83,7 @@ fn main() {
     println!("overlay frame, 15 runs x TIC+SIC: {:?}", t.elapsed());
 
     let t = Instant::now();
-    let mut traces = IonTraces::new(&c).unwrap();
+    let mut traces = IonTraces::new(&c, 0.5).unwrap();
     println!("ion traces ({}): {:?}", traces.len(), t.elapsed());
 
     let t = Instant::now();

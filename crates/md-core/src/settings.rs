@@ -184,6 +184,8 @@ impl GcmsSettings {
                 Err(format!("{name}: must be between {lo} and {hi}"))
             }
         };
+        // A share of the peak maximum: above 1 no point reaches it and every centroid is empty.
+        ranged("SF_FWHM", self.sf_fwhm, 0.0, 1.0)?;
         ranged("AN_MIN_PEAK_HEIGHT", self.an_min_peak_height, 0.0, 1e9)?;
         ranged(
             "AN_DECONVOLUTION_WIDTH",
@@ -383,6 +385,7 @@ impl GcmsSettings {
             min_peak_height: self.an_min_peak_height as f32,
             number_bins: self.an_number_bins.max(1) as u32,
             detector: self.peak_detector,
+            fwhm: self.sf_fwhm,
         }
     }
 
@@ -452,6 +455,13 @@ mod tests {
     fn defaults_match_old_static_values() {
         let s = GcmsSettings::default();
         assert_eq!(s.peak(), PeakSettings::default());
+        // SF_FWHM reaches every centroiding (#293).
+        let f = GcmsSettings {
+            sf_fwhm: 0.3,
+            ..s.clone()
+        };
+        let centroid = crate::centroid::CentroidSettings::from(&f);
+        assert_eq!((f.peak().fwhm, centroid.fwhm), (0.3, 0.3));
         assert_eq!(s.deconv(), DeconvSettings::default());
         assert_eq!(
             s.search(),

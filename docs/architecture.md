@@ -740,8 +740,10 @@ one). The file is untrusted: size must match the excluded-ion count exactly, the
 every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
 (not decoded). `LS_CUTOFF`, `AN_MIN_HEIGHT_BP`, `AN_MODELED_VALUES_FOR_INTEGRATION` and `LS_MASS_FILTER`
 are not in the old file; loading keeps their current value. `SF_CENTROID_*` steer the centroid export.
+`SF_FWHM` (0..1) is the share of a peak's maximum a point must reach to count in every centroid: the
+high-resolution import (`IonTraces::new`), the centroid export, the MSL export and the TOF calibration (#293).
 `SF_PEAK_*`, `SF_MAX_BASE_DEV` and `LS_USE_SCALED_LIB` are dead in 3.3 too (algorithms.md §4b.4); they and
-`SF_FWHM`, `AN_MAX_BASE_DEV`, `LS_RESOLUTION` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are
+`AN_MAX_BASE_DEV`, `LS_RESOLUTION` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are
 stored and shown, but no step reads them yet. The search runs with cutoff 0 like the old GUI (§5.8);
 `LS_CUTOFF` then decides which assigned hit counts as a match in the component list, Find substance and the
 batch. The Settings window also chooses the two libraries and holds the old Appearance switches (axis
