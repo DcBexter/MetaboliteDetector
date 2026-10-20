@@ -12,6 +12,8 @@ use md_core::batch::{
     Completed, RescanSettings, RunResult, ScanSettings, ShiftReference, Table, TableSettings,
     complete_scan, scan_runs, table,
 };
+use md_core::library::LibraryCompound;
+use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
@@ -32,9 +34,9 @@ struct Job {
 
 struct Scan {
     lib: Arc<Library>,
-    runs: Vec<RunResult>,
+    runs: Arc<Vec<RunResult>>,
     /// Unknown substances pooled by an untargeted scan; they follow the library's entries.
-    extra: Vec<md_core::library::LibraryCompound>,
+    extra: Arc<Vec<LibraryCompound>>,
     rescanned: usize,
     errors: Vec<String>,
     took: Duration,
@@ -102,6 +104,8 @@ pub struct Batch {
     /// File dates of the table's runs and how many could not be read; read once per table.
     times: Option<(Vec<i64>, usize)>,
     note: String,
+    /// FRAG export being written; its note replaces `note` when done.
+    frag_job: Option<mpsc::Receiver<String>>,
 }
 
 impl Default for Batch {
@@ -126,6 +130,7 @@ impl Default for Batch {
             generation: 0,
             times: None,
             note: String::new(),
+            frag_job: None,
         }
     }
 }
@@ -182,14 +187,19 @@ impl Batch {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.frag_job
+            && let Some(r) = crate::poll_job(rx, "MID export")
+        {
+            (self.note, self.frag_job) = (r.unwrap_or_else(|e| e), None);
+        }
         let Some(job) = &self.job else { return };
         match job.rx.try_recv() {
             Ok(Some((runs, mut errors, done))) => {
                 errors.extend(done.errors);
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
-                    runs,
-                    extra: done.extra,
+                    runs: Arc::new(runs),
+                    extra: Arc::new(done.extra),
                     rescanned: done.rescanned,
                     errors,
                     took: job.started.elapsed(),
@@ -452,9 +462,16 @@ impl Batch {
                     self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
-                    if let Some(note) = export_button(ui, shown) {
-                        self.note = note;
-                    }
+                    ui.horizontal(|ui| {
+                        if let Some(note) = export_button(ui, shown) {
+                            self.note = note;
+                        }
+                        if self.frag_job.is_none()
+                            && let Some(rx) = frag_button(ui, shown, scan)
+                        {
+                            (self.note, self.frag_job) = ("Exporting MIDs…".into(), Some(rx));
+                        }
+                    });
                     table_view(ui, shown, &self.norm);
                 }
             }
@@ -467,6 +484,52 @@ impl Batch {
             None => {}
         }
     }
+}
+
+/// "Export MIDs" of the old batch table: isotopomer shares of the fragments in each shown
+/// substance's `FRAG` feature, written on a worker thread that sends back a note.
+fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiver<String>> {
+    if !ui
+        .button("Export MIDs (FRAG)…")
+        .on_hover_text("Total ion counts and isotopomer shares of the fragments in each substance's FRAG feature, e.g. (174/8)(261/5).")
+        .clicked()
+    {
+        return None;
+    }
+    let p = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name("mids.csv")
+        .save_file()?;
+    let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
+    let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
+    Some(spawn(ui.ctx(), move || {
+        let n = lib.compounds.len();
+        // Unknowns of an untargeted scan follow the library's entries.
+        let compounds: Vec<(usize, &LibraryCompound)> = (rows.into_iter())
+            .filter_map(|i| {
+                Some((
+                    i,
+                    lib.compounds
+                        .get(i)
+                        .or_else(|| extra.get(i.checked_sub(n)?))?,
+                ))
+            })
+            .collect();
+        let e = frag_export(&runs, &compounds);
+        let mut note = match std::fs::write(&p, &e.csv) {
+            Ok(()) => format!("Saved {}", p.display()),
+            Err(err) => format!("Export failed: {err}"),
+        };
+        for m in &e.errors {
+            note += &format!("\n{m}");
+        }
+        match e.warnings.len() {
+            0 => {}
+            1 => note += &format!("\n{}", e.warnings[0]),
+            n => note += &format!("\n{n} substances have no fragment (FRAG) defined."),
+        }
+        note
+    }))
 }
 
 /// The export has the values the table shows. Returns a note after a save attempt.
