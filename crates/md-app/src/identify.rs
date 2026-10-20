@@ -158,6 +158,7 @@ impl App {
                     (none, None)
                 });
                 run.ident = Some((k.clone(), id, shifted));
+                run.rev += 1;
                 run.ident_job = None;
             }
             if !run.ident.as_ref().is_some_and(|i| current(&i.0))

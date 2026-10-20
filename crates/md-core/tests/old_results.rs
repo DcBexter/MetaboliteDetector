@@ -124,7 +124,7 @@ fn reads_and_rewrites_old_cmp_files() {
         if cdf.exists() {
             let times = md_core::read_run(&cdf).unwrap().scan_times_s;
             let k = md_core::cmp::saved_components(&d.join(format!("{name}.cdf")), &times);
-            assert_eq!(k.unwrap().unwrap().len(), cmp.len(), "{name}");
+            assert_eq!(k.unwrap().unwrap().0.len(), cmp.len(), "{name}");
         }
         let mine = ours(&d).join(format!("{name}.cmp"));
         write_cmp(&mine, &cmp).unwrap();

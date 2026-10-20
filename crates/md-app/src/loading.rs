@@ -26,7 +26,7 @@ impl App {
                                 warnings.push(e.to_string());
                                 None
                             });
-                        let components = match saved {
+                        let (components, peak_masses) = match saved {
                             Some(c) => c,
                             None => settings::analyze(&data, &key)?,
                         };
@@ -46,12 +46,14 @@ impl App {
                             sic_job: None,
                             components,
                             saved_calibration,
+                            peak_masses,
                             analysis: settings::Analysis::new(key),
                             scan: 0,
                             component: None,
                             visible: true,
                             ident: None,
                             ident_job: None,
+                            rev: 0,
                         };
                         Ok((run, warnings))
                     }

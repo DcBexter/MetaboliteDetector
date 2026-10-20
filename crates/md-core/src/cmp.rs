@@ -80,13 +80,17 @@ impl CmpCompound {
     }
 }
 
+/// Components and the ion mass of each of their peaks (`FittedPeak::peak` indexes it).
+pub type SavedComponents = (Vec<Component>, Vec<u32>);
+
 /// Components saved next to a run (`<run>.cmp`), ordered by apex like `deconvolute`'s callers use
-/// them. None without a file; an error when a component lies outside the run or its apex time does
-/// not match the run's `scan_times_s` (a `.cmp` of another run).
+/// them, and the ion mass of every peak their `FittedPeak::peak` points to. None without a file; an
+/// error when a component lies outside the run or its apex time does not match the run's
+/// `scan_times_s` (a `.cmp` of another run).
 pub fn saved_components(
     run: &Path,
     scan_times_s: &[f64],
-) -> Result<Option<Vec<Component>>, LibraryError> {
+) -> Result<Option<SavedComponents>, LibraryError> {
     let path = run.with_extension("cmp");
     if !path.is_file() {
         return Ok(None);
@@ -118,8 +122,14 @@ pub fn saved_components(
             k.apex_scan
         )));
     }
+    // One peak list for the run, like `deconvolute` gets it.
+    let mut masses = Vec::new();
+    for (k, c) in components.iter_mut().zip(&compounds) {
+        k.peaks.iter_mut().for_each(|f| f.peak += masses.len());
+        masses.extend(c.peaks.iter().map(|p| p.ion.round() as u32));
+    }
     components.sort_by_key(|k| k.apex_scan);
-    Ok(Some(components))
+    Ok(Some((components, masses)))
 }
 
 const VERSION: u32 = 4;
@@ -415,8 +425,16 @@ mod tests {
         let times: Vec<f64> = (0..20).map(|i| 247.16 + (i - 12) as f64 * 0.2).collect();
         assert!(saved_components(&run, &times).unwrap().is_none());
         write_cmp(dir.join("run.cmp"), &sample()).unwrap();
-        let k = saved_components(&run, &times).unwrap().unwrap();
+        let (k, masses) = saved_components(&run, &times).unwrap().unwrap();
         assert_eq!(k.len(), 2);
+        // sample(): the first compound has peaks at 73 and 147, the second none.
+        assert_eq!(masses, [73, 147]);
+        let fitted: Vec<_> = k
+            .iter()
+            .flat_map(|k| &k.peaks)
+            .map(|f| masses[f.peak])
+            .collect();
+        assert_eq!(fitted, [73, 147]);
         assert!(
             saved_components(&run, &times[..15]).is_err(),
             "last scan 15 needs 16 scans"

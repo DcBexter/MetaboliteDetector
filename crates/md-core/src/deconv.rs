@@ -56,8 +56,8 @@ pub struct Component {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FittedPeak {
-    /// Index into the peak list given to `deconvolute` (for a saved component: into
-    /// `cmp::CmpCompound::peaks`).
+    /// Index into the peak list given to `deconvolute` (for saved components: into the mass list
+    /// `cmp::saved_components` returns; for `cmp::CmpCompound::component`: into its own peaks).
     pub peak: usize,
     /// Share of the model peak in this ion trace (`c2` of the fit).
     pub model_share: f64,
