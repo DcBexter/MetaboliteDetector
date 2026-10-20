@@ -53,6 +53,10 @@ impl App {
     }
 
     pub fn run_action(&mut self, ctx: &egui::Context, action: Action) {
+        // The status bar shows an old error before the result of these two.
+        if matches!(action, Action::SaveComponents | Action::ExportCsv) {
+            self.error = None;
+        }
         match action {
             Action::Open => self.pick_chromatograms(ctx),
             Action::SaveComponents => {
@@ -129,5 +133,14 @@ mod tests {
         assert_eq!(app.runs[0].component, Some(1));
         press(&mut app, Key::ArrowUp);
         assert_eq!(app.runs[0].component, Some(0));
+    }
+
+    #[test]
+    fn saving_and_exporting_replace_an_old_error() {
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        app.error = Some("Could not load x".into());
+        app.run_action(&ctx, Action::SaveComponents);
+        assert_eq!(app.error, None);
     }
 }
