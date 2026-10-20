@@ -529,42 +529,9 @@ impl Batch {
     }
 
     /// Scan options, quant ions and the filters of the table.
-    fn settings_grid(&mut self, ui: &mut egui::Ui) {
+    pub fn settings_grid(&mut self, ui: &mut egui::Ui) {
         let s = &mut self.settings;
         egui::Grid::new("batch settings").show(ui, |ui| {
-            row(
-                ui,
-                "Runs in memory at once",
-                "",
-                "How many files are read at the same time; each run is analysed in parallel anyway. \
-                 Fewer need less memory.",
-                egui::DragValue::new(&mut self.parallel).range(1..=64),
-            );
-            row(
-                ui,
-                "Quant ions per substance",
-                "QUANT_ION_NUMBER",
-                "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
-                egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
-            );
-            row(
-                ui,
-                "Min. distance of quant ions",
-                "QUANT_MIN_DIST_IONS",
-                "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
-                egui::DragValue::new(&mut s.quant.min_dist)
-                    .range(0.0..=100.0)
-                    .speed(0.1),
-            );
-            row(
-                ui,
-                "Quant ion quality cut-off",
-                "QUANT_QUALITY_CUTOFF",
-                "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
-                egui::DragValue::new(&mut s.quant.quality_cutoff)
-                    .range(0.0..=100.0)
-                    .speed(0.1),
-            );
             row(
                 ui,
                 "Replicate groups (regex on file name)",
@@ -590,61 +557,98 @@ impl Batch {
             );
             row(
                 ui,
-                "Min. quant ions found",
-                "",
-                "A value counts only if at least this many of the substance's quant ions were found.",
-                egui::DragValue::new(&mut s.min_ions).range(1..=20),
-            );
-            row(
-                ui,
-                "Min. signal-to-noise of an ion",
-                "",
-                "An ion counts only if its peak has at least this signal-to-noise ratio (old \
-                 \"Req. S/N\").",
-                egui::DragValue::new(&mut s.min_sn)
-                    .range(0.0..=1e6)
-                    .speed(0.1),
-            );
-            let hint = "A value counts only if the mean peak quality of its ions is at most this. \
-                        Off: no limit.";
-            let name = ui.label("Max. discrepancy index").on_hover_text(hint);
-            let mut limit = s.max_discrepancy.is_finite();
-            ui.horizontal(|ui| {
-                ui.add(egui::Checkbox::without_text(&mut limit))
-                    .labelled_by(name.id)
-                    .on_hover_text(hint);
-                let mut v = if limit { s.max_discrepancy } else { 0.0 };
-                ui.add_enabled(limit, egui::DragValue::new(&mut v).range(0.0..=1e6).speed(0.1))
-                    .labelled_by(name.id)
-                    .on_hover_text(hint)
-                    .on_disabled_hover_text("Tick the box to set a limit.");
-                s.max_discrepancy = if limit { v } else { f32::INFINITY };
-            });
-            ui.end_row();
-            row(
-                ui,
                 "Untargeted",
                 "",
                 "Also list components without a library hit: they are pooled over all runs into \
                  unknown substances. Applies to the next scan.",
                 egui::Checkbox::without_text(&mut self.options.untargeted),
             );
-            row(
-                ui,
-                "Rescan missing ions",
-                "",
-                "Search the ion traces again in the window of the RI difference around the expected \
-                 positions. Applies to the next scan, with the quant ions chosen now.",
-                egui::Checkbox::without_text(&mut self.options.rescan),
-            );
             save_cmp_row(ui, &mut self.options.save_cmp);
         });
-        crate::settings::ranges(
-            ui,
-            "Ions avoided as quant ions",
-            "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
-            &mut s.quant.excluded,
-        );
+        crate::guided::advanced(ui, "batch settings", |ui| {
+            egui::Grid::new("batch advanced").show(ui, |ui| {
+                row(
+                    ui,
+                    "Runs in memory at once",
+                    "",
+                    "How many files are read at the same time; each run is analysed in parallel anyway. \
+                     Fewer need less memory.",
+                    egui::DragValue::new(&mut self.parallel).range(1..=64),
+                );
+                row(
+                    ui,
+                    "Quant ions per substance",
+                    "QUANT_ION_NUMBER",
+                    "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
+                    egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
+                );
+                row(
+                    ui,
+                    "Min. distance of quant ions",
+                    "QUANT_MIN_DIST_IONS",
+                    "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
+                    egui::DragValue::new(&mut s.quant.min_dist)
+                        .range(0.0..=100.0)
+                        .speed(0.1),
+                );
+                row(
+                    ui,
+                    "Quant ion quality cut-off",
+                    "QUANT_QUALITY_CUTOFF",
+                    "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
+                    egui::DragValue::new(&mut s.quant.quality_cutoff)
+                        .range(0.0..=100.0)
+                        .speed(0.1),
+                );
+                row(
+                    ui,
+                    "Min. quant ions found",
+                    "",
+                    "A value counts only if at least this many of the substance's quant ions were found.",
+                    egui::DragValue::new(&mut s.min_ions).range(1..=20),
+                );
+                row(
+                    ui,
+                    "Min. signal-to-noise of an ion",
+                    "",
+                    "An ion counts only if its peak has at least this signal-to-noise ratio (old \
+                     \"Req. S/N\").",
+                    egui::DragValue::new(&mut s.min_sn)
+                        .range(0.0..=1e6)
+                        .speed(0.1),
+                );
+                let hint = "A value counts only if the mean peak quality of its ions is at most this. \
+                            Off: no limit.";
+                let name = ui.label("Max. discrepancy index").on_hover_text(hint);
+                let mut limit = s.max_discrepancy.is_finite();
+                ui.horizontal(|ui| {
+                    ui.add(egui::Checkbox::without_text(&mut limit))
+                        .labelled_by(name.id)
+                        .on_hover_text(hint);
+                    let mut v = if limit { s.max_discrepancy } else { 0.0 };
+                    ui.add_enabled(limit, egui::DragValue::new(&mut v).range(0.0..=1e6).speed(0.1))
+                        .labelled_by(name.id)
+                        .on_hover_text(hint)
+                        .on_disabled_hover_text("Tick the box to set a limit.");
+                    s.max_discrepancy = if limit { v } else { f32::INFINITY };
+                });
+                ui.end_row();
+                row(
+                    ui,
+                    "Rescan missing ions",
+                    "",
+                    "Search the ion traces again in the window of the RI difference around the expected \
+                     positions. Applies to the next scan, with the quant ions chosen now.",
+                    egui::Checkbox::without_text(&mut self.options.rescan),
+                );
+            });
+            crate::settings::ranges(
+                ui,
+                "Ions avoided as quant ions",
+                "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
+                &mut s.quant.excluded,
+            );
+        });
     }
 
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
@@ -653,7 +657,7 @@ impl Batch {
     }
 
     /// Progress and Cancel while a scan runs, else Start and what it will use.
-    fn job_row(
+    pub fn job_row(
         &mut self,
         ui: &mut egui::Ui,
         lib: Option<&Arc<Library>>,
@@ -715,6 +719,33 @@ impl Batch {
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
+        self.runs_row(ui);
+        // A short screen scrolls the settings, so the result table below stays on it. Measured on
+        // the screen: the window's own height follows its content and would shrink with the cap.
+        egui::ScrollArea::vertical()
+            .id_salt("batch settings")
+            .max_height(ui.ctx().content_rect().height() * 0.4)
+            .show(ui, |ui| self.settings_grid(ui));
+        self.job_row(ui, lib, cal, reference);
+        self.results(ui);
+    }
+
+    /// Whether runs are chosen; the guided steps go on once they are.
+    pub fn has_runs(&self) -> bool {
+        !self.paths.is_empty()
+    }
+
+    /// The guided component detection is the batch that saves the components; it starts with that on.
+    pub fn save_cmp_by_default(&mut self) {
+        (self.options.save_cmp).get_or_insert(md_core::batch::CmpTarget::BesideRun);
+    }
+
+    /// The `.cmp` choice alone, for the guided component detection.
+    pub fn cmp_grid(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("batch cmp").show(ui, |ui| save_cmp_row(ui, &mut self.options.save_cmp));
+    }
+
+    pub fn runs_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button("Add runs…").clicked()
                 && let Some(p) = rfd::FileDialog::new()
@@ -733,13 +764,10 @@ impl Batch {
             }
             ui.label(format!("{} runs", self.paths.len()));
         });
-        // A short screen scrolls the settings, so the result table below stays on it. Measured on
-        // the screen: the window's own height follows its content and would shrink with the cap.
-        egui::ScrollArea::vertical()
-            .id_salt("batch settings")
-            .max_height(ui.ctx().content_rect().height() * 0.4)
-            .show(ui, |ui| self.settings_grid(ui));
-        self.job_row(ui, lib, cal, reference);
+    }
+
+    /// The last scan: its summary, normalisation, exports and the table.
+    fn results(&mut self, ui: &mut egui::Ui) {
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
             let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)

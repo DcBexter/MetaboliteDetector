@@ -349,6 +349,26 @@ impl MidWindow {
         reference: Option<(&str, f64)>,
     ) {
         self.settings(ui);
+        self.run_lists(ui);
+        self.start_row(ui, lib, cal, reference);
+        let Some(r) = &mut self.result else { return };
+        ui.separator();
+        result_view(ui, r, &mut self.note);
+    }
+
+    /// Whether Start can run once the library is ready; the guided steps go on once it can.
+    pub fn ready(&self) -> bool {
+        self.problem().is_none()
+    }
+
+    /// Progress and Cancel while it runs, else Start and what it will use.
+    pub fn start_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        lib: Option<&Arc<Library>>,
+        cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
+    ) {
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
                 let d = job.done.load(Relaxed);
@@ -398,9 +418,6 @@ impl MidWindow {
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
-        let Some(r) = &mut self.result else { return };
-        ui.separator();
-        result_view(ui, r, &mut self.note);
     }
 
     /// Why the MIDs cannot be determined yet.
@@ -419,7 +436,7 @@ impl MidWindow {
         }
     }
 
-    fn settings(&mut self, ui: &mut egui::Ui) {
+    pub fn settings(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("mid settings").show(ui, |ui| {
             ui.label("Correction");
             ui.vertical(|ui| {
@@ -439,34 +456,46 @@ impl MidWindow {
             ui.add(egui::TextEdit::singleline(&mut self.tracer).desired_width(40.0))
                 .labelled_by(label.id);
             ui.end_row();
-            if self.kind == Kind::Reference {
-                // Pre-fill the tracer's natural M+1 abundance whenever the tracer changes.
-                if self.abundance_for != self.tracer {
-                    self.abundance_for = self.tracer.clone();
-                    if let Some(i) = self.table.isotopes(self.tracer.trim()).and_then(|i| i.get(1)) {
-                        self.abundance = i.abundance * 100.0;
-                    }
-                }
-                ui.label("M1 correction");
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.m1, "natural abundance");
-                    ui.add_enabled(
-                        self.m1,
-                        egui::DragValue::new(&mut self.abundance)
-                            .range(0.0..=100.0)
-                            .speed(0.01)
-                            .suffix(" %"),
-                    );
-                });
-                ui.end_row();
-            }
-            let hint = "Search the ion traces again for fragment ions the deconvolution missed";
-            let rescan = ui.label("Rescan missing ions").on_hover_text(hint);
-            ui.add(egui::Checkbox::without_text(&mut self.rescan))
-                .labelled_by(rescan.id)
-                .on_hover_text(hint);
-            ui.end_row();
         });
+        // Pre-fill the tracer's natural M+1 abundance whenever the tracer changes, also while
+        // "Advanced" is closed.
+        if self.kind == Kind::Reference && self.abundance_for != self.tracer {
+            self.abundance_for = self.tracer.clone();
+            if let Some(i) = self
+                .table
+                .isotopes(self.tracer.trim())
+                .and_then(|i| i.get(1))
+            {
+                self.abundance = i.abundance * 100.0;
+            }
+        }
+        crate::guided::advanced(ui, "mid settings", |ui| {
+            egui::Grid::new("mid advanced").show(ui, |ui| {
+                if self.kind == Kind::Reference {
+                    ui.label("M1 correction");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.m1, "natural abundance");
+                        ui.add_enabled(
+                            self.m1,
+                            egui::DragValue::new(&mut self.abundance)
+                                .range(0.0..=100.0)
+                                .speed(0.01)
+                                .suffix(" %"),
+                        );
+                    });
+                    ui.end_row();
+                }
+                let hint = "Search the ion traces again for fragment ions the deconvolution missed";
+                let rescan = ui.label("Rescan missing ions").on_hover_text(hint);
+                ui.add(egui::Checkbox::without_text(&mut self.rescan))
+                    .labelled_by(rescan.id)
+                    .on_hover_text(hint);
+                ui.end_row();
+            });
+        });
+    }
+
+    pub fn run_lists(&mut self, ui: &mut egui::Ui) {
         runs(ui, "Labelled runs", &mut self.labelled);
         if self.kind == Kind::Reference {
             runs(ui, "Unlabelled runs", &mut self.unlabelled);

@@ -163,7 +163,12 @@ impl Settings {
 
     /// The window; `libraries` are the paths of the open compound and NIST library. Returns the
     /// library the user wants to choose.
-    pub fn window(&mut self, ctx: &egui::Context, libraries: [Option<&Path>; 2]) -> Option<Pick> {
+    pub fn window(
+        &mut self,
+        ctx: &egui::Context,
+        libraries: [Option<&Path>; 2],
+        mode: &mut crate::guided::Mode,
+    ) -> Option<Pick> {
         let mut open = self.open;
         let mut pick = None;
         egui::Window::new("Settings")
@@ -174,7 +179,10 @@ impl Settings {
                     .max_height(ui.available_height() - 60.0)
                     .show(ui, |ui| {
                         pick = self.libraries(ui, libraries);
-                        self.fields(ui);
+                        ui.strong(crate::guided::text::MODE);
+                        crate::guided::switch(ui, mode);
+                        ui.add_space(8.0);
+                        crate::guided::advanced(ui, "settings", |ui| self.fields(ui));
                     });
                 ui.separator();
                 self.buttons(ui);

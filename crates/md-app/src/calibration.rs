@@ -123,6 +123,18 @@ impl Calibration {
             .or(base.map(|c| &**c))
     }
 
+    /// What the batch and MID scans search with: the calibration, not while the library is rebuilt
+    /// after a switch of RT-only (its anchors would not match), and the reference with its cutoff.
+    pub fn for_search(
+        &self,
+        lib: Option<&Library>,
+    ) -> (Option<&RiCalibration>, Option<(&str, f64)>) {
+        let cal = (self.cal.as_deref())
+            .filter(|_| lib.is_some_and(|l| l.prepared.is_rt_only() == self.rt_only));
+        let reference = (self.reference.as_deref()).map(|n| (n, self.ref_cutoff));
+        (cal, reference)
+    }
+
     /// ", RI …" for the scan, or nothing without a calibration.
     pub fn ri_note(&self, run: &Run, scan: usize) -> String {
         self.for_run(run)
@@ -254,7 +266,11 @@ impl Calibration {
         self.open = open;
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>) {
+    pub fn contents(&mut self, ui: &mut egui::Ui, run: Option<&Run>) {
+        // First, so the guided step that finds the alkanes shows why it failed too.
+        if let Some(e) = &self.error {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
         let was = self.rt_only;
         ui.checkbox(
             &mut self.rt_only,
@@ -292,6 +308,10 @@ impl Calibration {
                     .on_hover_text("Carbon number of the last alkane in the mix");
             });
             ui.end_row();
+        });
+        // The matched detector's settings for the marker peaks.
+        crate::guided::advanced(ui, "alkane filter", |ui| {
+            egui::Grid::new("alkane filter").show(ui, |ui| {
             let label = ui.label("Filter width (scans)");
             ui.add(egui::DragValue::new(&mut self.density).range(1..=1000))
                 .labelled_by(label.id)
@@ -304,6 +324,7 @@ impl Calibration {
                 .labelled_by(label.id)
                 .on_hover_text("Peaks are kept where the filtered marker-ion trace rises above this value (not the raw intensity)");
             ui.end_row();
+            });
         });
         ui.horizontal(|ui| {
             if let Some(run) = run
@@ -427,10 +448,7 @@ impl Calibration {
     }
 
     /// The editable table: a change takes effect when the field is left or the drag ends.
-    fn table(&mut self, ui: &mut egui::Ui) {
-        if let Some(e) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, e);
-        }
+    pub fn table(&mut self, ui: &mut egui::Ui) {
         if self.rt_only {
             return;
         }

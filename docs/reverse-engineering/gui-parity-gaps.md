@@ -39,7 +39,7 @@ is S4 (#253).
 | File: Open (Ctrl+O), Save results (Ctrl+S), GCMS info, Unload | Open chromatograms…, Results → Save components…, Run info…, "×" in the run list | Shortcuts missing |
 | Import: NetCDF import dialog (batch conversion, compression), FastFlight import (Ctrl+I, TOF calib., recursive), Import MSL library | NetCDF/FastFlight open directly; MSL opens as a library | Batch conversion of many files to the native format: check whether still needed |
 | Export: results CSV (Ctrl+E), NetCDF export, chromatogram CSV, library export (MSL nominal/profile/FWHM) | Results Export CSV, Export as NetCDF, Export chromatogram/spectrum, library editor Export MSL | Library export: check that all three MSL types are there; shortcut missing |
-| Tools: RI-Calibration Wizard, Compound Detection Wizard, Batch quantification wizard, MID wizard | Single windows: RI calibration, Batch (option "Save components as .cmp"), MID | No guided flow (see section 5) |
+| Tools: RI-Calibration Wizard, Compound Detection Wizard, Batch quantification wizard, MID wizard | Single windows: RI calibration, Batch (option "Save components as .cmp"), MID | Guided step flows since #256 (Analysis → Step by step) |
 | Tools: Detect Components (Ctrl+D) | Runs automatically on load / after Settings Apply | Fine; shortcut not needed |
 | Tools: Library Editor, Split spectrum window, Chromatogram overlay, Find Compound, Natural Isotope Calculator, Copy RT to target lib | Library editor, Split/Difference, run-list checkboxes (overlay), Results "Find substance", Natural isotopes, Copy retention times | Covered |
 | Toolbar: NIST search | Button in the right panel, only after "Open NIST library" | Covered; the NIST path is also chosen in Settings (#254) |
@@ -70,7 +70,7 @@ is S4 (#253).
 4. Help → About, File → Quit, keyboard shortcuts.
 5. ~~Persisted settings, window layout, recent files, library paths.~~ Done in #253.
 6. ~~Settings scope: cutoff score, score mode, scaled lib, centroid values, appearance options.~~ Done in #254; SF_FWHM and baseline adjustment are follow-ups.
-7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
+7. ~~Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.~~ Done in #256.
 8. DE/EN language switch.
 9. ~~GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.~~ Done in #250 (rare rest: #290).
 10. ~~Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).~~ Done in #243.

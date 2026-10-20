@@ -13,6 +13,7 @@ use egui_kittest::kittest::{Queryable, by};
 use md_core::library::LibraryCompound;
 use md_core::search::PreparedLibrary;
 
+use crate::guided::{Flow, Mode};
 use crate::{App, Trace, identify};
 
 /// Non-ASCII characters on code lines (not `//` comments) of this crate's sources. Code outside
@@ -167,6 +168,11 @@ fn screenshots() {
         let mut h = harness(theme);
         h.run_steps(2);
         shots.save(&mut h, &format!("01-start-{tag}"));
+        // As `persist::restore` asks: Guided preselected.
+        (h.state_mut().guided.mode, h.state_mut().guided.ask) = (Mode::Guided, true);
+        h.run_steps(3);
+        shots.save(&mut h, &format!("01b-first-start-{tag}"));
+        (h.state_mut().guided.mode, h.state_mut().guided.ask) = (Mode::Expert, false);
 
         open(&mut h, &paths[..3]);
         shots.save(&mut h, &format!("02a-main-no-library-{tag}"));
@@ -174,6 +180,7 @@ fn screenshots() {
         h.state_mut().library = Some(lib);
         wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
         shots.save(&mut h, &format!("02-main-{tag}"));
+        guided_shots(&shots, &mut h, tag);
     }
     // The smallest window the layout is checked at: the spectrum must stay in view.
     let mut h = Harness::builder()
@@ -331,6 +338,29 @@ fn screenshots() {
     shots.save(&mut h, "17b-statistics-scrolled");
 }
 
+/// Guided mode: the Settings window with "Advanced" closed and one step of each flow.
+fn guided_shots(shots: &Shots, h: &mut Harness<'_, App>, tag: &str) {
+    h.state_mut().guided.mode = Mode::Guided;
+    h.state_mut().settings.open = true;
+    h.run_steps(3);
+    shots.save(h, &format!("18-guided-settings-{tag}"));
+    h.state_mut().settings.open = false;
+    for (flow, step, name) in [
+        (Flow::Ri, 1, "19-guided-ri"),
+        (Flow::Detection, 2, "20-guided-detection"),
+        (Flow::Batch, 2, "21-guided-batch"),
+        (Flow::Mid, 1, "22-guided-mid"),
+    ] {
+        h.state_mut().start_flow(flow);
+        h.state_mut().guided.flow = Some((flow, step));
+        h.run_steps(3);
+        shots.save(h, &format!("{name}-{tag}"));
+    }
+    h.state_mut().guided.flow = None;
+    h.state_mut().guided.mode = Mode::Expert;
+    h.run_steps(2);
+}
+
 /// A quantity that differs by substance, a little by run and, for most substances, by the run's
 /// group (the tens digit of its file name, as the replicate regex above takes it), so p-values
 /// differ between rows.
@@ -371,4 +401,39 @@ fn the_view_toolbar_works_on_a_run() {
     h.get_all(by().label("?")).next().unwrap().click();
     h.run_steps(2);
     h.get_by_label_contains("Double-click, or All");
+}
+
+/// First start: Guided is preselected and the answer sticks; Guided closes "Advanced", Expert opens it;
+/// a flow can be skipped through and ends in its expert window.
+#[test]
+fn guided_mode_asks_folds_advanced_and_ends_in_the_expert_window() {
+    let mut h = harness(egui::Theme::Dark);
+    (h.state_mut().guided.mode, h.state_mut().guided.ask) = (Mode::Guided, true);
+    h.run_steps(2);
+    h.get_by_label("Continue").click();
+    h.run_steps(2);
+    assert!(!h.state().guided.ask);
+    assert_eq!(h.state().guided.mode, Mode::Guided);
+
+    h.state_mut().settings.open = true;
+    h.run_steps(2);
+    h.get_by_label("Advanced");
+    assert!(h.query_by_label("Peak detection method").is_none());
+    h.state_mut().guided.mode = Mode::Expert;
+    h.run_steps(2);
+    h.get_by_label("Peak detection method");
+    h.state_mut().settings.open = false;
+
+    h.state_mut().start_flow(Flow::Ri);
+    h.run_steps(2);
+    h.get_by_label_contains("Step 1 of 3");
+    for _ in 0..2 {
+        h.get_by_label("Skip").click();
+        h.run_steps(2);
+    }
+    h.get_by_label_contains("Step 3 of 3");
+    h.get_by_label("Finish").click();
+    h.run_steps(2);
+    assert!(h.state().guided.flow.is_none());
+    assert!(h.state().ri.open);
 }
