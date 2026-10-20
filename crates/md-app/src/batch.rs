@@ -229,6 +229,8 @@ pub struct Batch {
 
 /// A loaded sample table and the two columns that give run and group.
 struct Samples {
+    /// File name of the table, for the settings file.
+    name: String,
     table: SampleTable,
     file: usize,
     group: usize,
@@ -236,6 +238,19 @@ struct Samples {
 }
 
 impl Samples {
+    /// File and chosen columns, for the settings file; none while the table gives no groups.
+    fn source(&self) -> Option<String> {
+        let col = |i: usize| &self.table.columns[i];
+        self.error.is_none().then(|| {
+            format!(
+                "{} (files {}, groups {})",
+                self.name,
+                col(self.file),
+                col(self.group)
+            )
+        })
+    }
+
     /// Reads the chosen columns into `groups`; a bad table leaves no groups.
     fn apply(&mut self, groups: &mut SampleGroups) {
         match self.table.groups(self.file, self.group) {
@@ -271,6 +286,7 @@ fn samples_row(
                 Ok(table) => {
                     let (file, group) = table.default_columns();
                     let mut s = Samples {
+                        name: p.file_name().unwrap_or_default().to_string_lossy().into(),
                         table,
                         file,
                         group,
@@ -329,6 +345,54 @@ fn samples_row(
             (*samples, *groups) = (None, SampleGroups::new());
         }
     });
+    ui.end_row();
+}
+
+/// "Group per run": type a replicate group for a run; it wins over the table and the pattern. An
+/// empty field takes the run back to them. `table` only fills the field's hint.
+fn manual_groups_row(
+    ui: &mut egui::Ui,
+    manual: &mut SampleGroups,
+    table: &SampleGroups,
+    paths: &[PathBuf],
+) {
+    let hint = "Set the replicate group of single runs by hand. It wins over the table and the \
+                pattern; an empty field leaves the run to them.";
+    ui.label("Group per run").on_hover_text(hint);
+    egui::CollapsingHeader::new(format!("{} of {} runs set", manual.len(), paths.len()))
+        .id_salt("manual groups")
+        .show(ui, |ui| {
+            if ui
+                .add_enabled(!manual.is_empty(), egui::Button::new("Clear all"))
+                .clicked()
+            {
+                manual.clear();
+            }
+            let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+            egui::ScrollArea::vertical()
+                .id_salt("manual groups list")
+                .max_height(200.0)
+                .show_rows(ui, height, paths.len(), |ui, rows| {
+                    for path in &paths[rows] {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        let key = run_key(&name);
+                        let mut text = manual.get(&key).cloned().unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            let label = ui.label(name.as_ref());
+                            let edit = egui::TextEdit::singleline(&mut text)
+                                .desired_width(100.0)
+                                .hint_text(table.get(&key).map_or("pattern", String::as_str));
+                            if ui.add(edit).labelled_by(label.id).changed() {
+                                if text.trim().is_empty() {
+                                    manual.remove(&key);
+                                } else {
+                                    manual.insert(key, text);
+                                }
+                            }
+                        });
+                    }
+                });
+        });
     ui.end_row();
 }
 
@@ -547,6 +611,7 @@ impl Batch {
                 &self.paths,
                 &mut self.note,
             );
+            manual_groups_row(ui, &mut s.manual_groups, &s.sample_groups, &self.paths);
             row(
                 ui,
                 "Min. reproducibility in a group",
@@ -822,6 +887,12 @@ impl Batch {
                             scan,
                             settings: &self.settings,
                             extra: [
+                                vec![(
+                                    "GROUP_SOURCE",
+                                    self.settings.group_source(
+                                        self.samples.as_ref().and_then(Samples::source).as_deref(),
+                                    ),
+                                )],
                                 shown_settings(&self.norm, shown, t.runs.len()),
                                 scan_settings(scan),
                             ]

@@ -230,6 +230,7 @@ fn run(a: Args) -> Result<bool, String> {
         replicates: a.replicates,
         ..Default::default()
     };
+    let mut table_source = None;
     if let Some(p) = &a.sample_table {
         let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         let t = SampleTable::parse(&text).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -245,6 +246,12 @@ fn run(a: Args) -> Result<bool, String> {
         ts.sample_groups = t
             .groups(file, group)
             .map_err(|e| format!("{}: {e}", p.display()))?;
+        table_source = Some(format!(
+            "{} (files {}, groups {})",
+            p.file_name().unwrap_or_default().to_string_lossy(),
+            t.columns[file],
+            t.columns[group]
+        ));
     }
     ts.quant.ion_number = a.ions.unwrap_or(ts.quant.ion_number);
     ts.quant.min_dist = a.min_dist.unwrap_or(ts.quant.min_dist);
@@ -312,6 +319,7 @@ fn run(a: Args) -> Result<bool, String> {
         table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
     how.extend([
+        ("GROUP_SOURCE", ts.group_source(table_source.as_deref())),
         ("RT_ONLY", prepared.is_rt_only().to_string()),
         ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
         ("RUNS_SCANNED", runs.len().to_string()),

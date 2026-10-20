@@ -15,6 +15,26 @@ pub fn run_key(name: &str) -> String {
     }
 }
 
+/// The cells of one line; a delimiter inside double quotes stays in the cell and `""` is a quote.
+/// shortcut: a quoted cell cannot span lines, upgrade when a table needs that.
+fn split_cells(line: &str, sep: char) -> Vec<String> {
+    let (mut cells, mut cell, mut quoted) = (Vec::new(), String::new(), false);
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            c if c == sep && !quoted => cells.push(std::mem::take(&mut cell).trim().to_owned()),
+            c => cell.push(c),
+        }
+    }
+    cells.push(cell.trim().to_owned());
+    cells
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SampleTable {
     pub columns: Vec<String>,
@@ -26,13 +46,10 @@ impl SampleTable {
         let text = text.trim_start_matches('\u{feff}');
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
         let head = lines.next().ok_or("the table is empty")?;
-        // shortcut: no quoted delimiters inside cells, upgrade when a real table needs them.
-        let sep = ['\t', ';', ','].into_iter().find(|c| head.contains(*c));
-        let cells = |l: &str| -> Vec<String> {
-            l.split(sep.unwrap_or('\t'))
-                .map(|c| c.trim().trim_matches('"').trim().to_owned())
-                .collect()
-        };
+        let sep = ['\t', ';', ',']
+            .into_iter()
+            .find(|c| split_cells(head, *c).len() > 1);
+        let cells = |l: &str| split_cells(l, sep.unwrap_or('\t'));
         Ok(Self {
             columns: cells(head),
             rows: lines.map(cells).collect(),
@@ -106,6 +123,19 @@ mod tests {
             let t = SampleTable::parse(&format!("File{sep}Group\na.cdf{sep}x\n")).unwrap();
             assert_eq!(t.groups(0, 1).unwrap()["a"], "x");
         }
+    }
+
+    #[test]
+    fn a_delimiter_inside_quotes_stays_in_the_cell() {
+        let text = "\"File, name\",Group\n\"a,b.cdf\",\"say \"\"hi\"\"\"\n\"C:\\d;x\\c.cdf\", y\n";
+        let t = SampleTable::parse(text).unwrap();
+        assert_eq!(t.columns, ["File, name", "Group"]);
+        let g = t.groups(0, 1).unwrap();
+        assert_eq!(g["a,b"], "say \"hi\"");
+        assert_eq!(g["c"], "y");
+        // A delimiter that only appears inside quotes does not split the table.
+        let t = SampleTable::parse("\"Run; file\",Group\na.cdf,x\n").unwrap();
+        assert_eq!(t.columns, ["Run; file", "Group"]);
     }
 
     #[test]

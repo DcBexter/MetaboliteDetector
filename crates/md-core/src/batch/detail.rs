@@ -114,6 +114,21 @@ impl Table {
 }
 
 impl TableSettings {
+    /// Where the replicate groups come from, for the settings file: runs set by hand, the sample
+    /// table (`table` describes it), the file name pattern.
+    pub fn group_source(&self, table: Option<&str>) -> String {
+        let hand = (!self.manual_groups.is_empty())
+            .then(|| format!("by hand ({} runs)", self.manual_groups.len()));
+        let table = table.map(|t| format!("sample table {t}"));
+        let pattern = (!self.replicates.is_empty()).then(|| "file name pattern".to_owned());
+        let parts: Vec<String> = [hand, table, pattern].into_iter().flatten().collect();
+        if parts.is_empty() {
+            "none".into()
+        } else {
+            parts.join(", ")
+        }
+    }
+
     /// The settings the table was made with as `Setting,Value`, so a result file can be read
     /// later; `extra` are settings of the caller (e.g. the normalisation) written after them.
     pub fn write_csv(&self, extra: &[(&str, String)], mut w: impl Write) -> io::Result<()> {
@@ -243,6 +258,19 @@ mod tests {
         assert_eq!(
             ions_path(Path::new("d/results.csv")),
             Path::new("d/results.ions.csv")
+        );
+    }
+
+    #[test]
+    fn the_group_source_names_hand_table_and_pattern() {
+        let mut s = TableSettings::default();
+        assert_eq!(s.group_source(None), "none");
+        s.replicates = "^(.+)_".into();
+        s.manual_groups = crate::batch::SampleGroups::from([("a".into(), "blank".into())]);
+        assert_eq!(
+            s.group_source(Some("samples.txt (files CDF_FILE, groups TIME_POINT)")),
+            "by hand (1 runs), sample table samples.txt (files CDF_FILE, groups TIME_POINT), \
+             file name pattern"
         );
     }
 
