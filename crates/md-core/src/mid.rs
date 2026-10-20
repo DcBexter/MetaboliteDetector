@@ -3,8 +3,11 @@
 //! fragment with 0, 1, 2 … labelled atoms; the shares of that mix are the MID. Every correction is a
 //! linear least-squares fit; R² and confidence intervals come from the same fit as in the old program.
 
+mod export;
 mod frag;
 mod series;
+
+pub use export::{group_stat, qt_g};
 
 pub use frag::{FragExport, frag_export, parse_fragments};
 pub use series::{

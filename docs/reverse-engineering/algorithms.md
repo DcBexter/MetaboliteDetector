@@ -978,10 +978,18 @@ Port: `mid::frag_export`, `mid::parse_fragments`.
 
 ### 7g.6 Verification and deviations
 - Solver: 31 synthetic cases of `tools::MIDSolver` called through `LD_PRELOAD`; test `matches_old_program` in `mid.rs` (max error 4e-15).
-- Methods 2 and 3 end to end: `tools/isotopes/old_midseries.cpp` drives `MIDCompoundSeries` on synthetic integrals (`make-midseries.sh`, `gen_midseries.py`); `crates/md-core/tests/mid_series.rs` matches all 72 values (MID, CI, R²; several fragments, reversed fragment keys, MID size, tracers C and N, no tracer), with the library spectrum read from the old `lib_aa.lbr`.
+- Methods 2 and 3 end to end: `tools/isotopes/old_midseries.cpp` drives `MIDCompoundSeries` on synthetic integrals (`make-midseries.sh`, `gen_midseries.py`); `crates/md-core/tests/mid_series.rs` matches all 90 values (MID, CI, R²; several fragments, reversed fragment keys, MID size, tracers C and N, no tracer, runs without integrals), with the library spectrum read from the old `lib_aa.lbr`.
 - Methods 0 and 1 are checked at solver level only; `Calculate` needs a `ReplicateResultSeries` and was not driven.
-- Deviations: a run without the substance or with only zero integrals gives no MID (`None`) instead of NaN; the FRAG export prints numbers with Rust `{}` instead of Qt's `%g` (6 digits) and keys fragment totals per row instead of per substance id; RT minutes are `rt_s / 60`. Fragments wider than 1000 ions (`MAX_FRAGMENT_IONS`, a library key span or a `FRAG` size) are left out; the old program loops over all of them. The app's MID window looks up the RT shift reference in the fragment-only scan library and scans without shift when the reference has no fragment.
-- Not traced: `outputMIDStatisticsDataToStream` (0x4f0090), the exact column loop of `outputMIDDataToStream` (0x4ef548), where the old program keeps the results of methods 0 and 1 (follow-up #141).
+- Deviations: a run without the substance or with only zero integrals gives no MID (`None`) instead of NaN (the exports print `nan` as the old program); the FRAG export keys fragment totals per row instead of per substance id; RT minutes are `rt_s / 60`. Fragments wider than 1000 ions (`MAX_FRAGMENT_IONS`, a library key span or a `FRAG` size) are left out; the old program loops over all of them. The app's MID window looks up the RT shift reference in the fragment-only scan library and scans without shift when the reference has no fragment.
+
+### 7g.7 Result window: group statistics and text exports
+Numbers are written by `QTextStream << double`: `%g` with 6 significant digits, `nan`, `inf` (port: `mid::qt_g`, also used by the FRAG export of 7g.5). Run names are `QFileInfo::baseName` (file name up to the first dot).
+
+- Statistics (`ReplicateMIDData`, built once in `MIDWizard::midCalcFinished` 0x4f9534 for the per-run methods; one group `GL` with all runs). `getGroupMIAbundances` (0x6f6052 mean, 0x6f64ee standard error) collects `MIDCompoundSeries+0x90[i].at(run)` (one vector per isotopomer, fragments in order); every caller passes the filter flag, which drops values that are 0, NaN or infinite. Mean = `gsl_stats_mean`, standard error = `gsl_stats_sd / √n`. No value gives mean 0, fewer than two give a NaN standard error. Port: `mid::group_stat`.
+- `MIDSingleResultWidget::outputMIDDataToStream` (0x4ef548, per-run methods): header `\t<run>` per run, `\t`, `\tCI (<run>)` per run, `\t`, `\tR2 (<run>)` per run. Per substance `Name;RI;RT` (library spectrum, RT in ms), per isotopomer a line break before `M0`, then `ion (Mk)`, the MIDs, `\t`, the CIs, `\t`, the R² of each run; two line breaks after the substance. Isotopomers per fragment: one per ion, at most the MID size when it is set. A run without integrals is `nan` for MID and R²; its CI is `nan` for the sum formula and -1 for the library spectrum (method 2 has no CIs). Port: `Mids::run_text`.
+- `outputMIDStatisticsDataToStream` (0x4f0090): header `\tGL\t\tStdErr (GL)\tMetabolite name\tFragment ion\tMass isotopomer`, the same substance lines, rows `ion (Mk)\tmean\t\tstderr\tName\tlo\tMk`. Port: `Mids::stats_text`.
+- `MIDResultWidget::actExportTriggered` (0x4e9212, group methods): no header; per substance and fragment key the rows `Name_ion (Mk)\tMID\tCI\tR2` (CI and R² -1 where there are none) and an empty line after each fragment. Port: `Mids::group_text`. Deviation: the old loop runs from the key's first ion to its last, so a reversed key `(b, a)` writes no rows; the port writes them.
+- Verified: `tools/isotopes/old_midstats.cpp` (run by `make-midseries.sh`) builds the `ReplicateMIDData` and the result widget on the same cases and prints both exports; `tests/mid_series.rs` matches all 34 statistics and both exports byte for byte. The group export of methods 0 and 1 is reconstructed from the disassembly only (see 7g.6).
 
 ## 8. Open gaps (ranked by impact on reproducing results)
 
@@ -996,7 +1004,7 @@ Port: `mid::frag_export`, `mid::parse_fragments`.
 6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
-9. MID (7g): the statistics export and the group methods end to end against the old binary. Normalisation (7c), statistics and PCA (7f) are done.
+9. MID (7g): the group methods 0 and 1 and their export end to end against the old binary. Normalisation (7c), statistics and PCA (7f) are done.
 
 ## 9. Ranked next steps
 
