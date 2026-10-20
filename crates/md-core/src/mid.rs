@@ -14,6 +14,10 @@ pub use series::{
 
 use crate::isotope::{Formula, IsotopeTable};
 
+/// Widest fragment taken from library text or a `FRAG` feature: GC-MS spectra end near m/z 1000,
+/// so anything wider is a typo that would freeze the scan or the export.
+pub const MAX_FRAGMENT_IONS: u32 = 1000;
+
 /// One fitted MID. `None` stands for the old program's `-1` ("not available").
 #[derive(Debug, Clone, PartialEq)]
 pub struct MidFit {

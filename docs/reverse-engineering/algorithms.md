@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID is NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID (Section 7g) is reconstructed.
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -980,7 +980,7 @@ Port: `mid::frag_export`, `mid::parse_fragments`.
 - Solver: 31 synthetic cases of `tools::MIDSolver` called through `LD_PRELOAD`; test `matches_old_program` in `mid.rs` (max error 4e-15).
 - Methods 2 and 3 end to end: `tools/isotopes/old_midseries.cpp` drives `MIDCompoundSeries` on synthetic integrals (`make-midseries.sh`, `gen_midseries.py`); `crates/md-core/tests/mid_series.rs` matches all 72 values (MID, CI, R²; several fragments, reversed fragment keys, MID size, tracers C and N, no tracer), with the library spectrum read from the old `lib_aa.lbr`.
 - Methods 0 and 1 are checked at solver level only; `Calculate` needs a `ReplicateResultSeries` and was not driven.
-- Deviations: a run without the substance or with only zero integrals gives no MID (`None`) instead of NaN; the FRAG export prints numbers with Rust `{}` instead of Qt's `%g` (6 digits) and keys fragment totals per row instead of per substance id; RT minutes are `rt_s / 60`.
+- Deviations: a run without the substance or with only zero integrals gives no MID (`None`) instead of NaN; the FRAG export prints numbers with Rust `{}` instead of Qt's `%g` (6 digits) and keys fragment totals per row instead of per substance id; RT minutes are `rt_s / 60`. Fragments wider than 1000 ions (`MAX_FRAGMENT_IONS`, a library key span or a `FRAG` size) are left out; the old program loops over all of them. The app's MID window looks up the RT shift reference in the fragment-only scan library and scans without shift when the reference has no fragment.
 - Not traced: `outputMIDStatisticsDataToStream` (0x4f0090), the exact column loop of `outputMIDDataToStream` (0x4ef548), where the old program keeps the results of methods 0 and 1 (follow-up #141).
 
 ## 8. Open gaps (ranked by impact on reproducing results)

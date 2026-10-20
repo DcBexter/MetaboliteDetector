@@ -42,9 +42,12 @@ pub struct Fragment<'a> {
     pub size: usize,
 }
 
-/// Fragments of a substance in the old order: by the (start, end) pair as entered.
+/// Fragments of a substance in the old order: by the (start, end) pair as entered. Fragments wider
+/// than [`MAX_FRAGMENT_IONS`](super::MAX_FRAGMENT_IONS) are left out.
 pub fn fragments(c: &LibraryCompound) -> Vec<Fragment<'_>> {
-    let mut keys: Vec<&(u32, u32, String)> = c.formulas.iter().collect();
+    let mut keys: Vec<&(u32, u32, String)> = (c.formulas.iter())
+        .filter(|f| f.0.abs_diff(f.1) < super::MAX_FRAGMENT_IONS)
+        .collect();
     keys.sort_by_key(|f| (f.0, f.1));
     keys.into_iter()
         .map(|(a, b, formula)| Fragment {
@@ -62,7 +65,7 @@ pub fn fragments(c: &LibraryCompound) -> Vec<Fragment<'_>> {
 /// with every fragment ion as quant ion, so the batch rescan fills ions that were not deconvoluted.
 pub fn mid_library(lib: &[LibraryCompound]) -> Vec<LibraryCompound> {
     lib.iter()
-        .filter(|c| !c.formulas.is_empty())
+        .filter(|c| !fragments(c).is_empty())
         .map(|c| {
             let mut c = c.clone();
             let mut ions: Vec<u32> = fragments(&c).iter().flat_map(|f| f.lo..=f.hi).collect();
@@ -351,5 +354,40 @@ mod tests {
                 fit.cis[1].unwrap()
             )
         );
+    }
+
+    #[test]
+    fn reference_group_explains_a_half_labelled_run() {
+        let mut c = LibraryCompound::new("Ala");
+        c.formulas.push((10, 12, "C2".into()));
+        // Reference 0.9 / 0.1; half of the labelled run carries one label: 0.45 / 0.5 / 0.05.
+        let runs = [
+            run(&[(10, 0.45), (11, 0.5), (12, 0.05)]),
+            run(&[(10, 9.0), (11, 1.0)]),
+            run(&[(10, 0.0)]),
+        ];
+        let table = IsotopeTable::standard();
+        let m = determine(
+            &runs,
+            &[c],
+            &[0],
+            &[1, 2],
+            Method::Reference { m1: 0.0 },
+            "C",
+            &table,
+        );
+        assert!(m.errors.is_empty());
+        let fit = m.compounds[0].fragments[0].fits[0].as_ref().unwrap();
+        for (got, want) in fit.mids.iter().zip([0.5, 0.5, 0.0]) {
+            assert!((got - want).abs() < 1e-9, "{:?}", fit.mids);
+        }
+    }
+
+    #[test]
+    fn too_wide_fragments_are_left_out() {
+        let mut c = LibraryCompound::new("Ala");
+        c.formulas.push((0, u32::MAX, "C2".into()));
+        assert!(fragments(&c).is_empty());
+        assert!(mid_library(&[c]).is_empty());
     }
 }

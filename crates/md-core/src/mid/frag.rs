@@ -6,15 +6,21 @@ use std::fmt::Write;
 
 use regex::Regex;
 
+use super::MAX_FRAGMENT_IONS;
 use crate::batch::{Found, RunResult};
 use crate::library::LibraryCompound;
 
 /// `(174/8)(261/5)` → `[(174, 8), (261, 5)]`: (first ion, number of ions), sorted by ion; repeated
-/// ions come latest first, as in the old `QMultiMap`. Empty when nothing parses.
+/// ions come latest first, as in the old `QMultiMap`. Empty when nothing parses. Fragments of more
+/// than [`MAX_FRAGMENT_IONS`] ions are dropped; the old program would loop over all of them.
 pub fn parse_fragments(text: &str) -> Vec<(u32, u32)> {
     let re = Regex::new(r"\((\d+)/(\d+)\)").expect("valid pattern");
     let mut out: Vec<(u32, u32)> = (re.captures_iter(text))
-        .filter_map(|c| Some((c[1].parse().ok()?, c[2].parse().ok()?)))
+        // Old `QString::toInt`: up to i32::MAX, so `ion + size` cannot overflow a u32.
+        .filter_map(|c| {
+            let n = |i: usize| c[i].parse::<i32>().ok().map(|v| v as u32);
+            Some((n(1)?, n(2).filter(|&s| s <= MAX_FRAGMENT_IONS)?))
+        })
         .collect();
     out.reverse();
     out.sort_by_key(|f| f.0);
@@ -131,6 +137,12 @@ mod tests {
         assert_eq!(parse_fragments("(5/1)(5/2)"), [(5, 2), (5, 1)]);
         assert!(parse_fragments("174/8").is_empty());
         assert!(parse_fragments("(99999999999/1)").is_empty());
+        assert!(parse_fragments("(2147483648/1)").is_empty());
+        assert!(parse_fragments("(1/1001)").is_empty());
+        assert_eq!(
+            parse_fragments("(2147483647/1000)"),
+            [(i32::MAX as u32, 1000)]
+        );
     }
 
     #[test]

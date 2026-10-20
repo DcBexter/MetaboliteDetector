@@ -8,7 +8,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use md_core::batch::{QuantSettings, RescanSettings, complete_scan, scan_runs};
+use md_core::batch::{QuantSettings, RescanSettings, ShiftReference, complete_scan, scan_runs};
 use md_core::isotope::IsotopeTable;
 use md_core::library::LibraryCompound;
 use md_core::mid::{Method, Mids, determine, mid_library};
@@ -138,7 +138,8 @@ impl MidWindow {
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
-        let s = crate::batch::scan_settings(&self.analysis, lib, cal, reference, false);
+        let mut s = crate::batch::scan_settings(&self.analysis, lib, cal, reference, false);
+        let shift_ref = s.shift.and(reference).map(|(n, c)| (n.to_owned(), c));
         let method = self.method();
         // Unlabelled runs only take part in the reference correction (old group `GUL`).
         let unlabelled = match self.kind {
@@ -176,6 +177,10 @@ impl MidWindow {
             if mids_lib.is_empty() {
                 return Err("No substance of the library has a fragment with sum formula (MID fragments in the library editor).".into());
             }
+            // The shift reference is an index into the scanned library, which keeps only
+            // substances with fragments.
+            s.shift = (shift_ref.as_ref())
+                .and_then(|(n, cutoff)| ShiftReference::find(&mids_lib, n, *cutoff));
             let prepared = match l.prepared.is_rt_only() {
                 true => PreparedLibrary::new_rt_only(&mids_lib, &l.settings),
                 false => PreparedLibrary::new(&mids_lib, &l.settings),
@@ -195,6 +200,11 @@ impl MidWindow {
             )
             .ok_or_else(cancelled)?;
             errors.extend(more.errors);
+            if let Some((n, _)) = shift_ref.filter(|_| s.shift.is_none()) {
+                errors.push(format!(
+                    "RT shift reference {n} has no MID fragment; scanned without RT shift."
+                ));
+            }
             // shortcut: a run that fails to load is dropped by scan_runs, which shifts the group
             // indices; the runs are matched back by path.
             let index = |p: &PathBuf| runs.iter().position(|r| &r.path == p);

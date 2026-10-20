@@ -1,5 +1,5 @@
 # Synthetic cases for make-midseries.sh: random integrals for fragments of library substance 0.
-import random, sys
+import random
 random.seed(28)
 cases = [
   # name, compound, tracer, flag, runs, frags [(lo, hi, formula, size)]
@@ -23,4 +23,4 @@ for name, comp, tracer, flag, runs, frags in cases:
                 v = round(base * random.uniform(0.05, 1.0) / (k + 1), 3)
                 out.append(f"int {r} {ion} {v}")
     out.append("end")
-open(sys.argv[1], "w").write("\n".join(out) + "\n")
+print("\n".join(out))
