@@ -188,6 +188,7 @@ impl IonTraces {
     /// Peaks of every trace, detected in parallel; sorted by row, then scan.
     /// With `Detector::Matched` every trace is first replaced by its filtered values (truncated to
     /// integers): the old peaks hold the filtered values, and the deconvolution reads them (§3.3).
+    /// So a matched detection is one-shot: a second call would filter the filtered traces.
     pub fn detect_peaks(&mut self, settings: &PeakSettings) -> Vec<Peak> {
         let Detector::Matched { width, threshold } = settings.detector else {
             return self.detect_default(settings);

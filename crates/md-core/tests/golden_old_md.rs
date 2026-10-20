@@ -98,7 +98,7 @@ fn matches_old_version() {
 #[test]
 fn matches_old_version_with_matched_filtering() {
     // The same precise-apex ties, far more often on the integer filtered traces: fed with the old
-    // precise apex values, all 188 components of 7235eg04 match (docs/architecture.md).
+    // precise apex values, every component of 7235eg04 matches (docs/architecture.md).
     let known = Known {
         missing: 43,
         extra: 38,

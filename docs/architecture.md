@@ -366,12 +366,12 @@ A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this proje
 A second reference, `old-md-3.3-matched.tsv`, is made the same way with the old `MatchedPeakDetector(10, 3)`
 (`MD_MATCHED="10 3"` for the driver; the *Calibration Setter* values, §3.3) and compared with
 `Detector::MATCHED` under the same tolerances. Its peaks (12 590, 12 411 and 12 422 in eg04, eg20, eg32)
-match exactly, S/N included (the old default -1). Of 2 845 old components, 2 657 match; 43 are missing,
+match exactly, S/N included (the old default -1). Of 2 807 old components, 2 657 match; 43 are missing,
 38 new ones have no old partner, 66 differ by ions and 41 by heights. The cause is the same precise-apex
 tie: the filtered traces are integers with broad, smooth tops, so the parabola vertex lands exactly on
 a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
-deconvolution bin. Fed with the old precise apex values, all 188 components of eg04 match (ions, apex
-scan, heights within ±1).
+deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
+all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
 
 The test fails when one of these counts grows.
 

@@ -192,12 +192,10 @@ impl Settings {
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut d.peak_detector, Detector::Default, "Default");
-                    if !matches!(d.peak_detector, Detector::Matched { .. }) {
-                        ui.selectable_value(
-                            &mut d.peak_detector,
-                            Detector::MATCHED,
-                            "Matched Filtering",
-                        );
+                    // Choosing it again keeps the width and threshold.
+                    let matched = matches!(d.peak_detector, Detector::Matched { .. });
+                    if ui.selectable_label(matched, "Matched Filtering").clicked() && !matched {
+                        d.peak_detector = Detector::MATCHED;
                     }
                 });
             ui.end_row();
