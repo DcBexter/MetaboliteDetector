@@ -411,7 +411,7 @@ quantified; names that start with `=`, `+`, `-` or `@` get a leading `'`); with 
 and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`) and
 `FILE.groupstats.csv` (`Table::write_group_stats_file`: per group `Mean_`, `Rel_Std_Err_`, `Hits_` and with a group
 `BLANK` (the app: the group named in "Blank group"; md-cli: `BLANK`) `P_blank_`, last `P_ANOVA`, unrounded, empty = not defined; the same numbers as the "Group statistics" view,
-which takes them from `Table::group_stats`; the old `exportData` writes the shown table cell by cell, so its group
+which takes them from `Table::group_stats`; the app writes it not for z-scores, #222; the old `exportData` writes the shown table cell by cell, so its group
 view had the p-value column too, #222); `-o FILE` always
 writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.

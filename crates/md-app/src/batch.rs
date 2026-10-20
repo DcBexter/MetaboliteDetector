@@ -832,6 +832,15 @@ fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<String> {
     })
 }
 
+/// Removes an older file next to an export that would not match the new results file; only a
+/// file that is there but cannot be removed is an error (a script would read its old numbers).
+fn remove_stale(path: &Path) -> std::io::Result<Option<PathBuf>> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(None),
+    }
+}
+
 /// Writes the results CSV `p` and the files next to it; the note names what was saved and what
 /// could not be.
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
@@ -841,9 +850,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let group_stats = if ex.group_stats {
         t.write_group_stats_file(p, Some(ex.blank))
     } else {
-        // An older file would not match this results file.
-        std::fs::remove_file(group_stats_path(p)).ok();
-        Ok(None)
+        remove_stale(&group_stats_path(p))
     };
     let mut results = vec![
         ("replicate groups", t.write_groups_file(p).transpose()),
@@ -858,8 +865,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
         ),
     ];
     if !ex.ions {
-        // An older ions file would not match this results file.
-        std::fs::remove_file(ions_path(p)).ok();
+        results.push(("quant ions", remove_stale(&ions_path(p)).transpose()));
     } else {
         let ip = ions_path(p);
         let runs: Vec<&RunResult> = (t.sources.iter())
@@ -1792,6 +1798,7 @@ mod tests {
     fn an_export_writes_the_settings_and_on_request_the_ion_integrals() {
         let (scan, t) = one_hit_scan();
         let dir = std::env::temp_dir().join(format!("md-app-export-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok(); // leftovers of an aborted run
         std::fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("results.csv");
         let settings = TableSettings::default();
@@ -1829,6 +1836,22 @@ mod tests {
         ex.group_stats = false;
         save_results(&csv, &grouped, &ex).unwrap();
         assert!(!dir.join("results.groupstats.csv").exists());
+        // Without groups there is no file either, and an old one goes.
+        std::fs::write(dir.join("results.groupstats.csv"), "old").unwrap();
+        ex.group_stats = true;
+        save_results(&csv, &t, &ex).unwrap();
+        assert!(!dir.join("results.groupstats.csv").exists());
+
+        // An old file that cannot be removed (here a directory of that name) is reported.
+        std::fs::create_dir_all(dir.join("results.groupstats.csv").join("x")).unwrap();
+        ex.group_stats = false;
+        let note = save_results(&csv, &grouped, &ex).unwrap();
+        assert!(note.contains("not saved: group statistics"), "{note}");
+        // The same for an old ions file.
+        std::fs::remove_file(dir.join("results.ions.csv")).unwrap();
+        std::fs::create_dir_all(dir.join("results.ions.csv").join("x")).unwrap();
+        let note = save_results(&csv, &grouped, &ex).unwrap();
+        assert!(note.contains("quant ions:"), "{note}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
