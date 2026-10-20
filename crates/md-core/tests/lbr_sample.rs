@@ -227,7 +227,9 @@ fn reads_old_version_5_libraries() {
 
 /// Compares the three MSL exports with what the old program writes from the same library
 /// (docs/reverse-engineering/tools/golden/make-msl-export.sh). Needs `MD_LBR_SAMPLE` and `MD_MSL_GOLDEN`
-/// (the OUT_PREFIX of the script); passes without checking anything when one is not set.
+/// (the OUT_PREFIX of the script); passes without checking anything when one is not set. When
+/// `MD_LBR_SAMPLE` is a `.msl` file (the script imports it first) the library is read back from the old
+/// program's profile export, which keeps every mass and intensity exactly.
 #[test]
 fn msl_export_matches_the_old_program() {
     use md_core::library::{MslType, write_msl_as};
@@ -238,7 +240,12 @@ fn msl_export_matches_the_old_program() {
         eprintln!("skipped: MD_LBR_SAMPLE or MD_MSL_GOLDEN not set");
         return;
     };
-    let lib = read_lbr(&lbr).unwrap();
+    let lib = if lbr.ends_with(".msl") {
+        let text = std::fs::read_to_string(format!("{prefix}.profile.msl")).unwrap();
+        parse_msl(&text).unwrap()
+    } else {
+        read_lbr(&lbr).unwrap()
+    };
     for (kind, name) in [
         (MslType::Profile, "profile"),
         (MslType::Nominal, "nominal"),
