@@ -381,7 +381,7 @@ of removed runs and substances; `TableSettings::write_csv`) and, on request ("Ex
 number of scanned runs, unknown substances and ions added by the rescan (md-cli: library, settings and
 calibration file, shift reference, `--untargeted`, `--rescan`). `scripts/r/load_results.R` loads both next to the
 table as `settings` and `ions`. The scan result keeps an index per run (`Scan::index`), so the tooltip and the ion
-lines look up a hit in constant time. The md-cli file names files, not paths. Not ported yet: the ANOVA p-value column (#203).
+lines look up a hit in constant time. The md-cli file names files, not paths. The last column of "Group statistics" is the one-way ANOVA p-value over all groups (`stats::anova`, #203; formula in `reverse-engineering/batch-quantification.md`).
 
 All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4

@@ -21,7 +21,7 @@ use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
-use md_core::stats::{group_values, student, summary};
+use md_core::stats::{anova, group_values, student, summary};
 
 use crate::identify::Library;
 use crate::spawn;
@@ -968,11 +968,13 @@ fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, Stri
                 .iter()
                 .map(move |s| (s.to_string(), group_label(g)))
         })
+        .chain([("P (ANOVA)".to_string(), "all groups".to_string())])
         .collect()
 }
 
 /// The cells of one substance in "Group statistics": per group mean, relative standard error,
-/// hits and (with a blank group) the p-value against the blanks.
+/// hits and (with a blank group) the p-value against the blanks; last the ANOVA p-value over all
+/// the groups, blanks included, like the old "p-value" column.
 fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> Vec<String> {
     let values = |g: &str| group_values(t, row, &[g.to_string()], true);
     let blanks = blank.map(values);
@@ -988,6 +990,8 @@ fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> V
             out.push(p.map_or("–".into(), |p| format!("{p:.4}")));
         }
     }
+    let all: Vec<Vec<f64>> = groups.iter().map(|g| values(g)).collect();
+    out.push(anova(&all).map_or("–".into(), |p| format!("{p:.4}")));
     out
 }
 
@@ -1422,6 +1426,41 @@ mod tests {
     }
 
     #[test]
+    fn anova_column_covers_all_groups_and_stands_last() {
+        // Hand calculation (md-core stats test): groups of 1 2 3 / 2 3 4 / 5 6 7 give p = 27 / 4096.
+        let v = [1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let t = Table {
+            runs: (0..9).map(|i| i.to_string()).collect(),
+            groups: ["A", "A", "A", "B", "B", "B", "C", "C", "C"]
+                .map(String::from)
+                .to_vec(),
+            rows: vec![md_core::batch::Row {
+                compound: 0,
+                name: "s0".into(),
+                rt_s: 60.0,
+                ions: vec![73],
+                values: v.map(Some).to_vec(),
+                rts_s: vec![Some(60.0); 9],
+            }],
+            ..Default::default()
+        };
+        let groups = ["A", "B", "C"];
+        let cells = group_cells(&t, 0, &groups, None);
+        assert_eq!(cells.len(), 3 * 3 + 1);
+        assert_eq!(cells.last().unwrap(), "0.0066");
+        // With a blank group its column comes between the group's, the ANOVA still last and over all.
+        let cells = group_cells(&t, 0, &groups, Some("C"));
+        assert_eq!(cells.len(), 3 * 4 + 1);
+        assert_eq!(cells.last().unwrap(), "0.0066");
+        let view = View {
+            mode: Mode::Groups,
+            ..Default::default()
+        };
+        assert_eq!(heads(&t, &view, &groups, true).len(), cells.len());
+        assert_eq!(heads(&t, &view, &groups, false).len(), 3 * 3 + 1);
+    }
+
+    #[test]
     fn group_statistics_are_readable_after_normalising_and_locked_for_z_scores() {
         let t = Table {
             runs: vec!["a".into(), "b".into(), "c".into()],
@@ -1440,6 +1479,8 @@ mod tests {
             group_cells(&t, 0, &["A"], None)[..3],
             ["4.33333", "0.657", "3"]
         );
+        // One group: nothing to compare, p = 1 like the old code.
+        assert_eq!(group_cells(&t, 0, &["A"], None)[3], "1.0000");
         // By total signal every value is 1: the old code rounded the mean to "1" and fractions to 0.
         let mut n = Norm {
             kind: Kind::TotalSignal,

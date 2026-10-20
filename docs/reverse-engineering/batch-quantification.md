@@ -110,6 +110,21 @@ The old batch used the RT shift correction (§6.5) per run like the single-run s
 `ScanSettings::shift` shifts the calibration onto the reference substance in each run, `RunResult::calibration`
 keeps the shifted calibration, and the rescan converts the expected positions between runs through the RI.
 
+## ANOVA p-value of the group table (`Statistics::oneWayANOVA` 0x6c3af6, `getANOVAPValue` 0x63ac2c; Observed)
+
+The "p-value" column of the old group statistics is a one-way ANOVA over the replicate groups of a substance, blank
+group included. `getANOVAPValue` returns 1 for one group or none; otherwise `oneWayANOVA` takes the values of
+each group (missing = 0, normalised if a normalisation is set) and computes with `N` values in `k` groups:
+
+```
+m = mean(all);   TSS = Σ (x - m)²;   SSB = Σ nᵢ (meanᵢ - m)²;   SSW = TSS - SSB
+F = (SSB / (k - 1)) / (SSW / (N - k));   p = gsl_cdf_fdist_Q(F, k - 1, N - k)   // upper tail
+```
+
+The port: `stats::anova` (tail via the regularized incomplete beta function), shown as the last column of
+"Group statistics" (`P (ANOVA)`). `None` ("–") where the old code would divide by zero: an empty group, `N = k`,
+no spread within or between groups.
+
 ## Port: what differs
 
 | Old | Port |
