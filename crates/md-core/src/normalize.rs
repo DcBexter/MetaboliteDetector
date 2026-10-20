@@ -74,10 +74,10 @@ pub fn normalize(t: &Table, mode: &Normalization) -> Table {
     out
 }
 
-/// For each column: `None` for a pool run (kept raw), else its `p.nearest` closest pool runs by
-/// acquisition time; a tie goes to the run scanned earlier like the old multimap, so moving
-/// columns does not change the result.
-fn nearest_pools(t: &Table, p: &Pool) -> Vec<Option<Vec<usize>>> {
+/// For each column, the columns of its `p.nearest` closest pool runs by acquisition time (a pool
+/// run counts itself, at distance 0); a tie goes to the run scanned earlier like the old multimap,
+/// so moving columns does not change the result.
+pub fn pool_mapping(t: &Table, p: &Pool) -> Vec<Vec<usize>> {
     let at = |i: usize| p.times.get(i).copied().unwrap_or(0);
     let scanned = |i: usize| t.sources.get(i).copied().unwrap_or(i);
     let pools: Vec<usize> = (0..t.runs.len())
@@ -85,14 +85,32 @@ fn nearest_pools(t: &Table, p: &Pool) -> Vec<Option<Vec<usize>>> {
         .collect();
     (0..t.runs.len())
         .map(|c| {
-            if t.groups[c] == p.group {
-                return None;
-            }
             let mut near = pools.clone();
             near.sort_by_key(|i| (at(*i).abs_diff(at(c)), scanned(*i)));
             near.truncate(p.nearest);
-            Some(near)
+            near
         })
+        .collect()
+}
+
+/// The old program's "Export pool mapping" file (`exportPoolMapping` 0x4552a0): a header, then one
+/// line per run with the names of the pool runs its values were divided by, tab-separated.
+pub fn pool_mapping_text(t: &Table, p: &Pool) -> String {
+    let mut out = String::from("Mapping\nSample\tPools\n\n");
+    for (name, near) in t.runs.iter().zip(pool_mapping(t, p)) {
+        out += name;
+        for i in near {
+            out += &format!("\t{}", t.runs[i]);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// For each column: `None` for a pool run (kept raw), else its nearest pool runs.
+fn nearest_pools(t: &Table, p: &Pool) -> Vec<Option<Vec<usize>>> {
+    (pool_mapping(t, p).into_iter().enumerate())
+        .map(|(c, near)| (t.groups[c] != p.group).then_some(near))
         .collect()
 }
 
@@ -288,6 +306,26 @@ mod tests {
         // Pool runs swapped, as after the user moved a run: same result.
         let moved = t.select_runs(&[1, 0, 2]);
         assert_eq!(values(&normalize(&moved, &pool), 0)[2], Some(10.0));
+    }
+
+    #[test]
+    fn the_pool_mapping_file_lists_the_pools_each_value_was_divided_by() {
+        let p = Pool {
+            group: POOL_GROUP.into(),
+            times: vec![0, 10, 2, 8, 9],
+            nearest: 1,
+            median: false,
+        };
+        // a1 (t=0): p1; a2 (t=10): p2; p1 itself; b1 (t=8): p2; p2 itself.
+        assert_eq!(
+            pool_mapping_text(&table(), &p),
+            "Mapping\nSample\tPools\n\na1\tp1\na2\tp2\np1\tp1\nb1\tp2\np2\tp2\n"
+        );
+        let p = Pool { nearest: 2, ..p };
+        assert!(pool_mapping_text(&table(), &p).contains("\na2\tp2\tp1\n"));
+        // The mapping is what `normalize` divides by: a2's x is missing, a1's is 5 / x(p1) = 5 / 20.
+        let n = normalize(&table(), &Normalization::Pool(p));
+        assert_eq!(values(&n, 1)[0], Some(5.0 / 30.0));
     }
 
     #[test]
