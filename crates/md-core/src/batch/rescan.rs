@@ -203,7 +203,7 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
     // At least one peak per component and twice the width, as in the old rescan (§4.0).
     let local = DeconvSettings {
         min_peak_number: 1,
-        width: s.deconv.width * 2.0,
+        width: Some(s.deconv.width_scans(&times) * 2.0),
         ..s.deconv.clone()
     };
     let mut out = Vec::new();
@@ -231,7 +231,7 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
             continue;
         }
         let local_peaks: Vec<_> = picked.iter().map(|(_, k)| peaks[*k]).collect();
-        let comps = deconvolute(&traces, &local_peaks, &local);
+        let comps = deconvolute(&traces, &local_peaks, &times, &local);
         let ions: Vec<IonPeak> = picked
             .iter()
             .zip(&local_peaks)
