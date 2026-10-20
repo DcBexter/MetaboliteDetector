@@ -98,7 +98,7 @@ mod tests {
         let mut run = results::tests::run();
         (run.name, run.component) = ("a_long_run_name_from_the_lab_01".into(), Some(0));
         run.analysis = settings::Analysis::new(app.settings.key());
-        let lib = run.ident.as_ref().unwrap().0.0.clone();
+        let settings = md_core::search::SearchSettings::default();
         app.runs.push(run);
         // Enough runs that the run list scrolls.
         for i in 0..80 {
@@ -106,27 +106,44 @@ mod tests {
             more.name = format!("run_{i:02}");
             app.runs.push(more);
         }
+        // Enough substances that the statistics table scrolls too.
+        let compounds: Vec<_> = (0..40)
+            .map(|i| md_core::library::LibraryCompound::new(&format!("Substance {i}")))
+            .collect();
+        let lib = Arc::new(identify::Library {
+            path: "lib.mdlib".into(),
+            name: "lib.mdlib".into(),
+            prepared: md_core::search::PreparedLibrary::new(&compounds, &settings),
+            compounds,
+            settings,
+        });
         let found = |rt_s| md_core::batch::RunResult {
             path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
-            found: vec![md_core::batch::Found {
-                compound: 0,
-                score: 0.9,
-                rt_s,
-                ions: [(73, 900.0), (147, 400.0)]
-                    .map(|(mass, integral)| md_core::batch::IonPeak {
-                        mass,
-                        integral,
-                        quality: 0.1,
-                        signal_to_noise: 10.0,
-                    })
-                    .into(),
-                rescanned: false,
-                rescued: Vec::new(),
-                alternatives: Vec::new(),
-            }],
+            found: (0..40)
+                .map(|compound| md_core::batch::Found {
+                    compound,
+                    score: 0.9,
+                    rt_s,
+                    ions: [(73, 900.0 + compound as f64), (147, 400.0)]
+                        .map(|(mass, integral)| md_core::batch::IonPeak {
+                            mass,
+                            integral,
+                            quality: 0.1,
+                            signal_to_noise: 10.0,
+                        })
+                        .into(),
+                    rescanned: false,
+                    rescued: Vec::new(),
+                    alternatives: Vec::new(),
+                })
+                .collect(),
             ..Default::default()
         };
-        app.batch.finished(lib, vec![found(60.0), found(61.0)]);
+        // Two replicate groups, by the last digit of the file name, for the statistics table.
+        app.batch.settings.replicates = r"_\d(\d)\.cdf$".into();
+        app.statistics.compare("0", "1");
+        app.batch
+            .finished(lib, [60.0, 61.0, 70.0, 71.0].map(found).into());
         app
     }
 
@@ -267,6 +284,7 @@ mod tests {
             "Copy retention times",
             "Results",
             "Biomarker statistics",
+            "Substance 0",
             "Mass isotopomer distributions",
             "Library hits",
             "a_long_run_name_from_the_lab_60.cdf",
