@@ -134,7 +134,7 @@ fn trace_plot(
 impl App {
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
-            if self.runs.is_empty() && self.loading.is_empty() {
+            if self.runs.is_empty() {
                 return self.start_screen(ui);
             }
             self.trace_controls(ui);
@@ -157,10 +157,15 @@ impl App {
         });
     }
 
-    /// Nothing open yet: the two ways in, instead of empty plots and controls.
+    /// Nothing open yet: the two ways in, instead of empty plots and controls. While the first runs
+    /// load, a spinner; the status bar counts the files.
     fn start_screen(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() / 3.0);
+            if !self.loading.is_empty() {
+                ui.spinner();
+                return;
+            }
             ui.label(
                 "Open GC-MS runs (NetCDF or old .bin) to see their chromatograms and spectra.",
             );
