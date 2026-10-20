@@ -148,7 +148,7 @@ impl Results {
                 let res: Vec<ResultRow> = rows.iter().map(|r| r.res.clone()).collect();
                 self.note = export(&run.name, &res);
             }
-            loaded = self.saved_buttons(ui, run);
+            loaded = self.saved_buttons(ui, run, cal);
         });
         // The list below was built from the components that were just replaced.
         if loaded {
@@ -225,14 +225,19 @@ impl Results {
 
     /// Two buttons: save the components of the run as a `.cmp` file the old program reads, or load such
     /// a file in place of them. Returns whether components were loaded.
-    fn saved_buttons(&mut self, ui: &mut egui::Ui, run: &mut Run) -> bool {
+    fn saved_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        run: &mut Run,
+        cal: Option<&RiCalibration>,
+    ) -> bool {
         if ui
             .button("Save components…")
             .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
             .clicked()
             && let Some(p) = dialog(run).save_file()
         {
-            self.note = match save_components(run, &p) {
+            self.note = match save_components(run, &p, cal) {
                 Ok(n) => format!("Saved {n} components to {}", p.display()),
                 Err(e) => format!("Save failed: {e}"),
             };
@@ -523,11 +528,15 @@ fn dialog(run: &Run) -> rfd::FileDialog {
 }
 
 /// Writes the components of `run` to `path`; returns how many.
-fn save_components(run: &Run, path: &std::path::Path) -> Result<usize, String> {
-    // The RI is that of the identification, so the old program lists it too.
+fn save_components(
+    run: &Run,
+    path: &std::path::Path,
+    cal: Option<&RiCalibration>,
+) -> Result<usize, String> {
+    // The RI the list shows, so the old program lists it too.
     let mut ris = vec![-1.0; run.components.len()];
     for (k, ri) in ris.iter_mut().enumerate() {
-        *ri = component_ri(run, k, None).unwrap_or(-1.0);
+        *ri = component_ri(run, k, cal).unwrap_or(-1.0);
     }
     let compounds = md_core::cmp::compounds_of_components(
         &run.components,
@@ -730,7 +739,7 @@ pub(crate) mod tests {
             sharpness: 3.0,
         }];
         let path = std::env::temp_dir().join(format!("md-app-save-{}.cmp", std::process::id()));
-        assert_eq!(save_components(&a, &path), Ok(2));
+        assert_eq!(save_components(&a, &path, None), Ok(2));
 
         let mut b = run();
         b.component = Some(1);
@@ -755,7 +764,7 @@ pub(crate) mod tests {
             ..(*other.data).clone()
         });
         let path = std::env::temp_dir().join(format!("md-app-save2-{}.cmp", std::process::id()));
-        save_components(&a, &path).unwrap();
+        save_components(&a, &path, None).unwrap();
         assert!(load_components(&mut other, &path).is_err());
         std::fs::remove_file(&path).ok();
         assert_eq!(other.components.len(), 2);

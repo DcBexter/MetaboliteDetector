@@ -80,7 +80,8 @@ impl Panels {
 }
 
 /// A resizable area at the side of the main window. It starts at `default` px but at most 30 % of
-/// the width, where tool windows open (`ToolWindow`), and can be dragged to half the width.
+/// the width, where tool windows open (`ToolWindow`), and can be dragged to 40 %, so both sides
+/// together leave the plots a fifth.
 pub fn dock(panel: egui::Panel, ui: &egui::Ui, default: f32) -> egui::Panel {
     // Of the window, not of the room left: the second side panel starts as wide as the first.
     let w = ui.ctx().content_rect().width();
@@ -88,7 +89,7 @@ pub fn dock(panel: egui::Panel, ui: &egui::Ui, default: f32) -> egui::Panel {
         .resizable(true)
         .default_size(default.min(w * 0.3))
         .min_size(120.0_f32.min(w * 0.3))
-        .max_size(w * 0.5)
+        .max_size(w * 0.4)
 }
 
 /// Where a tool window opens the first time; egui keeps where the user moves it later.
