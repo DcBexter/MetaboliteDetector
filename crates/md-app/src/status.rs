@@ -28,6 +28,18 @@ impl App {
                         .show_tooltip_when_elided(false);
                     ui.add(label).on_hover_text(e);
                 });
+            } else if let Some(n) = self.hidden_list_note().map(str::to_owned) {
+                ui.horizontal(|ui| {
+                    if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                        self.results.set_note(String::new());
+                    }
+                    ui.add(
+                        egui::Label::new(&n)
+                            .truncate()
+                            .show_tooltip_when_elided(false),
+                    )
+                    .on_hover_text(n);
+                });
             } else if let Some(r) = self.runs.get(self.active) {
                 // One line: a wrapped status changes the bar's height, which egui applies a frame
                 // late, so the second line would hang below the window for that frame (#200).
@@ -41,6 +53,11 @@ impl App {
                 ui.label("No runs open.");
             }
         });
+    }
+
+    /// Result of Ctrl+S / Ctrl+E (or a button) while the component list, which shows it, is hidden.
+    fn hidden_list_note(&self) -> Option<&str> {
+        Some(self.results.note()).filter(|n| !self.panels.components && !n.is_empty())
     }
 
     fn run_status(&self, r: &Run) -> String {
@@ -63,5 +80,19 @@ impl App {
             self.ri.ri_note(r, r.scan),
             self.load_note
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_note_reaches_the_status_bar_only_while_the_list_is_hidden() {
+        let mut app = App::default();
+        app.results.set_note("Save failed: disk full".into());
+        assert_eq!(app.hidden_list_note(), None);
+        app.panels.components = false;
+        assert_eq!(app.hidden_list_note(), Some("Save failed: disk full"));
     }
 }
