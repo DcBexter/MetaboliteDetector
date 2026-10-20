@@ -383,10 +383,12 @@ cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
 
-`.github/workflows/ci.yml` runs Clippy (warnings fail) and the tests on Ubuntu and Windows for every non-draft PR and every
-push to `main`, with no paths filter, because the required checks must report on every PR. Ubuntu also runs `cargo fmt --check`,
-runs the tests through `cargo llvm-cov` and the Sonar scan, so Linux builds once for both. The summary job `CI` fails unless both
-OS jobs succeeded; it is the required CI result for `main`. It does not fetch the example data, so those tests skip themselves;
+`.github/workflows/ci.yml` runs for every non-draft PR and every push to `main`, with no paths filter, because the required
+checks must report on every PR. Ubuntu runs `cargo fmt --check`, Clippy (warnings fail), the tests through `cargo llvm-cov` and the
+Sonar scan, so Linux builds once for both; Windows only runs the tests, since no code is platform-specific. PRs without changes to
+`crates/`, the Cargo files, the toolchain, `sonar-project.properties` or the workflow skip the build and only run the Sonar scan;
+`main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
+result for `main`. It does not fetch the example data, so those tests skip themselves;
 run them locally. Only `main` saves the cargo cache; PRs restore it.
 
 ## Compatibility goals
