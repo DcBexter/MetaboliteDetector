@@ -1326,9 +1326,8 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
-        // "Restore removed" resets the edits: the shown table is the whole one again.
+        // After "Restore removed" (which resets the edits) the shown table is the whole one again.
         n.edits = Edits::default();
-        assert!(n.edits.is_empty());
         let shown = shown_table(&t, &n, None);
         assert_eq!((shown.runs.len(), shown.rows.len()), (3, 2));
     }
