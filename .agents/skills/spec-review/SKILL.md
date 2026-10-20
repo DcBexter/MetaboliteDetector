@@ -24,7 +24,7 @@ that apply before step 1. `board.mjs` is the kit's `scripts/board.mjs`.
 
 1. **Read the plan.** Spec body (to a file when large), comments, sub-issues with state
    (`gh api --paginate "repos/{owner}/{repo}/issues/SPEC/sub_issues?per_page=100" --jq '.[]|[.number,.state,.title]'`) and their merged PRs.
-   The review ref is the remote branch those PRs merged into, after `git fetch`.
+   The review ref is the remote branch those PRs merged into, after `git fetch`; note its commit.
    Done when every acceptance point and planned decision is listed.
 
 2. **Architecture pass.** Read [`improve-codebase-architecture`](../improve-codebase-architecture/SKILL.md) and run its
@@ -44,10 +44,22 @@ that apply before step 1. `board.mjs` is the kit's `scripts/board.mjs`.
 5. **Gap tickets.** Each **open** gap with one obvious fix, without a matching open sub-issue, first gets a search of
    open issues (`gh issue list --search "<finding words>"`): an unlinked match from an earlier run is linked with
    `board.mjs sub SPEC N`. Otherwise it becomes a new issue via `board.mjs new` (required fields per the project's
-   tracker doc), then `board.mjs sub SPEC NEW`. No ticket carries an open decision; `needs-human-input` is only for
+   tracker doc), then `board.mjs sub SPEC NEW`. Right before each `board.mjs new`, repeat the duplicate check, because
+   parallel runs and other agents file issues in the meantime: list the issues updated in the last 24 hours, open and
+   closed (`gh api "repos/{owner}/{repo}/issues?state=all&since=<UTC now minus 24 h, ISO 8601>&per_page=100" --jq '.[]|select(.pull_request|not)|[.number,.state,.title]'`),
+   and match them by the title words of the new ticket and by a reference to the spec in the body (`#SPEC` or the spec URL; read the body only of title candidates).
+   A match, open or closed, is linked with `board.mjs sub SPEC N` instead of creating the issue. When `new` refuses because an open issue has the same title, link that
+   issue instead (`board.mjs sub SPEC N`). No ticket carries an open decision; `needs-human-input` is only for
    work a human must do. Architecture candidates never get a ticket here.
+   A ticket or acceptance point about a provider interface names the capability in general terms ("a source may create
+   variants", an adapter contract capability) and the provider only as the first source or adapter, never as the subject.
 
-6. **Report on the spec.** One comment on the spec in plain language: verdict table with proofs, gap tickets from
+6. **Report on the spec.** The branch and the sub-issues move during a run (other agents merge and file). Before
+   writing, `git fetch` again and re-read the sub-issues: when the review ref moved past the noted commit or a
+   sub-issue appeared, re-check every point whose files `git diff --name-only OLD NEW` lists and every new sub-issue,
+   then note the new commit. The report names the commit it checked.
+   One comment on the spec in plain language, written to a file and posted with
+   `gh issue comment SPEC --body-file FILE` (also the addendum in step 8): verdict table with proofs, gap tickets from
    step 5, path of the HTML report, and the questions from step 4 that step 7 settles.
 
 7. **Walk the user through.** Open the HTML report in the user's external browser (`start` on Windows, `open` on
@@ -62,8 +74,10 @@ that apply before step 1. `board.mjs` is the kit's `scripts/board.mjs`.
    a load-bearing reason gets the ADR offer of `improve-codebase-architecture` step 3. Done when the frontier is empty
    and the user confirmed.
 
-8. **Agreed work to tickets.** Right after step 7, each answer that asks for follow-up work gets its ticket the way
-   step 5 does; the body states the decision with date and source, and "after the release" goes into its target
+8. **Agreed work to tickets.** Right after step 7, repeat the freshness check of step 6 and narrow or drop agreed
+   work that the new commits or sub-issues already did. Then each answer that asks for follow-up work gets its ticket the way
+   step 5 does, including its duplicate check right before each `board.mjs new` (last 24 hours, title words and spec
+   reference; a match is linked with `board.mjs sub SPEC N`); the body states the decision with date and source, and "after the release" goes into its target
    release. Adjust the spec's text and acceptance point to the decisions (`board.mjs body`) and add a short addendum
    comment (Nachtrag) on the spec: decisions, outcomes, every sub-issue created or newly linked in this invocation.
    Done when every agreed piece of work has an open sub-issue, read back from the sub-issues API.
