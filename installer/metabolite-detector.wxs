@@ -6,7 +6,7 @@
            UpgradeCode="2E75E840-1C36-4010-9049-025727FAE50E" Scope="perUserOrMachine">
     <!-- Installs per user without admin rights by default (ALLUSERS=2, MSIINSTALLPERUSER=1): Windows maps
          ProgramFiles64Folder to %LocalAppData%\Programs and the shortcut folders to the user's own.
-         An admin can install for all users with: msiexec /i <msi> ALLUSERS=1 MSIINSTALLPERUSER="" -->
+         An admin can install for all users with: msiexec /i <msi> ALLUSERS=1 -->
     <!-- vX.Y.Z-rc1 and vX.Y.Z share MSI version X.Y.Z; same-version upgrades replace the rc. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of MetaboliteDetector is already installed." />
     <MediaTemplate EmbedCab="yes" />
