@@ -9,6 +9,7 @@ pub mod deconv;
 pub mod diskscan;
 pub mod isotope;
 pub mod library;
+pub mod normalize;
 pub mod peaks;
 pub mod ri;
 pub mod search;

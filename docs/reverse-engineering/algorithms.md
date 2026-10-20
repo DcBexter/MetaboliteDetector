@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. MID, normalizers, statistics and PCA are NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. MID, statistics tests and PCA are NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -756,11 +756,44 @@ else: comp2ions[c] = added
 - `QuantIonChecker::detectCompounds2Process`.
 - The source of `ion_number` (Inferred QUANT_ION_NUMBER).
 - The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
-- MID, normalizers, statistics tests and PCA are not analyzed. Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+- MID, statistics tests and PCA are not analyzed (normalisation: Section 7c). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
 
 ## 7b. Natural isotope calculator (Observed)
 
 `tools::NaturalMIDCalculator` (0x6d92bc) reads a table of `symbol, nominal mass, exact mass, percent` rows (`:/isotopes.csv`, embedded in the binary; extracted copy: `tools/isotopes/old-isotopes.tsv`). `calculateMID(formula, n)` (0x6d941e) returns `n` values: the product of one polynomial per atom, truncated, with index = nominal mass minus the sum of the lightest nominal masses (isotope gaps stay 0). `calculateExactMass` (0x6d9c6a) sums the lightest isotope masses. The formula grammar has no parentheses and no spaces. The table has typos (e.g. Sn 112 mass 111.05), so the rewrite uses IUPAC/NIST values instead (for about 30 common elements; the old table has 79, so rarer ones such as Ni, Cr, Sn, As, Pt still need rows); `crates/md-core/src/isotope.rs` is tested against the old output with the old values. Driver: `tools/isotopes/old_mid.cpp` (`LD_PRELOAD`, same idea as `tools/golden/`).
+
+## 7c. Normalisation of the batch table (Observed; ported in `crates/md-core/src/normalize.rs`)
+
+The values are the per-sample summed quant ion integrals `S[c][n]` of compound `c` in sample `n` (`CompoundSeries::getSummedIntegral`). The GUI offers four modes; z-score is a flag on top of any of them (`BatchQuantificationTreeModel::getTableData(zscore, exclude_norm_row)`, 0x56527a). The data() cells (0x565a42) use the same divisors for the per-ion rows.
+
+```
+none:      v = S[c][n]
+internal:  v = S[c][n] / S[std][n]            # std = BatchQuantificationTreeModel::norm_series (normalizeData, 0x5657f8); its own row becomes 1; no zero guard
+sum:       v = S[c][n] / T[n]                 # T[n] = ResultSeries::getTotalSampleIntensity(n) (0x734208) = sum over ALL compounds of getSummedIntegral(n), the standard included; normalizeDataBySum 0x5658a8 clears norm_series (the two modes exclude each other)
+pool:      v = S[c][n]                        if n is a pool sample
+           v = S[c][n] / ref                  else   (PoolNormalizer::getNormalizedSummedIntegral 0x72e194, per-ion variant 0x72de96)
+             ref = mean | median of S[c][p] over p in pool_mapping[n]
+z-score:   z = (v - mean(row)) / sqrt(variance(row))    # row = one compound over all samples, after the mode above
+```
+
+- **Pool samples:** the replicate group named `$POOL` (`BatchQuantificationResultWidget::normalizationByPool` 0x554a14, `getGroupIndices("$POOL")`). The widget also reads the acquisition date of every sample file into `PoolNormalizer::times` (long long); the value type is a QDateTime read, the unit is not verified. The pool samples keep their raw values.
+- **Pool mapping** (`updatePoolMapping` 0x72e52c): for every sample `n`, all pool samples go into a `multimap<|times[n] - times[p]|, p>`; the first `count` entries in key order (equal distance: the lower pool index first, multimap insertion order) form `pool_mapping[n]`. `count` is a PoolNormalizer field; the dialog default is not read (the rewrite uses 2).
+- **Mean/median** (`mode` MEAN or MEDIAN): `gsl_stats_mean`, and `gsl_sort` + `gsl_stats_median_from_sorted_data` (the middle value of an odd count, else the mean of the two middle values). Missing values are stored as 0 in the old table and count in these statistics.
+- **Z-score:** `tools::Filter::zScoreTransformation<double>` (0x55a1aa, element formula confirmed in the disassembly: `(x - mean) / dev`), with `Statistics::variance` (0x7c2efe) = `sum((x - mean)^2) / (n - 1)` (sample variance, N-1).
+- **Division by zero:** nothing is guarded, results are inf/NaN. The rewrite returns `None` instead (the GUI shows a dash).
+
+Deviations of the rewrite (the table has `None` for "not found" instead of 0):
+
+- A run without a value stays `None` after every mode.
+- For `total`, a missing value adds nothing (same as the old 0).
+- Missing values of a pool run are skipped in the mean/median, and missing values are skipped in the z-score statistics (the old 0 would drag the mean down). `z_score` needs two values and a non-zero spread, else the row is `None`.
+- Acquisition time: the app uses the file date; the old program reads the date stored in the file.
+- Not ported: the old program scales each ion row of the tree view; the table here has one summed row per substance.
+
+### 7c.1 Unknowns (normalisation)
+
+- Dialog defaults for the pool `count` and MEAN/MEDIAN mode, and the unit of `times`.
+- `ResultSeries::getTotalSampleIntensity` sums `getSummedIntegral`, which would apply the PoolNormalizer when one is set; the GUI never combines pool and sum.
 
 ## 8. Open gaps (ranked by impact on reproducing results)
 
@@ -775,7 +808,7 @@ else: comp2ions[c] = added
 6. The RI wizard's automatic alkane assignment (6.7).
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
-9. MID, normalizers, statistics tests, PCA: not started.
+9. MID, statistics tests, PCA: not started. Normalisation is done (Section 7c).
 
 ## 9. Ranked next steps
 
@@ -783,4 +816,4 @@ else: comp2ions[c] = added
 - Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
-Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6; wizard auto-assignment open). Quantification ion selection complete (Section 7.1-7.3). Remaining quantification/statistics not analyzed.
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6; wizard auto-assignment open). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Remaining statistics not analyzed.

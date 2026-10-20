@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{RunResult, ScanSettings, Table, TableSettings, scan_runs, table};
+use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
 
@@ -33,6 +34,39 @@ struct Scan {
     took: Duration,
 }
 
+/// Which normalisation (F13) the table shows; the table is derived again when this changes.
+#[derive(Clone, PartialEq)]
+struct Norm {
+    kind: Kind,
+    /// Library index of the internal standard.
+    standard: Option<usize>,
+    pool_group: String,
+    pool_nearest: usize,
+    pool_median: bool,
+    z_score: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    None,
+    InternalStandard,
+    TotalSignal,
+    Pool,
+}
+
+impl Default for Norm {
+    fn default() -> Self {
+        Self {
+            kind: Kind::None,
+            standard: None,
+            pool_group: POOL_GROUP.into(),
+            pool_nearest: 2,
+            pool_median: false,
+            z_score: false,
+        }
+    }
+}
+
 pub struct Batch {
     pub open: bool,
     paths: Vec<PathBuf>,
@@ -45,6 +79,9 @@ pub struct Batch {
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
     table: Option<(TableSettings, Result<Table, String>)>,
+    norm: Norm,
+    /// `table` normalised as `norm` says.
+    shown: Option<(Norm, Table)>,
     note: String,
 }
 
@@ -60,6 +97,8 @@ impl Default for Batch {
             job: None,
             scan: None,
             table: None,
+            norm: Norm::default(),
+            shown: None,
             note: String::new(),
         }
     }
@@ -237,6 +276,7 @@ impl Batch {
             let t =
                 table(&scan.runs, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
+            self.shown = None;
         }
         ui.separator();
         ui.label(format!(
@@ -249,7 +289,17 @@ impl Batch {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         match self.table.as_ref().map(|t| &t.1) {
-            Some(Ok(t)) => table_view(ui, t),
+            Some(Ok(t)) => {
+                norm_controls(ui, &mut self.norm, t);
+                if self.shown.as_ref().is_none_or(|s| s.0 != self.norm) {
+                    let n = &self.norm;
+                    let shown = apply(t, &mode(n, t, &scan.runs), n.z_score);
+                    self.shown = Some((n.clone(), shown));
+                }
+                if let Some((_, shown)) = &self.shown {
+                    table_view(ui, shown, &self.norm);
+                }
+            }
             Some(Err(e)) => {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
@@ -264,9 +314,15 @@ impl Batch {
 /// Rows are virtualised, so only the visible ones are laid out each frame.
 /// shortcut: all columns are laid out per visible row; virtualise columns too if studies with
 /// thousands of runs feel slow.
-fn table_view(ui: &mut egui::Ui, t: &Table) {
+fn table_view(ui: &mut egui::Ui, t: &Table, norm: &Norm) {
+    let what = match (norm.kind, norm.z_score) {
+        (Kind::None, false) => "summed quant ion integrals",
+        (_, false) => "normalised quant ion integrals",
+        (Kind::None, true) => "z-scores of the summed integrals",
+        (_, true) => "z-scores of the normalised integrals",
+    };
     ui.label(format!(
-        "{} substances × {} runs; values are summed quant ion integrals",
+        "{} substances × {} runs; values are {what}",
         t.rows.len(),
         t.runs.len()
     ));
@@ -315,4 +371,89 @@ fn table_view(ui: &mut egui::Ui, t: &Table) {
                 });
             });
     });
+}
+
+fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
+    ui.horizontal(|ui| {
+        ui.label("Normalise by");
+        for (kind, title) in [
+            (Kind::None, "nothing"),
+            (Kind::InternalStandard, "internal standard"),
+            (Kind::TotalSignal, "total signal"),
+            (Kind::Pool, "pool"),
+        ] {
+            ui.selectable_value(&mut n.kind, kind, title);
+        }
+        ui.checkbox(&mut n.z_score, "z-score");
+    });
+    match n.kind {
+        Kind::InternalStandard => {
+            ui.horizontal(|ui| {
+                ui.label("Internal standard");
+                let name = |c: Option<usize>| {
+                    t.rows
+                        .iter()
+                        .find(|r| Some(r.compound) == c)
+                        .map_or("choose…", |r| r.name.as_str())
+                };
+                egui::ComboBox::from_id_salt("norm standard")
+                    .selected_text(name(n.standard))
+                    .show_ui(ui, |ui| {
+                        for r in &t.rows {
+                            ui.selectable_value(&mut n.standard, Some(r.compound), &r.name);
+                        }
+                    });
+            });
+        }
+        Kind::Pool => {
+            ui.horizontal(|ui| {
+                ui.label("Pool runs are the replicate group");
+                ui.add(egui::TextEdit::singleline(&mut n.pool_group).desired_width(80.0));
+                ui.label("nearest pool runs");
+                ui.add(egui::DragValue::new(&mut n.pool_nearest).range(1..=99));
+                ui.checkbox(&mut n.pool_median, "median");
+            })
+            .response
+            .on_hover_text("Each run is divided by the mean or median of the nearest pool runs in time (file date). Pool runs keep their raw values.");
+        }
+        Kind::None | Kind::TotalSignal => {}
+    }
+}
+
+/// The old program orders runs by acquisition date; the file date stands in for it.
+/// shortcut: files are found by name, so equal names in different folders are not told apart.
+fn mode(n: &Norm, t: &Table, runs: &[RunResult]) -> Normalization {
+    match n.kind {
+        Kind::None => Normalization::None,
+        Kind::TotalSignal => Normalization::TotalSignal,
+        Kind::InternalStandard => Normalization::InternalStandard(
+            t.rows
+                .iter()
+                .position(|r| Some(r.compound) == n.standard)
+                .unwrap_or(usize::MAX),
+        ),
+        Kind::Pool => {
+            let times = t
+                .runs
+                .iter()
+                .map(|name| {
+                    runs.iter()
+                        .find(|r| {
+                            r.path
+                                .file_name()
+                                .is_some_and(|f| f.to_string_lossy() == *name)
+                        })
+                        .and_then(|r| std::fs::metadata(&r.path).ok()?.modified().ok())
+                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs() as i64)
+                })
+                .collect();
+            Normalization::Pool(Pool {
+                group: n.pool_group.clone(),
+                times,
+                nearest: n.pool_nearest,
+                median: n.pool_median,
+            })
+        }
+    }
 }
