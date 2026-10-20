@@ -71,6 +71,12 @@ impl RiCalibration {
         })
     }
 
+    /// RI = retention time in s: the RT-only alignment of the old wizard (see
+    /// `PreparedLibrary::new_rt_only`). A line through (0, 0) and (1, 1) extrapolates to the identity.
+    pub fn identity() -> Self {
+        Self::new([(0.0, 0.0), (1.0, 1.0)]).expect("two ascending points")
+    }
+
     /// (retention time in s, RI), ascending; without the shift.
     pub fn points(&self) -> &[(f64, f64)] {
         &self.points
@@ -212,6 +218,40 @@ pub fn window_points(peaks: &[(f64, f64)], windows: &[(f64, f64, f64)]) -> Vec<(
                 .map(|p| (p.0, ri))
         })
         .collect()
+}
+
+/// Automatic assignment of the calibration mix (old `CalibrationPage::matchCompounds`, §6.7).
+/// `mix_ris[m]` is the library RI of mix substance `m`, `comp_rts_s[c]` the retention time of detected
+/// component `c`, `score(c, m)` the overall library score of substance `m` for component `c` (0 when it
+/// is not among the hits). Going through the mix by ascending RI, each substance takes the first
+/// component in time order after the previous match whose score reaches `cutoff` (and is above 0).
+/// Returns the component of each substance, `None` where none was found. The old code keyed the mix by
+/// RI, so two substances with the same RI lost one; here both are kept.
+pub fn match_mix(
+    mix_ris: &[f64],
+    comp_rts_s: &[f64],
+    cutoff: f64,
+    score: impl Fn(usize, usize) -> f64,
+) -> Vec<Option<usize>> {
+    let sorted = |v: &[f64]| {
+        let mut i: Vec<usize> = (0..v.len()).collect();
+        i.sort_by(|a, b| v[*a].total_cmp(&v[*b]));
+        i
+    };
+    let comps = sorted(comp_rts_s);
+    let mut found = vec![None; mix_ris.len()];
+    let mut next = 0;
+    for m in sorted(mix_ris) {
+        let hit = comps[next..].iter().position(|&c| {
+            let s = score(c, m);
+            s >= cutoff && s > 0.0
+        });
+        if let Some(k) = hit {
+            found[m] = Some(comps[next + k]);
+            next += k + 1;
+        }
+    }
+    found
 }
 
 /// Reference search of the RT shift correction (§6.5): among the substances whose RI lies within
@@ -369,6 +409,34 @@ mod tests {
         };
         let peaks = marker_peaks(&c, 57.0, 12, 10);
         assert_eq!(peaks.iter().map(|p| p.0).collect::<Vec<_>>(), [50.0, 150.0]);
+    }
+
+    #[test]
+    fn mix_is_matched_in_time_order() {
+        // Components at 10, 20, 30, 40 s (given unsorted); mix RI 1100 (index 0) and 1000 (index 1).
+        let rts = [30.0, 10.0, 40.0, 20.0];
+        // Substance 1 (RI 1000) is in components 1 and 3, substance 0 (RI 1100) in 3 and 2.
+        let scores = |c: usize, m: usize| match (c, m) {
+            (1, 1) | (3, 1) | (3, 0) | (2, 0) => 0.9,
+            _ => 0.0,
+        };
+        // 1000 -> earliest (component 1, 10 s); 1100 -> first after it: component 3 (20 s).
+        assert_eq!(
+            match_mix(&[1100.0, 1000.0], &rts, 0.8, scores),
+            [Some(3), Some(1)]
+        );
+        // Below the cutoff nothing matches; a substance without a later component stays unmatched.
+        assert_eq!(
+            match_mix(&[1100.0, 1000.0], &rts, 0.95, scores),
+            [None, None]
+        );
+        assert_eq!(
+            match_mix(&[1000.0, 1100.0], &[10.0], 0.8, |_, _| 1.0),
+            [Some(0), None]
+        );
+        // Identity calibration: RI is the time in s.
+        let id = RiCalibration::identity();
+        assert_eq!((id.ri(123.4), id.rt(55.0)), (123.4, 55.0));
     }
 
     #[test]
