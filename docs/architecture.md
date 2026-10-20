@@ -128,8 +128,17 @@ plain `File`).
 detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
 0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
-`detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
-old app only uses in the RI calibration dialog (and deconvolution, §4.5).
+`matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
+
+`PeakSettings::detector` selects the old "Matched Filtering" method instead (`Detector::Matched`, old
+`MatchedPeakDetector`, §3.3). The old app offers it only in its *Calibration Setter* window, with peak
+width 10 and threshold 3 as the values after switching (`Detector::MATCHED`); the main window always uses
+the default detector, and the old settings file has no field for it. Here it is a field of `GcmsSettings`
+(not saved in the old file) and a choice in the app's settings window, so the app, the batch scan and the
+deconvolution all use the chosen detector. In the old code the matched peaks hold the filtered values and
+the deconvolution reads those, so `IonTraces::detect_peaks` overwrites each trace in place with its filtered
+values (one row copy per worker, no second index). The filter is computed per trace in parallel with one
+precomputed kernel; `detect_peaks_matched` runs the same detector on a single trace (RI markers).
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 
@@ -357,6 +366,16 @@ Remaining differences, all in deconvolution: 1 old component is missing, 3 diffe
 and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
 deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
 A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
+
+A second reference, `old-md-3.3-matched.tsv`, is made the same way with the old `MatchedPeakDetector(10, 3)`
+(`MD_MATCHED="10 3"` for the driver; the *Calibration Setter* values, §3.3) and compared with
+`Detector::MATCHED` under the same tolerances. Its peaks (12 590, 12 411 and 12 422 in eg04, eg20, eg32)
+match exactly, S/N included (the old default -1). Of 2 807 old components, 2 657 match; 43 are missing,
+38 new ones have no old partner, 66 differ by ions and 41 by heights. The cause is the same precise-apex
+tie: the filtered traces are integers with broad, smooth tops, so the parabola vertex lands exactly on
+a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
+deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
+all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
 
 The test fails when one of these counts grows.
 
