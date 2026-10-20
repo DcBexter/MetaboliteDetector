@@ -396,6 +396,7 @@ impl Batch {
                 && let Some(p) = rfd::FileDialog::new()
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
                     .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                    .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
                     .pick_files()
             {
                 self.paths.extend(p);
@@ -520,15 +521,15 @@ fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
         .add_filter("CSV", &["csv"])
         .set_file_name("results.csv")
         .save_file()?;
-    Some(
-        match std::fs::File::create(&p)
-            .map(std::io::BufWriter::new)
-            .and_then(|f| t.write_csv(f))
-        {
-            Ok(()) => format!("Saved {}", p.display()),
-            Err(e) => format!("Export failed: {e}"),
-        },
-    )
+    let saved = std::fs::File::create(&p)
+        .map(std::io::BufWriter::new)
+        .and_then(|f| t.write_csv(f));
+    Some(match saved.map(|()| t.write_groups_file(&p)) {
+        Ok(Ok(None)) => format!("Saved {}", p.display()),
+        Ok(Ok(Some(g))) => format!("Saved {} and {}", p.display(), g.display()),
+        Ok(Err(e)) => format!("Saved {}, but not the replicate groups: {e}", p.display()),
+        Err(e) => format!("Export failed: {e}"),
+    })
 }
 
 /// Rows are virtualised, so only the visible ones are laid out each frame.

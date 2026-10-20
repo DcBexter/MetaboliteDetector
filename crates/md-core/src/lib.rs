@@ -10,6 +10,7 @@ pub mod csv;
 pub mod deconv;
 pub mod detail;
 pub mod diskscan;
+pub mod fastflight;
 pub mod isotope;
 pub mod library;
 pub mod library_add;
@@ -22,9 +23,17 @@ pub mod search;
 pub mod settings;
 pub mod spectrum;
 pub mod stats;
+pub mod tof;
 
-/// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), else ANDI-MS NetCDF.
+/// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), FastFlight raw
+/// data (`MsData.FFT`, calibrated by the `.mzcalib` next to it), else ANDI-MS NetCDF.
 pub fn read_run(path: &std::path::Path) -> Result<Chromatogram, String> {
+    if fastflight::is_fastflight(path) {
+        return fastflight::find_calibration(path)
+            .and_then(|c| Ok(tof::TofCalibration::read(c)?))
+            .and_then(|c| fastflight::read(path, &c))
+            .map_err(|e| e.to_string());
+    }
     match path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
