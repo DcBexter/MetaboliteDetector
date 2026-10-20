@@ -12,7 +12,7 @@ use md_core::search::{
     Identification, PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
 };
 
-use crate::{App, Run, spawn};
+use crate::{App, Run, poll_job, spawn};
 
 pub struct Library {
     pub name: String,
@@ -94,7 +94,7 @@ impl App {
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
-            && let Ok(result) = rx.try_recv()
+            && let Some(result) = poll_job(rx, "library search").map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(lib) => self.library = Some(lib),
@@ -134,8 +134,18 @@ impl App {
         };
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.ident_job
-                && let Ok((id, shifted)) = rx.try_recv()
+                && let Some(result) = poll_job(rx, &format!("{}: identification", run.name))
             {
+                // A crashed search is not retried for this key; the run shows no hits.
+                let (id, shifted) = result.unwrap_or_else(|e| {
+                    self.error = Some(e);
+                    let n = run.components.len();
+                    let none = Identification {
+                        hits: vec![Vec::new(); n],
+                        assigned: vec![None; n],
+                    };
+                    (none, None)
+                });
                 run.ident = Some((k.clone(), id, shifted));
                 run.ident_job = None;
             }

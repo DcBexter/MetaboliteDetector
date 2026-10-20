@@ -128,6 +128,16 @@ fn spawn<T: Send + 'static>(
     rx
 }
 
+/// Polls a job from `spawn`: `None` while it runs, `Err` when its thread panicked (the sender is
+/// dropped unsent), so callers can report it and not wait or restart forever.
+fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, String>> {
+    match rx.try_recv() {
+        Ok(v) => Some(Ok(v)),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(format!("{what} crashed"))),
+    }
+}
+
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).
 fn color(i: usize) -> egui::Color32 {
     egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.85, 0.5, 1.0).into()
@@ -206,8 +216,13 @@ impl App {
         let key = (self.mz, self.tolerance);
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.sic_job
-                && let Ok(sic) = rx.try_recv()
+                && let Some(result) = poll_job(rx, &format!("{}: SIC", run.name))
             {
+                // A crashed SIC is not retried for this key; the trace stays empty.
+                let sic = result.unwrap_or_else(|e| {
+                    self.error = Some(e);
+                    Vec::new()
+                });
                 (run.sic, run.sic_for) = (sic, Some(*k));
                 run.sic_job = None;
             }
@@ -521,5 +536,25 @@ impl eframe::App for App {
                 .y_axis_label(format!("Intensity — {}", run.name))
                 .show(ui, |p| p.bar_chart(BarChart::new(name, bars)));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panicking_job_is_reported_not_lost() {
+        let ctx = egui::Context::default();
+        let rx = spawn(&ctx, || -> u8 { panic!("boom") });
+        let started = Instant::now();
+        let result = loop {
+            if let Some(r) = poll_job(&rx, "test job") {
+                break r;
+            }
+            assert!(started.elapsed().as_secs() < 10, "job never finished");
+            std::thread::yield_now();
+        };
+        assert_eq!(result, Err("test job crashed".to_string()));
     }
 }

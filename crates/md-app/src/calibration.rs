@@ -86,7 +86,7 @@ impl Calibration {
         lib: Option<&Library>,
     ) {
         if let Some((source, rx)) = &self.job
-            && let Ok(result) = rx.try_recv()
+            && let Some(result) = crate::poll_job(rx, "RI calibration").map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(cal) => self.set(cal, source.clone()),
