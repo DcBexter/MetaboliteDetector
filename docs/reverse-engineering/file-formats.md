@@ -247,7 +247,7 @@ does that and checks each record header against its index entry.
 - `DataType` enum names for the values (2 is what `CdfImporter` writes).
 - `setCompressionParameter` default thresholds and the meaning of the BaselineStatistics fields.
 - Whether `writeIndexFile` can write another magic or other type sizes (only the reader was disassembled).
-- How `FilteredDataProvider` applies the TOF polynomial (`md_core::diskscan` rejects caches that have one).
+- None for the TOF polynomial: `FilteredDataProvider` maps `m/z = (f32) poly(bin as f64)`, which `md_core::diskscan` applies (section 4.3).
 
 ---
 
@@ -378,21 +378,54 @@ Filter string "Calibration files (*.mzcalib)" and "TOF calibration (*.mzcalib);;
 | next | `Calibration table` | fixed header |
 | next..end | `<key>` TAB `<value>` | one line per `CalibrationPairWidget::getCalibrationPairs()` entry; key = `float` (m/z), value = `double` |
 
-- Precision of the numbers: `QTextStream::setRealNumberPrecision` is called, but its argument was not recovered
-  (Unknown; Qt default is 6 significant digits).
+- Precision of the numbers: `setRealNumberPrecision(18)` (Observed, disassembly), i.e. C `%.18g`.
 - Encoding: `QTextStream` default (Unknown; ASCII content only in the strings).
 
-Reader: `MainWindow::readTOFCalibData(QString file, QWidget*)` 0x4c8aba. Decompile truncated at
-`QString::toStdString` / `std::string::c_str`. Locals (`order`, `tmp`, `i`, `rc_par`, `char text[32]`)
-suggest a line-based `ifstream` reader that parses the keys above (Inferred).
+Reader: `MainWindow::readTOFCalibData(QString file, QWidget*)` 0x4c8aba (Observed, disassembly). A
+whitespace-token `ifstream`: skips two tokens (`Polynomial order:`), reads `order` as int, then for `i` in `0..=order`
+skips the label, reads the index and the double value. The calibration table is not read. Ported in
+`md_core::tof::TofCalibration::parse` (an order outside 0..=64 or a missing/invalid value is an error).
+
+Regression: `TOFCalibrationCalculator::regress` 0x6db8a2 needs at least `degree + 1` pairs (error text
+"ERROR: Not enough values for polynomial regression."), then GSL `multifit_linear` (SVD) with
+`X[i][j] = bin_i^j`, `y = m/z_i` (Observed). Ported as `TofCalibration::fit` (nalgebra SVD).
 
 `TOFCalibrationWindow::saveSettings()` 0x6c077e is **not** the .mzcalib writer. It stores only the window
 size in `QSettings("TU-Braunschweig", "TOFCalib")`, group "GUI", key "size" (Observed).
 
 ### Unknowns (section 4)
-- Exact precision in `.mzcalib` (setRealNumberPrecision argument not recovered).
 - Encoding of the text files (ASCII numbers only in `.calib`).
-- The complete reader for `.mzcalib` (truncated).
+- Automatic TOF calibration (`automaticCalibration`, `iterativeCalibration`, `searchBestMatch`): not decoded.
+
+### 4.3 FastFlight raw data (MsData.FFT + MsData.FFC): `gcms::FastFlightImporter`
+
+Observed (disassembly of `initialization`, `readSpectrum<float>`, `importData`; Ghidra address = nm + 0x100000).
+No real FastFlight file was available: the layout is checked against a synthetic run only, read by the old
+importer itself (`docs/reverse-engineering/tools/fastflight/`).
+
+The importer takes a directory (trailing `/`; the names `MsData.FFT` and `MsData.FFC` are appended).
+
+**FFC (index).** `i32 N`, then N entries of 36 bytes: 4 bytes skipped, `i32 n`, 4 skipped, `u64 tic`,
+`u64 fft_offset`, `f64 factor`. Time of the scan = `factor * n` (factor 0 means 2.5); the unit is ms (Inferred).
+A negative `n` or offset is "Error reading data!". Scans are keyed by time (the first of equal times stays).
+
+**FFT (data).** No file header; a spectrum starts at the offset from the FFC. All words are 24 bit, little endian.
+A frame is `0xFFFFFF`, a header word, then data words (else "Expected new frame header!"):
+- header: count = `h & 0x3FFF` (words in the frame, including the header words); bit 14 = time block, bit 15 = final
+  frame (tested only if bit 14 is clear). The first `skip` words of the count are header: 2, 3 with a time word
+  (`& 0x1FFFFF`, times 2.5; clears the point lists), 4 for the final frame.
+- data words: `0xFF8000` is followed by a base offset; `(w & 0xFF0000) == 0xFF0000` sets the position
+  `w & 0xFFFF`; any other word is an intensity at TOF bin `base + position`, then the position increases by 1.
+- after the final frame: `w1 + (w2 << 24)` as i32 is the TIC. The smallest intensity is subtracted from all.
+
+**importData(path, dropFirst, b).** For each scan in time order: TIC of the FFT trailer must equal the FFC one
+("TIC mismatch! TICs in the file .FFT and .FFC do not match."); TIC 0 is skipped; `dropFirst` (the batch importer
+passes 1) removes the first point. With `b` false the scan goes through peak detection and compression; with `b`
+true only scans with more than 50 000 points are written, as they are. The cache gets the raw TOF bins as
+"masses" and the polynomial in the `.idx` (section 2.3); the reader maps `m/z = (f32) poly(bin as f64)`.
+Ported in `md_core::fastflight`; the compressing path is not.
+- The old writer's `b = true` cache repeats points (runs of 1 to 5) and loses about 0.5 % of them (found with the
+  synthetic run); the Rust test compares as a sequence, not point by point.
 
 ---
 
@@ -630,10 +663,10 @@ Unknown; probably the display/export of a compound, not the MSP reader).
 
 ## Unknowns and gaps (summary)
 
-1. .bin/.idx: DataType enum names; compression thresholds; TOF polynomial use (layout decoded, section 2).
+1. .bin/.idx: DataType enum names; compression thresholds (layout decoded, section 2; the TOF polynomial is read since #29, section 4.3).
 2. .cmp: versions 1 to 3 (no sample); meaning of `count` and of the model peak's ion code.
 3. .calib: encoding only (layout, unit and members verified, section 4.1).
-4. .mzcalib: reader; precision; encoding.
+4. .mzcalib: encoding; automatic calibration. FastFlight: time unit, the meaning of `b`, the compressing path.
 5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF and SQL_* fields.
 6. LBR: Peak<int,float> records of version 2/3 compounds with peaks (decoded otherwise, section 1).
 7. MSL and NIST: most functions undecoded; grammar inferred from strings.
