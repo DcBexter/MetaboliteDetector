@@ -36,7 +36,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | #24 |
 | 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | #28 |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
-| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 read, MSL import done (#11), nominal MSL export in core only; export in the app and profile MSL #84; editor #12; add compound / copy RTs #80; v5 `.lbr` #41 |
+| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), nominal MSL export in core only; export in the app and profile MSL #84; editor #12; add compound / copy RTs #80 |
 | 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | #21 |
 | 20 | R console | `RConsole`, `MDRConsole`, RInside | Results as R `data.frame data`, scripts, SVG/PDF plots, `.RData` export. | CSV + R template #26 (embedded R not ported on purpose) |
 | 21 | Exports | `NetCDFExporter`, `CSVChromatogramExporter`, `CompoundExporter` | Chromatogram to NetCDF/CSV, compound tables to CSV, plots to PDF/PNG. | NetCDF done (#30); CSV/PNG/PDF/SVG/clipboard #9; compound CSV #78 |
@@ -64,7 +64,6 @@ by exactly one issue.
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |
 | 18 | MSL export in the app, also as profile/FWHM spectrum | #84 |
-| 18 | `.lbr` version 5 | #41 |
 | 13 | Internal standard, summed signal, pool (with pool mapping export), z-score | #23 |
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
 | 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots | #28 |
