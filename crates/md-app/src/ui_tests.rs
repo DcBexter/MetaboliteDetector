@@ -192,12 +192,13 @@ fn screenshots() {
     wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
 
     type Toggle = fn(&mut App) -> &mut bool;
-    let windows: [(&str, Toggle); 5] = [
+    let windows: [(&str, Toggle); 6] = [
         ("07-settings", |a| &mut a.settings.open),
         ("08-calibration", |a| &mut a.ri.open),
         ("09-batch", |a| &mut a.batch.open),
         ("10-isotopes", |a| &mut a.isotopes.open),
         ("11-library-editor", |a| &mut a.editor.open),
+        ("12-results", |a| &mut a.results.open),
     ];
     for (name, open) in windows {
         *open(h.state_mut()) = true;

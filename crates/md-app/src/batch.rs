@@ -398,6 +398,7 @@ impl Batch {
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
                     .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
                     .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+                    .add_filter("Saved components (.cmp)", &["cmp", "CMP"])
                     .pick_files()
             {
                 self.paths.extend(p);
