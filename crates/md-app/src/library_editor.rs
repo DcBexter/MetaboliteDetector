@@ -440,6 +440,20 @@ fn feature_field(
 }
 
 impl App {
+    /// Opens "Add component" and "Copy RTs" for the active run, as their buttons do; for tests.
+    #[cfg(test)]
+    pub fn open_editor_dialogs(&mut self, ctx: &egui::Context) {
+        let run = &self.runs[self.active];
+        let src = Source {
+            run,
+            ri: self.ri.for_run(run),
+            quant: self.settings.applied.quant(),
+            search: self.settings.applied.search(),
+        };
+        self.editor.start_add(ctx, &src);
+        self.editor.start_rt_copy(ctx, &src);
+    }
+
     pub fn library_editor(&mut self, ctx: &egui::Context) {
         if !self.editor.open {
             return;

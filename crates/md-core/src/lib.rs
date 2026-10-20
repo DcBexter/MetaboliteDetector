@@ -13,6 +13,7 @@ pub mod diskscan;
 pub mod isotope;
 pub mod library;
 pub mod library_add;
+pub mod mid;
 pub mod normalize;
 pub mod peaks;
 pub mod results;

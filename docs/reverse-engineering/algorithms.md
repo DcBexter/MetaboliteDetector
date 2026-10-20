@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID is NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID (Section 7g) is reconstructed.
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -793,7 +793,7 @@ else: comp2ions[c] = added
 - `QuantIonChecker::detectCompounds2Process`.
 - The source of `ion_number` (Inferred QUANT_ION_NUMBER).
 - The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
-- MID is not analyzed (normalisation: Section 7c, statistics and PCA: Section 7f). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+- MID: Section 7g (normalisation: Section 7c, statistics and PCA: Section 7f). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
 
 ## 7b. Natural isotope calculator (Observed)
 
@@ -947,6 +947,42 @@ Deviations of the rewrite:
 - Whether `BiomarkerWidget::createGUI` differs from `exportData` besides the table widget (the same alglib calls appear at 0x48a94a-0x48ab20).
 - The default p-value filter and the dialog defaults for the independent flag.
 
+## 7g. MID wizard (Observed; ported in `crates/md-core/src/mid.rs` and `mid/`)
+
+Addresses are nm addresses (Ghidra = nm + 0x100000). Feature F16.
+
+### 7g.1 Inputs and method
+`MethodPage::getSelectedMethod` (0x4f4b00): 0 uncorrected, 1 corrected by unlabelled reference runs (default), 2 by library spectrum, 3 by sum formula. `getM1Correction` (0x4f4b6c) is the abundance spin box when the M1 check box is on, else 0; the wizard divides it by 100. `getTracer` (0x4f4bbc) is the element of the tracer combo box. `MIDWizard::accept` (0x4f8354) makes the groups `GL` (labelled runs) and, for method 1 only, `GUL` (unlabelled runs). `createMIDLibrary` (0x4fa038) keeps the library substances with fragments and makes every fragment ion `lo..=hi` a quant ion, so the batch rescan (`ResultSeries::preciseSeriesCompletion`, Section 7) fills ions that were not deconvoluted. The settings page is the batch settings widget in targeted mode. Port: `mid::mid_library`, then the normal batch scan with rescan.
+
+A fragment is a key `(a, b)` of the library's sum formulas (`LibraryCompound::getFragments` 0x61f428, map order); `lo = min`, `hi = max`, ions `lo..=hi`. `getFormula` and `getMIDSize` (default 0 = one share per ion) belong to the same key. Port: `mid::fragments`.
+
+### 7g.2 Group methods 0 and 1: `Calculate::operator()` (0x4fa57c)
+Per substance and fragment, one row of integrals (`CompoundSeries::getIntegral` 0x6319c8, 0 for a missing ion) per run of `GL` (and `GUL`). Rows whose integrals are all 0 are not used. Method 0: `MIDSolver(rows)` (0x6e00cc): mean of the normalised rows, CI = 1.96 · sd / √n (sample sd), CI -1 for one row, R² -1. Method 1: `MIDSolver(GL rows, GUL rows, m1)` (0x6dfe5a): every pair (reference, labelled) adds one equation per ion; column k is the reference shifted by k, with the M+0/M+1 entries corrected by `cf = k · m1` as `shift = r0 · cf / ((r1/r0 + 1) − cf)` (diagonal `r0 + shift`, sub-diagonal `r1 − shift`, both clamped at 0). Errors (`GCMSScanException`) become the feature `ERROR`, "Error calculating reference spectrum for <b>name</b> (lo-hi): message"; `midCalcFinished` (0x4f9534) shows them in one WARNING box. Port: `mid::determine` with `Method::Uncorrected` / `Method::Reference`, solver `correct_by_reference`, `replicate_mean`.
+
+### 7g.3 Per-run methods 2 and 3: `MIDCompoundSeries` (ctor 0x6edb74, `determineMIDs` 0x6ee5e0)
+Every run of the batch gets its own MID (`Calculate_Individual` 0x4fb7fa; flag = method 2). Per fragment and run:
+- Method 2: reference row = `getNormalizedIntensity(lo + k)` of the library spectrum (normalised to 1000, exact float key, 0 when absent), correction = M1/M0 of the tracer's natural pattern (`calculateMID(tracer, 2)`), `MIDSolver(row, reference, correction)` (0x6dfd1e).
+- Method 3: `MIDSolver(row, formula, calc, tracer, size)` (0x6dff04 → 0x6e1896): column k is the normalised natural pattern of the formula with k tracer atoms removed (none once the count is 0), fit by least squares.
+
+Results are keyed by ion `lo + n` (MID, CI, R² per run). An empty tracer or formula throws "Invalid formula string"; the whole substance is dropped and the wizard reports "Error determining MIDs.". A run without the substance has `getIntegral` 0 and gives NaN in the old program.
+
+### 7g.4 Least squares (`MIDSolver::solve` 0x6e1148 / 0x6e0656)
+`gsl_multifit_linear`; R² = 1 − χ²/TSS; when rows ≠ columns, CI_k = √(COV_kk · χ²/(n−p)) · t₀.₉(n−p), else -1. Empty input gives the sentinels MID [-1], CI [-1], R² -1. Port: `mid::fit` (Householder QR, t quantile by bisection).
+
+### 7g.5 "Export MIDs" of the batch table (`BatchQuantificationResultWidget::exportMIDs` 0x452132)
+Uses the feature `FRAG`, parsed by `parseFragmentString` (0x45887e): regex `\((\d+)/(\d+)\)`, (first ion, number of ions) into a `QMultiMap` (sorted by ion; a repeated ion lists its latest entry first). The file has three tables, sample names = file names without `.bin`:
+1. "Retention Times (Min)": one row per substance with `FRAG`, RT in minutes or -1.
+2. "Total ion counts": rows `Name_ion`, the sum of the integrals of `ion..ion+size-1` per run. A substance without `FRAG` gives "Warning: No fragment (FRAG) defined for compound X"; a `FRAG` that does not parse gives `Error: Can not parse "…". SYNTAX(e.g): (174/8)(261/5)`.
+3. "Mass Isotopomer Abundances": rows `Name_m (Mk)`, integral / fragment total, a blank line after each fragment.
+Port: `mid::frag_export`, `mid::parse_fragments`.
+
+### 7g.6 Verification and deviations
+- Solver: 31 synthetic cases of `tools::MIDSolver` called through `LD_PRELOAD`; test `matches_old_program` in `mid.rs` (max error 4e-15).
+- Methods 2 and 3 end to end: `tools/isotopes/old_midseries.cpp` drives `MIDCompoundSeries` on synthetic integrals (`make-midseries.sh`, `gen_midseries.py`); `crates/md-core/tests/mid_series.rs` matches all 72 values (MID, CI, R²; several fragments, reversed fragment keys, MID size, tracers C and N, no tracer), with the library spectrum read from the old `lib_aa.lbr`.
+- Methods 0 and 1 are checked at solver level only; `Calculate` needs a `ReplicateResultSeries` and was not driven.
+- Deviations: a run without the substance or with only zero integrals gives no MID (`None`) instead of NaN; the FRAG export prints numbers with Rust `{}` instead of Qt's `%g` (6 digits) and keys fragment totals per row instead of per substance id; RT minutes are `rt_s / 60`. Fragments wider than 1000 ions (`MAX_FRAGMENT_IONS`, a library key span or a `FRAG` size) are left out; the old program loops over all of them. The app's MID window looks up the RT shift reference in the fragment-only scan library and scans without shift when the reference has no fragment.
+- Not traced: `outputMIDStatisticsDataToStream` (0x4f0090), the exact column loop of `outputMIDDataToStream` (0x4ef548), where the old program keeps the results of methods 0 and 1 (follow-up #141).
+
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
@@ -960,7 +996,7 @@ Deviations of the rewrite:
 6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
-9. MID: not started. Normalisation (7c), statistics and PCA (7f) are done.
+9. MID (7g): the statistics export and the group methods end to end against the old binary. Normalisation (7c), statistics and PCA (7f) are done.
 
 ## 9. Ranked next steps
 
@@ -968,4 +1004,4 @@ Deviations of the rewrite:
 - Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
-Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Statistics and PCA reconstructed (Section 7f).
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Statistics and PCA reconstructed (Section 7f). MID reconstructed (Section 7g).

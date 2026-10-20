@@ -17,8 +17,8 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.mdlib, .lbr or .msl) in many runs (.cdf, .nc or old .bin) and writes the
-substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
+Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc or
+old .bin) and writes the substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
 
 Options:
   -l, --library FILE          library (required)
@@ -176,7 +176,8 @@ fn run(a: Args) -> Result<bool, String> {
         .transpose()?;
     let compounds =
         library::open(&a.library).map_err(|e| format!("{}: {e}", a.library.display()))?;
-    let prepared = PreparedLibrary::new(&compounds, &settings.search());
+    let prepared = PreparedLibrary::new(&compounds, &settings.search())
+        .with_fragment_filter(library::is_nist(&a.library));
 
     let mut ts = TableSettings {
         quant: settings.quant(),
