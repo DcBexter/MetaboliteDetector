@@ -570,6 +570,17 @@ chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plo
 egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
 renamed.
 
+## Component panel and spectrum comparison
+
+`md_core::detail` holds the values of the old component panel (mean S/N, mean sharpness, peak discrepancy
+index, the peak list with one row per ion) and `compare`, which puts the found and the library spectrum on
+one mass axis, normalised with `spectrum::normalize` ([algorithms.md](reverse-engineering/algorithms.md)
+§7g). `crates/md-app/src/detail.rs` draws the right panel of the selected component and the mode picker
+above the spectrum plot: found only, split (library mirrored below) and difference (found minus library).
+A click on an ion in the peak list or on the spectrum sets the SIC to that mass. The compared library hit is
+the assigned one, else the best. "Copy both" and "Save both as CSV…" export both spectra and their difference.
+`Run` keeps the `Peak` list of the analysis so the panel can read S/N, quality and sharpness.
+
 ## Biomarker statistics and PCA
 
 `md_core::stats` works on the batch table as shown (after normalisation, so the same numbers as the
