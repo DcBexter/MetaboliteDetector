@@ -421,12 +421,12 @@ impl Batch {
         );
     }
 
-    /// Progress and Cancel while a scan runs, else Start and what it will use.
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
     fn library_ready(&self, lib: &Library) -> bool {
         lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
     }
 
+    /// Progress and Cancel while a scan runs, else Start and what it will use.
     fn job_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -475,7 +475,7 @@ impl Batch {
                     None => ui.label("Open a library first (File → Open library)."),
                 };
                 if lib.is_some_and(|l| !self.library_ready(l)) {
-                    ui.label("Library is being prepared for the new search settings.");
+                    ui.label("Library is being prepared for the new search or RT-only settings.");
                 }
                 ui.label(&self.note);
             }
@@ -1326,6 +1326,11 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
+        // "Restore removed" resets the edits: the shown table is the whole one again.
+        n.edits = Edits::default();
+        assert!(n.edits.is_empty());
+        let shown = shown_table(&t, &n, None);
+        assert_eq!((shown.runs.len(), shown.rows.len()), (3, 2));
     }
 
     #[test]
