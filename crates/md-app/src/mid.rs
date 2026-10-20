@@ -353,6 +353,8 @@ impl MidWindow {
         egui::Grid::new("mid settings").show(ui, |ui| {
             ui.label("Correction");
             ui.vertical(|ui| {
+                // A grid column starts as narrow as its first frame; the short titles never wrap.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 for (kind, title, hint) in [
                     (Kind::Uncorrected, "Uncorrected MIDs", "Mean and confidence interval of the labelled runs' normalised fragment spectra."),
                     (Kind::Reference, "Corrected using reference", "Labelled runs against unlabelled runs of the same substances."),
@@ -388,8 +390,11 @@ impl MidWindow {
                 });
                 ui.end_row();
             }
-            ui.label("Rescan missing ions");
-            ui.checkbox(&mut self.rescan, "search the ion traces for fragment ions");
+            let hint = "Search the ion traces again for fragment ions the deconvolution missed";
+            let rescan = ui.label("Rescan missing ions").on_hover_text(hint);
+            ui.add(egui::Checkbox::without_text(&mut self.rescan))
+                .labelled_by(rescan.id)
+                .on_hover_text(hint);
             ui.end_row();
         });
         runs(ui, "Labelled runs", &mut self.labelled);
@@ -431,12 +436,15 @@ fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
 fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!(
-            "{} with MIDs in {:.2?}",
+            "{} with MIDs in {}",
             match r.mids.compounds.len() {
                 1 => "1 substance".into(),
                 n => format!("{n} substances"),
             },
-            r.took
+            match r.took.as_millis() {
+                ms @ 0..1000 => format!("{ms} ms"),
+                _ => format!("{:.1} s", r.took.as_secs_f64()),
+            }
         ));
         export_buttons(ui, "MIDs", "mids.txt", &r.text, note);
         if let Some(text) = &r.stats_text {
@@ -524,11 +532,17 @@ fn fragment_grid(
             ui.label(format!("M{k} (m/z {})", f.lo as usize + k));
             for fit in &f.fits {
                 let fit = fit.as_ref();
-                let m = cell(fit.and_then(|x| x.mids.get(k).copied()));
-                ui.label(match fit.and_then(|x| x.cis.get(k).copied().flatten()) {
+                let v = fit.and_then(|x| x.mids.get(k).copied());
+                let m = cell(v);
+                let shown = ui.label(match fit.and_then(|x| x.cis.get(k).copied().flatten()) {
                     Some(ci) => format!("{m} ± {ci:.4}"),
                     None => m,
                 });
+                if v.is_some_and(|v| v < 0.0) {
+                    shown.on_hover_text(
+                        "Below 0 after the correction: noise around 0, not a real share",
+                    );
+                }
             }
             if let Some((mean, se)) = stats.get(k) {
                 ui.label(cell(Some(*mean)));
@@ -536,7 +550,9 @@ fn fragment_grid(
             }
             ui.end_row();
         }
-        ui.label("R²");
+        ui.label("R²").on_hover_text(
+            "How well the isotopomers explain the measured spectrum; 1 is a perfect fit, and with no more masses than isotopomers it is always 1",
+        );
         for fit in &f.fits {
             ui.label(cell(fit.as_ref().and_then(|x| x.r2)));
         }
