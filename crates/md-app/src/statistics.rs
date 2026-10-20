@@ -89,7 +89,7 @@ fn groups_of(t: &Table) -> Vec<&str> {
 
 /// Same colour per replicate group in every plot.
 fn color(i: usize) -> egui::Color32 {
-    egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.85, 0.5, 1.0).into()
+    egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.7, 0.8, 1.0).into()
 }
 
 impl Statistics {
@@ -121,6 +121,7 @@ impl Statistics {
             ui.selectable_value(&mut self.tab, Tab::Table, "Two groups");
             ui.selectable_value(&mut self.tab, Tab::Box, "Box plot");
             ui.selectable_value(&mut self.tab, Tab::Pca, "PCA");
+            ui.separator();
             ui.checkbox(&mut self.missing_as_zero, "Missing value counts as 0")
                 .on_hover_text("The old program stores 0 for a substance that was not found.");
         });
@@ -157,60 +158,62 @@ impl Statistics {
 
     /// Which replicate groups are in group 1 and 2, with a field to paste group names.
     fn group_picker(&mut self, ui: &mut egui::Ui, all: &[&str]) {
-        ui.collapsing("Groups", |ui| {
-            ui.horizontal_top(|ui| {
-                egui::Grid::new("group picker")
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.strong("Replicate group");
-                        ui.strong("Group 1");
-                        ui.strong("Group 2");
-                        ui.end_row();
-                        for g in all {
-                            ui.label(*g);
-                            for side in 0..2 {
-                                let mut on = self.sides[side].iter().any(|s| s == g);
-                                if ui.checkbox(&mut on, "").changed() {
-                                    self.sides.iter_mut().for_each(|s| s.retain(|s| s != g));
-                                    if on {
-                                        self.sides[side].push((*g).into());
+        egui::CollapsingHeader::new("Groups")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    egui::Grid::new("group picker")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong("Replicate group");
+                            ui.strong("Group 1");
+                            ui.strong("Group 2");
+                            ui.end_row();
+                            for g in all {
+                                ui.label(*g);
+                                for side in 0..2 {
+                                    let mut on = self.sides[side].iter().any(|s| s == g);
+                                    if ui.checkbox(&mut on, "").changed() {
+                                        self.sides.iter_mut().for_each(|s| s.retain(|s| s != g));
+                                        if on {
+                                            self.sides[side].push((*g).into());
+                                        }
                                     }
                                 }
+                                ui.end_row();
                             }
-                            ui.end_row();
-                        }
-                    });
-                ui.vertical(|ui| {
-                    ui.label("Paste group names (one per line), then fill a side:");
-                    ui.add(egui::TextEdit::multiline(&mut self.paste).desired_rows(4));
-                    ui.horizontal(|ui| {
-                        for side in 0..2 {
-                            if ui.button(format!("Fill group {}", side + 1)).clicked() {
-                                self.fill(side, all);
+                        });
+                    ui.vertical(|ui| {
+                        ui.label("Paste group names (one per line), then fill a side:");
+                        ui.add(egui::TextEdit::multiline(&mut self.paste).desired_rows(4));
+                        ui.horizontal(|ui| {
+                            for side in 0..2 {
+                                if ui.button(format!("Fill group {}", side + 1)).clicked() {
+                                    self.fill(side, all);
+                                }
                             }
-                        }
+                        });
                     });
                 });
-            });
-            // The order of a side is the order of its boxes.
-            for side in 0..2 {
-                if self.sides[side].len() > 1 {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(format!("Order of group {}:", side + 1));
-                        let mut swap = None;
-                        for (i, g) in self.sides[side].iter().enumerate() {
-                            ui.label(g);
-                            if i > 0 && ui.small_button("◀").clicked() {
-                                swap = Some(i);
+                // The order of a side is the order of its boxes.
+                for side in 0..2 {
+                    if self.sides[side].len() > 1 {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("Order of group {}:", side + 1));
+                            let mut swap = None;
+                            for (i, g) in self.sides[side].iter().enumerate() {
+                                ui.label(g);
+                                if i > 0 && ui.small_button("◀").clicked() {
+                                    swap = Some(i);
+                                }
                             }
-                        }
-                        if let Some(i) = swap {
-                            self.sides[side].swap(i - 1, i);
-                        }
-                    });
+                            if let Some(i) = swap {
+                                self.sides[side].swap(i - 1, i);
+                            }
+                        });
+                    }
                 }
-            }
-        });
+            });
         ui.horizontal(|ui| {
             ui.label("Samples");
             ui.selectable_value(&mut self.samples, Samples::Independent, "independent runs")
@@ -286,6 +289,10 @@ impl Statistics {
                 };
             }
         });
+        ui.label(match self.selected.and_then(|r| t.rows.get(r)) {
+            Some(s) => format!("Selected: {} (see Box plot)", s.name),
+            None => "Click a substance to see its box plot.".into(),
+        });
         let mut clicked = None;
         TableBuilder::new(ui)
             .id_salt("biomarker table")
@@ -326,11 +333,25 @@ impl Statistics {
                         format!("{:.4}", r.sd[0]),
                         format!("{:.4}", r.sd[1]),
                         format!("{:.4}", r.ratio),
-                        r.p.map_or("–".into(), |p| format!("{p:.4}")),
+                        r.p.map_or("–".into(), |p| {
+                            if p < 1e-4 {
+                                format!("{p:.1e}")
+                            } else {
+                                format!("{p:.4}")
+                            }
+                        }),
                     ];
-                    for c in cells {
+                    for (i, c) in cells.into_iter().enumerate() {
                         row.col(|ui| {
-                            ui.add(egui::Label::new(c).selectable(false));
+                            // Numbers right-aligned so the digits line up.
+                            let layout = if i == 0 {
+                                egui::Layout::left_to_right(egui::Align::Center)
+                            } else {
+                                egui::Layout::right_to_left(egui::Align::Center)
+                            };
+                            ui.with_layout(layout, |ui| {
+                                ui.add(egui::Label::new(c).selectable(false));
+                            });
                         });
                     }
                     if row.response().clicked() {
@@ -341,7 +362,6 @@ impl Statistics {
         if let Some(c) = clicked {
             self.selected = Some(c);
         }
-        ui.label("Click a substance, then open Box plot.");
     }
 
     fn box_tab(&mut self, ui: &mut egui::Ui, t: &Table) {
@@ -349,6 +369,10 @@ impl Statistics {
             ui.label("Click a substance in the Two groups table.");
             return;
         };
+        if self.sides.iter().all(Vec::is_empty) {
+            ui.label("Choose replicate groups above to draw their boxes.");
+            return;
+        }
         ui.label(format!(
             "{} — summed quant ion integrals per run",
             t.rows[row].name
@@ -513,19 +537,20 @@ fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui:
         .iter()
         .map(|j| t.rows[p.rows[*j]].name.clone())
         .collect();
+    // Horizontal bars, largest on top: long substance names read on the y axis.
     let bars = |c: usize, shift: f64| -> Vec<Bar> {
         order
             .iter()
             .enumerate()
-            .map(|(i, j)| Bar::new(i as f64 + shift, p.loadings[c][*j]).width(0.35))
+            .map(|(i, j)| Bar::new(-(i as f64) + shift, p.loadings[c][*j]).width(0.35))
             .collect()
     };
     Plot::new("pca loadings")
         .legend(Legend::default())
-        .y_axis_label("Loading")
-        .x_axis_formatter(move |m, _| {
-            let i = m.value.round();
-            if (m.value - i).abs() < 1e-6 && i >= 0.0 {
+        .x_axis_label("Loading")
+        .y_axis_formatter(move |m, _| {
+            let i = (-m.value).round();
+            if (-m.value - i).abs() < 1e-6 && i >= 0.0 {
                 names.get(i as usize).cloned().unwrap_or_default()
             } else {
                 String::new()
@@ -533,10 +558,14 @@ fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui:
         })
         .show(ui, |plot| {
             plot.bar_chart(
-                BarChart::new(format!("PC{}", pc[0] + 1), bars(pc[0], -0.2)).color(color(0)),
+                BarChart::new(format!("PC{}", pc[0] + 1), bars(pc[0], 0.2))
+                    .horizontal()
+                    .color(color(0)),
             );
             plot.bar_chart(
-                BarChart::new(format!("PC{}", pc[1] + 1), bars(pc[1], 0.2)).color(color(1)),
+                BarChart::new(format!("PC{}", pc[1] + 1), bars(pc[1], -0.2))
+                    .horizontal()
+                    .color(color(1)),
             );
         })
         .response
