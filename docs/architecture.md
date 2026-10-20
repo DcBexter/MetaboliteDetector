@@ -38,11 +38,19 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   examples/batch.rs     batch quantification timing on real files
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
+  src/main.rs           entry point, `App` state and one call per UI area in `ui`
+  src/menu.rs           top menu bar (File, Analysis)
+  src/status.rs         bottom status bar
+  src/run_list.rs       left list of the open runs
+  src/central.rs        centre: TIC/SIC plots, scan cursor, spectrum
+  src/loading.rs        opening files, load polling, SIC jobs
+  src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
+  src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
   src/main.rs           options, settings/library/calibration loading, CSV output
@@ -184,6 +192,19 @@ RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` tak
 time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
 (m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
 library search, and the status bar shows the RI of the scan or selected component.
+
+Calibration mix (old wizard, [algorithms.md](reverse-engineering/algorithms.md) §6.8): the user picks library
+compounds with RI; the calibration run's components are searched against them by spectrum only, and
+`match_mix` assigns them as the old `matchCompounds` does (mix by ascending RI, each takes the next component
+in time order that has it as a hit). The result is an editable table (use / RT / RI); substances not found
+are unused rows. A change takes effect when the field is left or the drag ends and builds a new
+`RiCalibration` (invalid tables keep the old one and show the error). Each run can take over the table as
+its own calibration and save it as `.calib`; runs without one use the table. Deviations: the old table offered
+the components' times in a combo box, here the time is typed; substances with the same RI are both kept.
+*RT only* (old "Use Retention time for chromatogram alignment (not recommended)", with its warning):
+`RiCalibration::identity()` (RI = time in s) and `PreparedLibrary::new_rt_only` (library RI = library RT in s)
+make the library search and the reference shift compare times. The RT/1000 fallback of §5.6 is still not
+ported for the normal mode.
 
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
@@ -422,11 +443,22 @@ end
 
 The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
-active run (its spectrum, RT and RI), view the spectrum, and edit RT, RI, quant ions, MID fragments,
+active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
 comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
 and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. After a
 save the app opens the saved library, so the next search uses the edits.
+
+**Growing a library from runs** (`md_core::library_add`, old `DialogAddLib` and `copyRT`, algorithms.md §7e).
+"Add component…" turns the selected component into a compound (deconvoluted spectrum, RT at the apex, RI
+from the run's calibration or -1, automatic quant ions by §7.2) and puts it into the edited library as a
+new entry, or, for a name already in the library and after a yes/no question, replaces the entry, replaces
+only spectrum, RT and RI (quant ions and comments stay), or sets only the automatic quant ions. The quant
+ions need the ion peaks, which the app does not keep, so a worker thread repeats peak detection and
+deconvolution of the run (about as long as opening it). "Copy RTs…" searches the components of the active
+run against the edited library, lists the assigned ones with their old and new RT and RI and, on "Copy",
+writes RT and RI into those entries. Both change only the copy in the editor until Save; "Modify entry"
+(spectrum merge) is not ported.
 
 ## Old raw-data cache (.bin + .idx)
 
@@ -498,7 +530,8 @@ Sonar scan, so Linux builds once for both; Windows only runs the tests, since no
 `crates/`, the Cargo files, the toolchain, `sonar-project.properties` or the workflow skip the build and only run the Sonar scan;
 `main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
 result for `main`. It does not fetch the example data, so those tests skip themselves;
-run them locally. Only `main` saves the cargo cache; PRs restore it.
+run them locally. Only `main` saves the cargo cache; PRs restore it. The cache key
+follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall.
 
 ## Compatibility goals
 

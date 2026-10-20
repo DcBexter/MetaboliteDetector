@@ -71,16 +71,34 @@ pub struct PreparedLibrary {
     norms: Vec<f64>,
     /// RI per entry; `None` where the library has none (old value -1).
     ris: Vec<Option<f64>>,
+    rt_only: bool,
 }
 
 impl PreparedLibrary {
     pub fn new(library: &[LibraryCompound], s: &SearchSettings) -> Self {
+        Self::with_ri(library, s, |c| c.spectrum.ri, false)
+    }
+
+    /// RT-only alignment (old "Use Retention time for chromatogram alignment", §5.6): every entry's
+    /// retention time in s takes the place of its RI. Use with [`RiCalibration::identity`], so the
+    /// components' "RI" is their retention time in s too. Not reproducible between instruments.
+    pub fn new_rt_only(library: &[LibraryCompound], s: &SearchSettings) -> Self {
+        Self::with_ri(library, s, |c| c.spectrum.rt_ms / 1000.0, true)
+    }
+
+    fn with_ri(
+        library: &[LibraryCompound],
+        s: &SearchSettings,
+        ri: fn(&LibraryCompound) -> f64,
+        rt_only: bool,
+    ) -> Self {
         let mut lib = Self {
             offsets: vec![0],
             masses: Vec::new(),
             values: Vec::new(),
             norms: Vec::new(),
             ris: Vec::new(),
+            rt_only,
         };
         let mut peaks = Vec::new();
         for c in library {
@@ -109,9 +127,14 @@ impl PreparedLibrary {
             }
             lib.offsets.push(lib.masses.len());
             lib.norms.push(norm);
-            lib.ris.push(known_ri(c.spectrum.ri));
+            lib.ris.push(known_ri(ri(c)));
         }
         lib
+    }
+
+    /// Built with [`Self::new_rt_only`].
+    pub fn is_rt_only(&self) -> bool {
+        self.rt_only
     }
 
     pub fn len(&self) -> usize {
@@ -541,5 +564,21 @@ mod tests {
         let ris = shifted.component_ris(&times, &comps);
         let id = map_compounds_to_library(&comps, Some(&ris), &lib, &s);
         assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
+    }
+
+    #[test]
+    fn rt_only_compares_times_in_seconds() {
+        let peaks = [(57.0, 100), (71.0, 50)];
+        let mut e = entry("a", 1500.0, &peaks);
+        e.spectrum.rt_ms = 20_000.0;
+        let s = all(SearchSettings::default());
+        let lib = PreparedLibrary::new_rt_only(&[e], &s);
+        let spectrum = as_comp(&peaks, 1);
+        // The library RI (1500) is ignored: the component at 20 s scores 1, one at 200 s is dropped.
+        assert_eq!(
+            library_hits(&spectrum, Some(20.0), &lib, &s)[0].ri_sim,
+            Some(1.0)
+        );
+        assert!(library_hits(&spectrum, Some(200.0), &lib, &s).is_empty());
     }
 }

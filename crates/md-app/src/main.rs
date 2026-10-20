@@ -5,17 +5,25 @@ use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use eframe::egui;
-use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
+use md_core::Chromatogram;
 use md_core::deconv::Component;
-use md_core::{Chromatogram, decimate};
 
 mod batch;
 mod calibration;
+mod central;
 mod export;
 mod identify;
 mod isotopes;
+mod jobs;
 mod library_editor;
+mod loading;
+mod menu;
+mod run_list;
 mod settings;
+mod status;
+mod view;
+
+use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -69,6 +77,7 @@ struct App {
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     export: export::Export,
+    view: view::View,
 }
 
 impl Default for App {
@@ -93,6 +102,7 @@ impl Default for App {
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             export: export::Export::default(),
+            view: view::View::default(),
         }
     }
 }
@@ -123,449 +133,49 @@ struct Run {
     ident_job: Option<identify::IdentJob>,
 }
 
-/// Runs `job` on its own thread and wakes the UI when it is done, so the window never freezes.
-fn spawn<T: Send + 'static>(
-    ctx: &egui::Context,
-    job: impl FnOnce() -> T + Send + 'static,
-) -> mpsc::Receiver<T> {
-    let (tx, rx) = mpsc::channel();
-    let ctx = ctx.clone();
-    std::thread::spawn(move || {
-        // Dropping `tx` before the repaint lets the UI see a panic as `Disconnected` right away.
-        if let Ok(v) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
-            tx.send(v).ok();
-        }
-        drop(tx);
-        ctx.request_repaint();
-    });
-    rx
-}
-
-/// Polls a job from `spawn`: `None` while it runs, `Err` when its thread panicked (the sender is
-/// dropped unsent), so callers can report it and not wait or restart forever.
-fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, String>> {
-    match rx.try_recv() {
-        Ok(v) => Some(Ok(v)),
-        Err(mpsc::TryRecvError::Empty) => None,
-        Err(mpsc::TryRecvError::Disconnected) => Some(Err(format!("{what} crashed"))),
-    }
-}
-
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).
 fn color(i: usize) -> egui::Color32 {
     egui::ecolor::Hsva::new(i as f32 * 0.618_034, 0.85, 0.5, 1.0).into()
 }
 
-impl App {
-    /// Every file loads on its own thread, so many runs load in parallel.
-    fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let p = path.clone();
-        let key = self.settings.key();
-        let rx = spawn(ctx, move || {
-            md_core::read_run(&p)
-                .and_then(|data| match data.scan_count() {
-                    0 => Err("no scans".into()),
-                    _ => {
-                        let components = settings::analyze(&data, &key)?;
-                        Ok(Run {
-                            name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
-                            minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
-                            tic: data.tic(),
-                            data: Arc::new(data),
-                            path: p.clone(),
-                            sic: Vec::new(),
-                            sic_for: None,
-                            sic_job: None,
-                            components,
-                            analysis: settings::Analysis::new(key),
-                            scan: 0,
-                            component: None,
-                            visible: true,
-                            ident: None,
-                            ident_job: None,
-                        })
-                    }
-                })
-                .map_err(|e| format!("{}: {e}", p.display()))
-        });
-        self.load_started.get_or_insert_with(Instant::now);
-        self.loading.push((path, rx));
-    }
-
-    fn poll_loading(&mut self) {
-        let (count, active) = (
-            self.runs.len(),
-            self.runs.get(self.active).map(|r| r.path.clone()),
-        );
-        self.loading.retain(|(_, rx)| {
-            match rx.try_recv() {
-                Ok(Ok(run)) => self.runs.push(run),
-                Ok(Err(e)) => self.error = Some(e),
-                Err(mpsc::TryRecvError::Empty) => return true,
-                Err(mpsc::TryRecvError::Disconnected) => self.error = Some("loader crashed".into()),
-            }
-            false
-        });
-        // Runs finish in any order; sorting by path keeps list order and colours stable.
-        if self.runs.len() != count {
-            self.runs.sort_by(|a, b| a.path.cmp(&b.path));
-            self.active = active
-                .and_then(|p| self.runs.iter().position(|r| r.path == p))
-                .unwrap_or(0);
-        }
-        if self.loading.is_empty()
-            && let Some(t) = self.load_started.take()
-        {
-            self.load_note = format!(
-                "{} runs open, last batch loaded in {:.2?}",
-                self.runs.len(),
-                t.elapsed()
-            );
-        }
-    }
-
-    /// Collects finished SICs and starts one job per run whose SIC is stale.
-    fn update_sics(&mut self, ctx: &egui::Context) {
-        let key = (self.mz, self.tolerance);
-        for run in &mut self.runs {
-            if let Some((k, rx)) = &run.sic_job
-                && let Some(result) = poll_job(rx, &format!("{}: SIC", run.name))
-            {
-                // A crashed SIC is not retried for this key; the trace stays empty.
-                let sic = result.unwrap_or_else(|e| {
-                    self.error = Some(e);
-                    Vec::new()
-                });
-                (run.sic, run.sic_for) = (sic, Some(*k));
-                run.sic_job = None;
-            }
-            if run.sic_for != Some(key) && run.sic_job.as_ref().map(|j| j.0) != Some(key) {
-                let data = run.data.clone();
-                run.sic_job = Some((key, spawn(ctx, move || data.sic(key.0, key.1))));
-            }
-        }
-    }
-}
-
-/// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
-/// time (min).
-#[allow(clippy::too_many_arguments)]
-fn trace_plot(
-    ui: &mut egui::Ui,
-    id: &str,
-    label: &str,
-    height: f32,
-    runs: &[Run],
-    cursor_min: f64,
-    trace: fn(&Run) -> &[f64],
-    marks: &[[f64; 2]],
-    labels: &[identify::Label],
-) -> Option<f64> {
-    let link = egui::Id::unique("chromatograms");
-    let plot = Plot::new(id)
-        .height(height)
-        // Same width in both plots, so their linked x axes line up.
-        .y_axis_min_width(90.0)
-        .link_axis(link, [true, false])
-        .link_cursor(link, [true, false])
-        .x_axis_label("Retention time (min)")
-        .y_axis_label(label)
-        .show(ui, |p| {
-            // Draw at most ~2 points per pixel of the visible range, whatever the file size.
-            let (lo, hi) = if p.auto_bounds().x {
-                (f64::NEG_INFINITY, f64::INFINITY)
-            } else {
-                (p.plot_bounds().min()[0], p.plot_bounds().max()[0])
-            };
-            let width = p.response().rect.width().max(100.0) as usize;
-            for (i, run) in runs.iter().enumerate() {
-                let ys = trace(run);
-                // A SIC is empty until its first job finishes.
-                if run.visible && ys.len() == run.minutes.len() {
-                    let points = decimate(&run.minutes, ys, lo, hi, width);
-                    p.line(Line::new(run.name.as_str(), points).color(color(i)));
-                }
-            }
-            if !marks.is_empty() {
-                p.points(Points::new("components", marks.to_vec()).radius(3.0));
-            }
-            for (at, name, color) in labels {
-                let text = egui::RichText::new(name).color(*color);
-                p.text(Text::new("hits", (*at).into(), text).anchor(egui::Align2::LEFT_BOTTOM));
-            }
-            p.vline(VLine::new("", cursor_min));
-            p.pointer_coordinate()
-        });
-    plot.response.clicked().then_some(plot.inner?.x)
-}
-
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_loading();
-        if let Some(e) = self.settings.update_runs(ui.ctx(), &mut self.runs) {
-            self.error = Some(e);
-        }
-        self.update_identification(ui.ctx());
-        self.poll_export();
-        egui::Panel::top("menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open chromatograms…").clicked()
-                        && let Some(paths) = rfd::FileDialog::new()
-                            .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
-                            .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-                            .pick_files()
-                    {
-                        for path in paths {
-                            self.open(ui.ctx(), path);
-                        }
-                    }
-                    if let Some(r) = self.runs.get(self.active)
-                        && ui.button("Export as NetCDF…").clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("NetCDF (ANDI-MS)", &["cdf"])
-                            .set_file_name(format!("{}.cdf", r.name))
-                            .save_file()
-                    {
-                        // shortcut: writes on the UI thread (~50 ms per example run); spawn if runs grow.
-                        self.error = md_core::andi::write(&path, &r.data)
-                            .err()
-                            .map(|e| format!("{}: {e}", path.display()));
-                    }
-                    self.export_menu(ui);
-                    self.library_menu(ui);
-                    if ui.button("Close all").clicked() {
-                        (self.runs, self.active) = (Vec::new(), 0);
-                    }
-                });
-                ui.menu_button("Analysis", |ui| {
-                    if ui.button("RI calibration…").clicked() {
-                        self.ri.open = true;
-                    }
-                    if ui.button("Settings…").clicked() {
-                        self.settings.open = true;
-                    }
-                    if ui.button("Batch quantification…").clicked() {
-                        self.batch.open = true;
-                    }
-                    if ui.button("Natural isotopes…").clicked() {
-                        self.isotopes.open = true;
-                    }
-                });
-            });
-        });
-
-        self.ri
-            .window(ui.ctx(), &self.runs, self.active, self.library.as_deref());
-        self.settings.window(ui.ctx());
-        self.batch.analysis = self.settings.key();
-        self.batch
-            .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
-        self.isotopes.window(ui.ctx());
-        self.library_editor(ui.ctx());
-
-        egui::Panel::bottom("status").show(ui, |ui| {
-            if !self.loading.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(format!("Loading {} file(s)…", self.loading.len()));
-                });
-            } else if self.runs.iter().any(|r| r.analysis.busy()) {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Re-analysing with the new settings…");
-                });
-            } else if let Some(e) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            } else if let Some(r) = self.runs.get(self.active) {
-                let shown = match r.component {
-                    Some(k) => format!(
-                        "component {} of {} ({} ions)",
-                        k + 1,
-                        r.components.len(),
-                        r.components[k].spectrum.len()
-                    ),
-                    None => format!("{} components (click a dot)", r.components.len()),
-                };
-                ui.label(format!(
-                    "{} — {} scans — scan {} at {:.3} min{} (←/→ to step) — {shown} — {}",
-                    r.path.display(),
-                    r.data.scan_count(),
-                    r.scan + 1,
-                    r.minutes[r.scan],
-                    self.ri.ri_note(r, r.scan),
-                    self.load_note
-                ));
-            } else {
-                ui.label("Open one or more chromatograms (NetCDF or old .bin) via File → Open.");
-            }
-        });
-
-        if !self.runs.is_empty() {
-            egui::Panel::left("runs").show(ui, |ui| {
-                let mut close = None;
-                for (i, run) in self.runs.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("×").on_hover_text("Close").clicked() {
-                            close = Some(i);
-                        }
-                        ui.checkbox(&mut run.visible, "")
-                            .on_hover_text("Show in plots");
-                        ui.colored_label(color(i), "■");
-                        if ui
-                            .selectable_label(i == self.active, &run.name)
-                            .on_hover_text(run.path.display().to_string())
-                            .clicked()
-                        {
-                            self.active = i;
-                        }
-                    });
-                }
-                if let Some(i) = close {
-                    self.runs.remove(i);
-                    if self.active > i || self.active >= self.runs.len() {
-                        self.active = self.active.saturating_sub(1);
-                    }
-                }
-            });
-        }
-
+        self.poll_jobs(ui.ctx());
+        self.menu_bar(ui);
+        self.windows(ui.ctx());
+        self.status_bar(ui);
+        self.run_list(ui);
         if let Some(run) = self.runs.get(self.active) {
             identify::hits_panel(ui, run);
         }
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
-                ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
-                ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
-                ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                    ui.label("m/z");
-                    ui.add(
-                        egui::DragValue::new(&mut self.mz)
-                            .range(1.0..=2000.0)
-                            .max_decimals(2),
-                    );
-                    ui.label("±");
-                    ui.add(
-                        egui::DragValue::new(&mut self.tolerance)
-                            .range(0.0..=10.0)
-                            .speed(0.05)
-                            .max_decimals(2),
-                    );
-                });
-            });
-            if self.trace != Trace::Tic {
-                self.update_sics(ui.ctx());
-            }
-            let Some(run) = self.runs.get_mut(self.active) else {
-                return;
-            };
-            let last = run.data.scan_count() - 1;
-            ui.input(|i| {
-                if i.key_pressed(egui::Key::ArrowRight) {
-                    (run.scan, run.component) = ((run.scan + 1).min(last), None);
-                }
-                if i.key_pressed(egui::Key::ArrowLeft) {
-                    (run.scan, run.component) = (run.scan.saturating_sub(1), None);
-                }
-            });
-            let cursor = run.minutes[run.scan];
-
-            // Both traces: a third each, so their axes keep enough room for tick labels.
-            let plots = if self.trace == Trace::Both { 3.0 } else { 2.0 };
-            let height = ui.available_height() / plots;
-            let mut clicked = None;
-            let top = ui.cursor().min;
-            if self.trace != Trace::Sic {
-                // Components of the active run as dots on its TIC.
-                let marks: Vec<[f64; 2]> = run
-                    .components
-                    .iter()
-                    .map(|k| {
-                        [
-                            run.minutes[k.apex_scan as usize],
-                            run.tic[k.apex_scan as usize],
-                        ]
-                    })
-                    .collect();
-                let labels = identify::labels(run);
-                clicked = trace_plot(
-                    ui,
-                    "tic",
-                    "TIC",
-                    height,
-                    &self.runs,
-                    cursor,
-                    |r| &r.tic,
-                    &marks,
-                    &labels,
-                );
-            }
-            if self.trace != Trace::Tic {
-                let label = format!("SIC m/z {} ± {}", self.mz, self.tolerance);
-                let sic = trace_plot(
-                    ui,
-                    "sic",
-                    &label,
-                    height,
-                    &self.runs,
-                    cursor,
-                    |r| &r.sic,
-                    &[],
-                    &[],
-                );
-                clicked = clicked.or(sic);
-            }
-            self.export.chromatograms =
-                egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
-
-            let run = &mut self.runs[self.active];
-            if let Some(s) = clicked.and_then(|x| run.data.scan_at(x * 60.0)) {
-                // A click within 3 scans of a component apex selects that component.
-                run.component = (0..run.components.len())
-                    .min_by_key(|k| run.components[*k].apex_scan.abs_diff(s as u32))
-                    .filter(|k| run.components[*k].apex_scan.abs_diff(s as u32) <= 3);
-                run.scan = run
-                    .component
-                    .map_or(s, |k| run.components[k].apex_scan as usize);
-            }
-
-            export::norm_picker(ui, &mut self.export.norm);
-            let top = ui.cursor().min;
-            let (name, mz, y) = export::shown_spectrum(run, self.export.norm);
-            let bars = mz.iter().zip(&y).map(|(m, i)| Bar::new(*m, *i).width(0.3));
-            let label = match self.export.norm {
-                md_core::spectrum::Normalization::None => "Intensity",
-                _ => "Normalised intensity",
-            };
-            Plot::new("spectrum")
-                .x_axis_label("m/z")
-                .y_axis_label(format!("{label} — {}", run.name))
-                .show(ui, |p| p.bar_chart(BarChart::new(name, bars.collect())));
-            // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
-            self.export.spectrum =
-                egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
-        });
+        self.central_panel(ui);
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl App {
+    /// Collects finished background work before drawing.
+    fn poll_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_loading();
+        if let Some(e) = self.settings.update_runs(ctx, &mut self.runs) {
+            self.error = Some(e);
+        }
+        self.update_identification(ctx);
+        self.poll_export();
+    }
 
-    #[test]
-    fn panicking_job_is_reported_not_lost() {
-        let ctx = egui::Context::default();
-        let rx = spawn(&ctx, || -> u8 { panic!("boom") });
-        let started = Instant::now();
-        let result = loop {
-            if let Some(r) = poll_job(&rx, "test job") {
-                break r;
-            }
-            assert!(started.elapsed().as_secs() < 10, "job never finished");
-            std::thread::yield_now();
-        };
-        assert_eq!(result, Err("test job crashed".to_string()));
+    /// The floating windows opened from the Analysis menu.
+    fn windows(&mut self, ctx: &egui::Context) {
+        self.ri
+            .window(ctx, &self.runs, self.active, self.library.as_deref());
+        self.settings.window(ctx);
+        self.batch.analysis = self.settings.key();
+        // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
+        let cal = (self.ri.cal.as_deref()).filter(|_| {
+            (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
+        });
+        self.batch.window(ctx, self.library.as_ref(), cal);
+        self.isotopes.window(ctx);
+        self.info_window(ctx);
+        self.library_editor(ctx);
     }
 }
