@@ -7,6 +7,7 @@ pub mod andi;
 pub mod batch;
 pub mod csv;
 pub mod deconv;
+pub mod detail;
 pub mod diskscan;
 pub mod isotope;
 pub mod library;

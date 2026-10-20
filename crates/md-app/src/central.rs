@@ -4,7 +4,7 @@ use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
 use md_core::decimate;
 
-use crate::{App, Run, Trace, color, export, identify, view::View};
+use crate::{App, Run, Trace, color, detail, export, identify, view::View};
 
 /// Visible x range in minutes (unbounded when auto-fitted); after a unit change it also moves the
 /// zoomed window into the new unit.
@@ -260,17 +260,54 @@ impl App {
     fn spectrum_plot(&mut self, ui: &mut egui::Ui) {
         let run = &self.runs[self.active];
         export::norm_picker(ui, &mut self.export.norm);
+        let (title, mz, y) = export::shown_spectrum(run, self.export.norm);
+        let cmp = detail::comparison(run, self.export.norm);
+        if let Some(e) =
+            detail::controls(ui, &mut self.spectrum_mode, &title, cmp.as_ref(), &run.name)
+        {
+            self.error = Some(e);
+        }
+        // Without a library hit only the found spectrum can be drawn.
+        let mode = cmp
+            .as_ref()
+            .map_or(detail::Mode::Normal, |_| self.spectrum_mode);
         let top = ui.cursor().min;
-        let (name, mz, y) = export::shown_spectrum(run, self.export.norm);
-        let bars = mz.iter().zip(&y).map(|(m, i)| Bar::new(*m, *i).width(0.3));
         let label = match self.export.norm {
             md_core::spectrum::Normalization::None => "Intensity",
             _ => "Normalised intensity",
         };
-        Plot::new("spectrum")
+        let (ions, charts) = match (&cmp, mode) {
+            (Some((c, lib)), detail::Mode::Split | detail::Mode::Difference) => {
+                (c.mz.clone(), detail::charts(mode, c, &lib.name))
+            }
+            _ => {
+                let bars = mz.iter().zip(&y).map(|(m, i)| Bar::new(*m, *i).width(0.3));
+                let chart = BarChart::new(title.clone(), bars.collect());
+                (mz.clone(), vec![chart])
+            }
+        };
+        let mut plot = Plot::new("spectrum")
             .x_axis_label("m/z")
-            .y_axis_label(format!("{label} — {}", run.name))
-            .show(ui, |p| p.bar_chart(BarChart::new(name, bars.collect())));
+            .y_axis_label(format!("{label} — {}", run.name));
+        if mode != detail::Mode::Normal {
+            plot = plot.legend(egui_plot::Legend::default());
+        }
+        let shown = plot.show(ui, |p| {
+            for chart in charts {
+                p.bar_chart(chart);
+            }
+            p.pointer_coordinate()
+        });
+        // A click on the plot sets the SIC to the nearest ion.
+        if shown.response.clicked()
+            && let Some(at) = shown.inner
+            && let Some(ion) = ions
+                .iter()
+                .copied()
+                .min_by(|a, b| (a - at.x).abs().total_cmp(&(b - at.x).abs()))
+        {
+            detail::pick_ion(&mut self.mz, &mut self.trace, ion);
+        }
         // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
         self.export.spectrum =
             egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));

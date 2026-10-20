@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::deconv::{Component, DeconvSettings, deconvolute};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::peaks::{IonTraces, Peak, PeakSettings};
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
 use crate::{Run, spawn};
@@ -26,7 +26,7 @@ pub struct Settings {
     note: Option<Result<String, String>>,
 }
 
-type Analyzed = Result<(Vec<Component>, Vec<u32>), String>;
+type Analyzed = Result<(Vec<Component>, Vec<u32>, Vec<Peak>), String>;
 
 /// Re-analysis state of one run.
 #[derive(Default)]
@@ -59,7 +59,7 @@ pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
         .iter()
         .map(|p| traces.masses[p.row as usize])
         .collect();
-    Ok((components, masses))
+    Ok((components, masses, peaks))
 }
 
 impl Settings {
@@ -78,8 +78,9 @@ impl Settings {
                 match rx.try_recv() {
                     Ok(result) => {
                         match result {
-                            Ok((components, masses)) => {
-                                (run.components, run.peak_masses) = (components, masses);
+                            Ok((components, masses, peaks)) => {
+                                (run.components, run.peak_masses, run.peaks) =
+                                    (components, masses, peaks);
                                 // Selection and library hits belong to the old components.
                                 (run.component, run.ident, run.ident_job) = (None, None, None);
                                 run.rev += 1;

@@ -18,7 +18,7 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let (components, peak_masses) = settings::analyze(&data, &key)?;
+                        let (components, peak_masses, peaks) = settings::analyze(&data, &key)?;
                         Ok(Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
@@ -30,6 +30,7 @@ impl App {
                             sic_job: None,
                             components,
                             peak_masses,
+                            peaks,
                             analysis: settings::Analysis::new(key),
                             scan: 0,
                             component: None,
