@@ -383,6 +383,20 @@ pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
         .show(ui, |ui| hit_rows(ui, &id.hits[k], lib, assigned));
     if id.hits[k].is_empty() {
         ui.label("No hit.");
+    } else if let Some(note) = assignment_note(&id.hits[k], assigned) {
+        ui.weak(note);
+    }
+}
+
+/// Why the name on the peak and the compared spectrum are not the first hit (#242): each library
+/// compound goes to one component only, the one with the highest score.
+fn assignment_note(hits: &[LibraryHit], assigned: Option<usize>) -> Option<&'static str> {
+    match assigned {
+        None => Some("Not assigned: each compound went to a component that scores higher."),
+        Some(a) if hits.first().is_some_and(|h| h.compound != a) => {
+            Some("Assigned to a lower hit: the better ones went to components that score higher.")
+        }
+        Some(_) => None,
     }
 }
 
@@ -505,6 +519,28 @@ mod tests {
         assert_eq!(app.wanted_search(), lib.settings);
         app.library = Some(lib.clone());
         assert_eq!(app.wanted_search().min_equal_fragments, 1);
+    }
+
+    #[test]
+    fn note_explains_an_assignment_other_than_the_first_hit() {
+        let hit = |compound| LibraryHit {
+            compound,
+            spec_sim: 0.5,
+            ri_sim: None,
+            overall: 0.5,
+        };
+        let hits = [hit(3), hit(7)];
+        assert_eq!(assignment_note(&hits, Some(3)), None);
+        assert!(
+            assignment_note(&hits, Some(7))
+                .unwrap()
+                .starts_with("Assigned")
+        );
+        assert!(
+            assignment_note(&hits, None)
+                .unwrap()
+                .starts_with("Not assigned")
+        );
     }
 
     #[test]
