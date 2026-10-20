@@ -50,12 +50,19 @@ fn export_runs(
         }
         let mut file = format!("{name}{}.cdf", kind.suffix());
         for n in 2.. {
-            if used.insert(file.clone()) {
+            // Lower case: NTFS and macOS treat names that differ only in case as one file.
+            if used.insert(file.to_lowercase()) {
                 break;
             }
             file = format!("{name}{}_{n}.cdf", kind.suffix());
         }
         let path = dir.join(&file);
+        // The single-run dialog asks before replacing; here a file in the folder (maybe a source run) is kept.
+        if path.exists() {
+            errors.push(format!("{file}: already exists, skipped"));
+            done.fetch_add(1, Relaxed);
+            continue;
+        }
         let result = if kind == ExportKind::Profile {
             md_core::andi::write(&path, data)
         } else {
@@ -77,10 +84,15 @@ impl App {
                 Some(r) => {
                     let (done, total) = (job.done.load(Relaxed), job.total);
                     e.errors = r.unwrap_or_else(|m| vec![m]);
-                    e.note = match job.cancel.load(Relaxed) {
-                        true => format!("Cancelled after {done} of {total} runs."),
-                        false => format!("Exported {} of {total} runs.", total - e.errors.len()),
+                    let how = if job.cancel.load(Relaxed) && done < total {
+                        "Cancelled: "
+                    } else {
+                        ""
                     };
+                    e.note = format!(
+                        "{how}{done} of {total} runs done, {} failed.",
+                        e.errors.len()
+                    );
                     e.job = None;
                 }
                 None => ctx.request_repaint_after(Duration::from_millis(200)),
@@ -171,9 +183,11 @@ impl App {
         if !e.note.is_empty() {
             ui.label(&e.note);
         }
-        for line in &e.errors {
-            ui.colored_label(ui.visuals().error_fg_color, line);
-        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for line in &e.errors {
+                ui.colored_label(ui.visuals().error_fg_color, line);
+            }
+        });
     }
 }
 
@@ -201,10 +215,13 @@ mod tests {
         let empty = run(vec![], vec![], vec![0, 0, 0]);
         let dir = std::env::temp_dir().join(format!("md-export-all-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("keep_profile.cdf"), b"old").unwrap();
         let runs = vec![
             ("a".to_string(), c.clone()),
-            ("a".to_string(), c),
+            ("a".to_string(), c.clone()),
             ("bad".to_string(), empty),
+            ("keep".to_string(), c.clone()),
+            ("A".to_string(), c),
         ];
         let done = AtomicUsize::new(0);
         let errors = export_runs(
@@ -218,12 +235,14 @@ mod tests {
         let names: Vec<_> = (std::fs::read_dir(&dir).unwrap())
             .map(|f| f.unwrap().file_name().into_string().unwrap())
             .collect();
+        let kept = std::fs::read(dir.join("keep_profile.cdf")).unwrap();
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(done.load(Relaxed), 3);
-        assert_eq!(errors.len(), 1);
+        assert_eq!(kept, b"old");
+        assert_eq!(done.load(Relaxed), 5);
+        assert_eq!(errors.len(), 2);
         assert!(errors[0].starts_with("bad_profile.cdf"));
-        assert!(
-            names.contains(&"a_profile.cdf".into()) && names.contains(&"a_profile_2.cdf".into())
-        );
+        assert!(errors[1].contains("already exists"));
+        // Three runs whose names differ at most in case give three files, plus the kept one.
+        assert_eq!(names.len(), 4, "{names:?}");
     }
 }
