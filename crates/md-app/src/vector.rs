@@ -128,6 +128,13 @@ fn walk(shape: &Shape, clip: Rect, out: &mut Vec<(Rect, Item)>) {
         Shape::Text(t) => return text(t, clip, out),
         _ => return,
     };
+    let mut item = item;
+    if let Item::Poly { points, .. } = &mut item {
+        points.retain(|p| p.x.is_finite() && p.y.is_finite());
+        if points.len() < 2 {
+            return;
+        }
+    }
     let visible = match &item {
         Item::Poly { fill, stroke, .. } | Item::Circle { fill, stroke, .. } => {
             *fill != Color32::TRANSPARENT || (stroke.0 > 0.0 && stroke.1 != Color32::TRANSPARENT)
@@ -161,7 +168,7 @@ fn text(t: &epaint::TextShape, clip: Rect, out: &mut Vec<(Rect, Item)>) {
             Item::Text {
                 pos: t.pos,
                 angle: t.angle,
-                base: egui::vec2(row.pos.x + g.pos.x, row.pos.y + g.pos.y + g.font_ascent),
+                base: egui::vec2(row.pos.x + g.pos.x, row.pos.y + g.pos.y),
                 text,
                 size: format.font_id.size,
                 color: color.gamma_multiply(t.opacity_factor),
@@ -258,8 +265,10 @@ pub fn fit(area: Vec2, width: f32, height: f32) -> (Vec2, f32, Vec2) {
     (canvas, scale, (canvas - area * scale) / 2.0)
 }
 
+/// egui colours carry their alpha premultiplied; SVG and PDF want the plain colour and the alpha apart.
 fn rgb(c: Color32) -> String {
-    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 fn opacity(c: Color32) -> f32 {
@@ -400,8 +409,9 @@ pub fn svg(scene: &Scene, width: f32, height: f32) -> String {
 /// `c` over `bg`, as opaque RGB in 0..=1 (PDF fills here carry no alpha).
 fn flat(c: Color32, bg: Color32) -> [f32; 3] {
     let a = opacity(c);
-    let mix = |f: u8, b: u8| (f32::from(f) * a + f32::from(b) * (1.0 - a)) / 255.0;
-    [mix(c.r(), bg.r()), mix(c.g(), bg.g()), mix(c.b(), bg.b())]
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    let mix = |f: u8, back: u8| (f32::from(f) * a + f32::from(back) * (1.0 - a)) / 255.0;
+    [mix(r, bg.r()), mix(g, bg.g()), mix(b, bg.b())]
 }
 
 /// WinAnsi bytes of `s` as a PDF string literal; characters outside Latin-1 become `?`.
@@ -711,6 +721,14 @@ mod tests {
             matches!(i, Item::Poly { points, stroke, .. } if points.len() == 3 && stroke.0 > 0.0)
         });
         assert!(has_curve, "the three plotted points are one polyline");
+        // Baselines lie inside the picture: the axis title is not pushed out of the bottom.
+        let title = scene.items.iter().find_map(|(_, i)| match i {
+            Item::Text {
+                pos, base, text, ..
+            } if text == "Time (min)" => Some(pos.y + base.y),
+            _ => None,
+        });
+        assert!(title.is_some_and(|y| y <= scene.size.y), "{title:?}");
         let svg = svg(&scene, 0.0, 0.0);
         assert!(svg.contains("Time (min)"));
         assert!(pdf(&scene, 300.0, 0.0).starts_with(b"%PDF-1.4"));
@@ -719,5 +737,23 @@ mod tests {
             std::fs::write(dir.join("plot.svg"), &svg).unwrap();
             std::fs::write(dir.join("plot.pdf"), pdf(&scene, 0.0, 0.0)).unwrap();
         }
+    }
+
+    #[test]
+    fn transparent_colours_are_unpremultiplied_and_nan_points_dropped() {
+        // 50 % white is stored as (128, 128, 128, 128); the file wants white at 50 %.
+        let c = Color32::from_white_alpha(128);
+        assert_eq!(rgb(c), "#ffffff");
+        let mut out = Vec::new();
+        let line = Shape::line(
+            vec![
+                Pos2::new(0.0, 1.0),
+                Pos2::new(f32::NAN, 2.0),
+                Pos2::new(5.0, 5.0),
+            ],
+            epaint::Stroke::new(1.0, Color32::RED),
+        );
+        walk(&line, Rect::EVERYTHING, &mut out);
+        assert!(matches!(&out[0].1, Item::Poly { points, .. } if points.len() == 2));
     }
 }

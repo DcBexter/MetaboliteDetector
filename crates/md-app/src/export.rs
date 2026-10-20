@@ -141,49 +141,52 @@ impl App {
             return;
         };
         let mut result = None;
-        for (what, area, table) in [
-            (
-                "chromatogram",
-                self.export.chromatograms,
-                self.chromatogram_table(),
-            ),
-            ("spectrum", self.export.spectrum, self.spectrum_table()),
+        for (what, area, chromatogram) in [
+            ("chromatogram", self.export.chromatograms, true),
+            ("spectrum", self.export.spectrum, false),
         ] {
             ui.menu_button(format!("Export {what}"), |ui| {
-                let (header, columns) = match &table {
-                    Ok(t) => (&t.0, &t.1),
+                // Built only while the menu is open.
+                let table = if chromatogram {
+                    self.chromatogram_table()
+                } else {
+                    self.spectrum_table()
+                };
+                match &table {
+                    Ok((header, columns)) => {
+                        let hdr: Vec<&str> = header.iter().map(String::as_str).collect();
+                        let cols: Vec<&[f64]> = columns.iter().map(Vec::as_slice).collect();
+                        if ui
+                            .button("As CSV…")
+                            .on_hover_text("Save the plotted values as a table")
+                            .clicked()
+                            && let Some(p) = rfd::FileDialog::new()
+                                .add_filter("CSV", &["csv"])
+                                .set_file_name(format!("{name}-{what}.csv"))
+                                .save_file()
+                        {
+                            result = Some(write_file(&p, |w| write_columns(w, &hdr, &cols)));
+                            ui.close();
+                        }
+                        if ui
+                            .button("Copy data")
+                            .on_hover_text("Copy the plotted values as tab-separated text")
+                            .clicked()
+                        {
+                            let mut text = Vec::new();
+                            match write_tsv(&mut text, &hdr, &cols) {
+                                Ok(()) => ui
+                                    .ctx()
+                                    .copy_text(String::from_utf8_lossy(&text).into_owned()),
+                                Err(e) => result = Some(Err(e.to_string())),
+                            }
+                            ui.close();
+                        }
+                    }
+                    // The pictures do not need the numbers, only the table entries do.
                     Err(e) => {
                         ui.label(e);
-                        return;
                     }
-                };
-                let hdr: Vec<&str> = header.iter().map(String::as_str).collect();
-                let cols: Vec<&[f64]> = columns.iter().map(Vec::as_slice).collect();
-                if ui
-                    .button("As CSV…")
-                    .on_hover_text("Save the plotted values as a table")
-                    .clicked()
-                    && let Some(p) = rfd::FileDialog::new()
-                        .add_filter("CSV", &["csv"])
-                        .set_file_name(format!("{name}-{what}.csv"))
-                        .save_file()
-                {
-                    result = Some(write_file(&p, |w| write_columns(w, &hdr, &cols)));
-                    ui.close();
-                }
-                if ui
-                    .button("Copy data")
-                    .on_hover_text("Copy the plotted values as tab-separated text")
-                    .clicked()
-                {
-                    let mut text = Vec::new();
-                    match write_tsv(&mut text, &hdr, &cols) {
-                        Ok(()) => ui
-                            .ctx()
-                            .copy_text(String::from_utf8_lossy(&text).into_owned()),
-                        Err(e) => result = Some(Err(e.to_string())),
-                    }
-                    ui.close();
                 }
                 ui.separator();
                 plot_export::entries(ui, area, &format!("{name}-{what}"));
