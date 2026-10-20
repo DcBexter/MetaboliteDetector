@@ -51,9 +51,12 @@ pub fn side_panel(
 /// Where a tool window opens the first time; egui keeps where the user moves it later.
 pub trait ToolWindow {
     /// Opens window `n` over the plots, right of the run list (a side panel, so at most 30 % of the
-    /// width), each a step down and right so none opens on another. `size` is capped to the room
-    /// there, so egui does not push the window back over the list to keep it on screen. A window
-    /// without its own size passes egui's default `[340.0, 420.0]`: unset, egui guesses 600 px wide.
+    /// width), each a step down and right so none opens on another. The starting `size` is capped to
+    /// the room there, so egui does not push the window back over the list to keep it on screen.
+    /// shortcut: a window whose content needs more than that room still grows over the list, as most
+    /// do at 520 px; narrower content would fix it if small windows matter.
+    /// A window without its own size passes egui's default `[340.0, 420.0]`: unset, egui guesses 600
+    /// px wide.
     fn tool_window(self, ctx: &egui::Context, n: u8, size: [f32; 2]) -> Self;
 }
 
@@ -252,7 +255,7 @@ mod tests {
 
     #[test]
     fn windows_open_beside_the_run_list_and_apart() {
-        for size in [[1200.0, 800.0], [800.0, 600.0]] {
+        for size in [[1200.0, 800.0], [1000.0, 700.0], [800.0, 600.0]] {
             let mut app = app_with_every_window();
             let (ctx, _) = draw(&mut app, size);
             let key = egui::Id::unique(("side panel wanted width", "runs"));
