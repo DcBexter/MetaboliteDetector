@@ -288,7 +288,7 @@ pub fn check(c: &LibraryCompound) -> Vec<Issue> {
     c.quant_ions
         .iter()
         .filter_map(|&q| {
-            if q < lo - half || q > hi + half {
+            if !q.is_finite() || q < lo - half || q > hi + half {
                 Some(Issue::QuantIonOutOfRange(q))
             } else if peaks.iter().all(|m| (m - q).abs() > half) {
                 Some(Issue::QuantIonNotInSpectrum(q))
@@ -543,6 +543,8 @@ mod tests {
                 Issue::QuantIonNotInSpectrum(174.0)
             ]
         );
+        c.quant_ions = vec![f32::NAN];
+        assert_eq!(check(&c).len(), 1);
         c.quant_ions = vec![73.0, 248.0];
         assert!(check(&c).is_empty());
     }

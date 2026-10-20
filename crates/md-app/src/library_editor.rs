@@ -171,7 +171,6 @@ impl LibraryEditor {
                         return;
                     };
                     let text = write_msl_as(&self.compounds, kind);
-                    self.warning = self.incomplete();
                     self.error = if path
                         .extension()
                         .is_some_and(|e| e.eq_ignore_ascii_case("msl"))
@@ -181,6 +180,11 @@ impl LibraryEditor {
                             .map(|e| format!("{}: {e}", path.display()))
                     } else {
                         Some(format!("{}: export as .msl.", path.display()))
+                    };
+                    self.warning = if self.error.is_none() {
+                        self.incomplete()
+                    } else {
+                        None
                     };
                 }
             }
@@ -644,7 +648,9 @@ mod tests {
         c.features.insert("COMMENT".into(), "checked".into());
         ed.dirty = true;
         let path = std::env::temp_dir().join(format!("md-app-{}.mdlib", std::process::id()));
+        ed.compounds.push(LibraryCompound::new("Empty"));
         let saved = ed.save(path.clone());
+        assert!(ed.warning.as_ref().is_some_and(|w| w.contains("Empty")));
         let again = read_mdlib(&path);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(saved.as_ref(), Some(&path));
