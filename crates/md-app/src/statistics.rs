@@ -13,6 +13,7 @@ use md_core::batch::Table;
 use md_core::normalize::POOL_GROUP;
 use md_core::stats::{self, Biomarker, Pca, Samples, TwoGroups};
 
+use crate::batch::significant;
 use crate::export::{write_file, write_png};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -252,10 +253,10 @@ fn cells_of(t: &Table, r: &Biomarker) -> [String; 10] {
         format!("{:.2}", s.rt_s / 60.0),
         r.hits[0].to_string(),
         r.hits[1].to_string(),
-        format!("{:.4}", r.mean[0]),
-        format!("{:.4}", r.mean[1]),
-        format!("{:.4}", r.sd[0]),
-        format!("{:.4}", r.sd[1]),
+        significant(r.mean[0]),
+        significant(r.mean[1]),
+        significant(r.sd[0]),
+        significant(r.sd[1]),
         format!("{:.4}", r.ratio),
         p_text(r.p),
     ]

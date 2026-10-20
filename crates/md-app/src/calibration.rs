@@ -198,7 +198,7 @@ impl Calibration {
         }
         let mut open = self.open;
         egui::Window::new("RI calibration")
-            .tool_window(ctx, 1, [340.0, 420.0])
+            .tool_window(ctx, 1, [380.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| {
                 self.contents(ui, runs.get(active));

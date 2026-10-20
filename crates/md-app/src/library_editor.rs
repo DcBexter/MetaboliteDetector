@@ -9,10 +9,12 @@ use egui_plot::{Bar, BarChart, Plot};
 use md_core::library::{LibraryCompound, MslType, save_mdlib, write_msl_as};
 
 mod add;
+mod extras;
 
 use crate::App;
 use crate::identify::Library;
 use add::{AddDialog, RtDialog, Source};
+use extras::NewFragment;
 
 #[derive(Default)]
 pub struct LibraryEditor {
@@ -28,6 +30,8 @@ pub struct LibraryEditor {
     ions: String,
     /// Key of the feature to add.
     new_key: String,
+    /// Inputs of the "Add fragment" row.
+    frag: NewFragment,
     dirty: bool,
     /// Replacement of the edited library that waits for "Discard" of unsaved changes.
     pending: Option<Replace>,
@@ -346,6 +350,11 @@ impl LibraryEditor {
                 );
                 ui.end_row();
 
+                ui.label("Resolution");
+                ui.label(c.spectrum.bin_width.to_string())
+                    .on_hover_text("Bin width of the spectrum in m/z; the library file fixes it.");
+                ui.end_row();
+
                 ui.label("Quant ions");
                 ui.horizontal(|ui| {
                     if ui
@@ -385,6 +394,29 @@ impl LibraryEditor {
         ui.collapsing("Other features", |ui| {
             changed |= other_features(ui, c, &mut self.new_key);
         });
+        egui::CollapsingHeader::new("Automatic quant ions")
+            .id_salt("automatic quant ions")
+            .show(ui, |ui| {
+                changed |= extras::auto_ions(ui, c, &mut self.ions);
+            })
+            .header_response
+            .on_hover_text("Ions the program chose for this substance when it was added.");
+        egui::CollapsingHeader::new("Ion frequency")
+            .id_salt("ion frequency")
+            .show(ui, |ui| extras::ion_frequency(ui, c))
+            .header_response
+            .on_hover_text(
+                "How often each ion occurred in the spectra this substance was built from.",
+            );
+        egui::CollapsingHeader::new("MID fragments (sum formulas)")
+            .id_salt("mid fragments")
+            .show(ui, |ui| {
+                changed |= extras::mid_fragments(ui, c, &mut self.frag);
+            })
+            .header_response
+            .on_hover_text(
+                "Sum formula and MID size per fragment, read by the MID wizard. The FRAG field above is a separate list, used by the FRAG export.",
+            );
 
         let s = &c.spectrum;
         ui.label(format!("Spectrum: {} ions", s.masses.len()));
