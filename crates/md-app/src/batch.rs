@@ -1847,6 +1847,7 @@ mod tests {
         let note = save_results(&csv, &grouped, &ex).unwrap();
         assert!(note.contains("not saved: group statistics"), "{note}");
         // The same for an old ions file.
+        std::fs::remove_file(dir.join("results.ions.csv")).unwrap();
         std::fs::create_dir_all(dir.join("results.ions.csv").join("x")).unwrap();
         let note = save_results(&csv, &grouped, &ex).unwrap();
         assert!(note.contains("quant ions:"), "{note}");
