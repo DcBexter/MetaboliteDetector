@@ -3,6 +3,7 @@
 
 use std::sync::mpsc;
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use egui_plot::{
@@ -319,8 +320,8 @@ impl Statistics {
         self.z_scored = z_scored;
         let mut open = self.open;
         egui::Window::new("Biomarker statistics")
+            .tool_window(ctx, 4, [900.0, 620.0])
             .open(&mut open)
-            .default_size([900.0, 620.0])
             .show(ctx, |ui| match table {
                 Some((generation, t)) => self.contents(ui, generation, t),
                 None => {

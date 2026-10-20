@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::deconv::Component;
 use md_core::library::LibraryCompound;
@@ -197,6 +198,7 @@ impl Calibration {
         }
         let mut open = self.open;
         egui::Window::new("RI calibration")
+            .tool_window(ctx, 1, [340.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| {
                 self.contents(ui, runs.get(active));

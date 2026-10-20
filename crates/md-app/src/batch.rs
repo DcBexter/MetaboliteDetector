@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
@@ -178,8 +179,8 @@ impl Batch {
         self.poll(ctx);
         let mut open = self.open;
         egui::Window::new("Batch quantification")
+            .tool_window(ctx, 2, [900.0, 600.0])
             .open(&mut open)
-            .default_size([900.0, 600.0])
             .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
     }
@@ -396,6 +397,8 @@ impl Batch {
                 && let Some(p) = rfd::FileDialog::new()
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
                     .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                    .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+                    .add_filter("Saved components (.cmp)", &["cmp", "CMP"])
                     .pick_files()
             {
                 self.paths.extend(p);

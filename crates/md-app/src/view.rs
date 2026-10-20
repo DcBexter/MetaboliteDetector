@@ -1,5 +1,6 @@
 //! Chromatogram view options (derivative, time unit, auto Y, score filter) and the run info window.
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::TimeUnit;
 
@@ -105,8 +106,8 @@ impl App {
         };
         let mut open = self.view.info_open;
         egui::Window::new("Run info")
+            .tool_window(ctx, 7, [420.0, 420.0])
             .open(&mut open)
-            .default_width(420.0)
             .show(ctx, |ui| self.run_info(ui, run));
         self.view.info_open = open;
     }

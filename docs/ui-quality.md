@@ -34,10 +34,9 @@ can draw.
 ## Re-check after the open UI pull requests merge
 
 Findings from the first review (#102) that are still open. #111, #112, #77/#78 and #113 were re-checked
-on 2026-10-20 and are done.
+on 2026-10-20 and are done; #127 (windows beside the run list, `×`) is done too.
 
 | Area | Issue | What to check |
 |---|---|---|
-| Windows (layout) | #127 | Windows no longer open stacked at the top left over the run list; `✕` is gone from the library editor (remove it from `KNOWN` in `ui_tests.rs`) |
 | Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI. `11-library-editor` shows no compound yet: the test clicks the last "Compound at" match, which lies outside the editor |
 | Batch | #88 | A disabled Start button looks like a button and says why; inputs have names (8 unnamed) |

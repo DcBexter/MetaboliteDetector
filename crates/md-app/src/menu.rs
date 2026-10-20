@@ -22,6 +22,7 @@ impl App {
             && let Some(paths) = rfd::FileDialog::new()
                 .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
                 .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
                 .pick_files()
         {
             for path in paths {
