@@ -20,7 +20,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          # glibc floor of the Linux package; README states glibc 2.39 (Ubuntu 24.04).
+          - os: ubuntu-24.04
             target: linux-x64
           - os: windows-latest
             target: windows-x64
@@ -41,6 +42,14 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#v}; else v=0.0.0; fi
+          # The binaries report the Cargo version, so a tag must match it (CONTRIBUTING: bump, then tag).
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            cargo_v=$(cargo metadata --format-version 1 --no-deps --locked \
+              | jq -r '.packages[] | select(.name == "md-cli") | .version')
+            if [ "${v%%-*}" != "${cargo_v%%-*}" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match Cargo version $cargo_v"; exit 1
+            fi
+          fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
           echo "MSI_VERSION=${v%%-*}" >> "$GITHUB_ENV"
       - name: Package (Linux)
