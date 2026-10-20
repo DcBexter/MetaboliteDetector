@@ -7,6 +7,7 @@
 //! (cheap) turns the result into the table, so filters and replicate groups can change without rescanning.
 //! Details of the old program: docs/reverse-engineering/batch-quantification.md.
 
+mod edit;
 mod rescan;
 mod untargeted;
 
@@ -399,6 +400,8 @@ pub struct Row {
     pub ions: Vec<u32>,
     /// Summed integral of the quant ions found, per column; `None` if not found or below `min_ions`.
     pub values: Vec<Option<f64>>,
+    /// Retention time of the hit in each column, where there is a value.
+    pub rts_s: Vec<Option<f64>>,
 }
 
 /// UTF-8 byte order mark: Excel needs it to read umlauts in a CSV (R: `fileEncoding = "UTF-8-BOM"`).
@@ -581,6 +584,9 @@ pub fn table(
                 .iter()
                 .map(|f| cell(f.as_ref()?, &ions, need, s))
                 .collect();
+            let rts_s = (values.iter().zip(&found))
+                .map(|(v, f)| v.and(f.map(|f| f.rt_s)))
+                .collect();
             let mut per_group: BTreeMap<&str, usize> = BTreeMap::new();
             // The old reproducibility filter runs before the rescan: what the rescan added does not count.
             let counts = |v: &Option<f64>, f: &Option<&Found>| match f {
@@ -613,6 +619,7 @@ pub fn table(
                 rt_s: rts.iter().sum::<f64>() / rts.len() as f64,
                 ions,
                 values,
+                rts_s,
             })
         })
         .collect();
@@ -646,6 +653,7 @@ mod tests {
                 rt_s: 12.5,
                 ions: vec![73, 147],
                 values: vec![Some(1500.0), None],
+                rts_s: vec![Some(750.0), None],
             }],
         };
         let mut out = Vec::new();
@@ -669,6 +677,7 @@ mod tests {
                 rt_s: 1.0,
                 ions: vec![93],
                 values: vec![Some(-2.0), None, None],
+                rts_s: vec![None; 3],
             }],
         };
         let (mut csv, mut groups) = (Vec::new(), Vec::new());
