@@ -99,6 +99,12 @@ mod tests {
         run.analysis = settings::Analysis::new(app.settings.key());
         let lib = run.ident.as_ref().unwrap().0.0.clone();
         app.runs.push(run);
+        // Enough runs that the run list scrolls.
+        for i in 0..80 {
+            let mut more = results::tests::run();
+            more.name = format!("run_{i:02}");
+            app.runs.push(more);
+        }
         let found = |rt_s| md_core::batch::RunResult {
             path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
             found: vec![md_core::batch::Found {
@@ -160,8 +166,8 @@ mod tests {
         (ctx, nodes)
     }
 
-    /// Controls of one layer cut off at the side; clipped by a scroll area vertically is fine,
-    /// and so is cut off at the side above a horizontal scroll bar.
+    /// Controls of one layer cut off at the side; clipped by a scroll area vertically is fine (also
+    /// out of view entirely), and so is cut off at the side above a horizontal scroll bar.
     fn cut_off(widgets: &[egui::WidgetRect], nodes: &Nodes) -> Vec<String> {
         let name = |w: &egui::WidgetRect| nodes.names.get(&w.id.accesskit_id());
         let bars: Vec<egui::Rect> = (widgets.iter())
@@ -184,6 +190,11 @@ mod tests {
             if let Some(n) = name(w)
                 && !CONTAINERS.contains(&n.0.as_str())
                 && w.rect.width() > 0.0
+                // Scrolled out of view vertically: hidden, so not cut off.
+                // shortcut: assumes a scroll area did the hiding, so a row unique to the hidden
+                // part, or content hidden by a clip that does not scroll, goes unchecked; check
+                // the clip owner if such content appears.
+                && r.1.height() > 0.0
                 && (left || right)
                 && !bars.iter().any(scrolls)
             {

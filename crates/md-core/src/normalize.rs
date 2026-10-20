@@ -151,6 +151,7 @@ mod tests {
             rt_s: 0.0,
             ions: vec![],
             values: values.to_vec(),
+            rts_s: vec![None; values.len()],
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
                 row("std", &[s(10.0), s(20.0), s(10.0), s(40.0), s(30.0)]),
                 row("x", &[s(5.0), None, s(20.0), s(20.0), s(40.0)]),
             ],
+            ..Default::default()
         }
     }
 
@@ -277,6 +279,7 @@ mod tests {
                 row("flat", &[Some(1.0), Some(1.0), Some(1.0), Some(1.0)]),
                 row("single", &[None, Some(1.0), None, None]),
             ],
+            ..Default::default()
         };
         let z = z_score(&t);
         assert_eq!(values(&z, 0), vec![Some(-1.0), Some(0.0), None, Some(1.0)]);

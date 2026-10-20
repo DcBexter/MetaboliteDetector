@@ -28,6 +28,11 @@ pub struct SearchSettings {
     pub mass_filter: Vec<(f32, f32)>,
     /// `LS_CUTOFF`: minimum overall score of a hit.
     pub cutoff: f64,
+    /// `SQL_MAX_NUMBER_FRAGMENTS`: the strongest query fragments the NIST pre-filter compares.
+    pub max_fragments: usize,
+    /// `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`, applied as `shared > n`: with 3 an entry must share at
+    /// least 4 of them.
+    pub min_equal_fragments: usize,
 }
 
 impl Default for SearchSettings {
@@ -43,6 +48,8 @@ impl Default for SearchSettings {
             use_spec: true,
             mass_filter: Vec::new(),
             cutoff: 0.8,
+            max_fragments: 5,
+            min_equal_fragments: 3,
         }
     }
 }
@@ -78,11 +85,6 @@ pub struct PreparedLibrary {
     frag_ions: Vec<u32>,
     fragment_filter: bool,
 }
-
-/// `SQL_MAX_NUMBER_FRAGMENTS`: the strongest query fragments the pre-filter compares.
-const MAX_FRAGMENTS: usize = 5;
-/// `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`, applied as `hits > 3`: an entry must share at least 4 of them.
-const MIN_EQUAL_FRAGMENTS: usize = 3;
 
 /// Old `Spectrum::getSpectrumFragments` and `Fragment` (file-formats.md §6.3) over ascending, unique
 /// masses: a fragment is a falling run (each next mass is 1 higher with a lower intensity) holding at
@@ -208,8 +210,9 @@ impl PreparedLibrary {
         self.rt_only
     }
 
-    /// Old NIST search (`SQLLibrary::getPotentialHits`): only entries that share at least 4 of the 5
-    /// strongest fragments of the component are scored. Use for [`crate::library::is_nist`] libraries.
+    /// Old NIST search (`SQLLibrary::getPotentialHits`): only entries that share more than
+    /// `min_equal_fragments` of the `max_fragments` strongest fragments of the component are scored
+    /// ([`SearchSettings`]). Use for [`crate::library::is_nist`] libraries.
     pub fn with_fragment_filter(mut self, on: bool) -> Self {
         self.fragment_filter = on;
         self
@@ -278,14 +281,14 @@ pub fn library_hits(
         let mut f = fragments(&peaks);
         // Old `compare_intens` order: strongest first.
         f.sort_by(|a, b| b.1.total_cmp(&a.1));
-        f.iter().take(MAX_FRAGMENTS).map(|f| f.0).collect()
+        f.iter().take(s.max_fragments).map(|f| f.0).collect()
     });
     let mut hits: Vec<LibraryHit> = (0..lib.len())
         .filter_map(|k| {
             if let Some(q) = &query {
                 let ions = &lib.frag_ions[lib.frag_offsets[k]..lib.frag_offsets[k + 1]];
                 let shared = q.iter().filter(|i| ions.binary_search(i).is_ok()).count();
-                if shared <= MIN_EQUAL_FRAGMENTS {
+                if shared <= s.min_equal_fragments {
                     return None;
                 }
             }

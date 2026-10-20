@@ -7,6 +7,7 @@
 //! (cheap) turns the result into the table, so filters and replicate groups can change without rescanning.
 //! Details of the old program: docs/reverse-engineering/batch-quantification.md.
 
+mod edit;
 mod rescan;
 mod untargeted;
 
@@ -413,10 +414,13 @@ impl Default for TableSettings {
 }
 
 /// Substance × run table; columns ordered by replicate group, then input order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Table {
     /// File name of each column.
     pub runs: Vec<String>,
+    /// Index of each column's run in the list `table()` was called with: file names alone do not
+    /// tell `dir1/a.cdf` from `dir2/a.cdf`.
+    pub sources: Vec<usize>,
     pub groups: Vec<String>,
     /// Ordered by retention time.
     pub rows: Vec<Row>,
@@ -433,6 +437,8 @@ pub struct Row {
     pub ions: Vec<u32>,
     /// Summed integral of the quant ions found, per column; `None` if not found or below `min_ions`.
     pub values: Vec<Option<f64>>,
+    /// Retention time of the hit in each column, where there is a value.
+    pub rts_s: Vec<Option<f64>>,
 }
 
 /// UTF-8 byte order mark: Excel needs it to read umlauts in a CSV (R: `fileEncoding = "UTF-8-BOM"`).
@@ -592,11 +598,12 @@ pub fn table(
         Some(c) => c.get(1).or(c.get(0)).map_or("", |m| m.as_str()).into(),
         None => n.into(),
     };
-    let mut cols: Vec<(String, String, &RunResult)> = runs
+    let mut cols: Vec<(String, String, usize, &RunResult)> = runs
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(i, r)| {
             let n = name(r);
-            (group(&n), n, r)
+            (group(&n), n, i, r)
         })
         .collect();
     cols.sort_by(|a, b| a.0.cmp(&b.0));
@@ -604,7 +611,7 @@ pub fn table(
     cols.iter()
         .for_each(|c| *sizes.entry(&c.0).or_default() += 1);
 
-    let ordered: Vec<&RunResult> = cols.iter().map(|c| c.2).collect();
+    let ordered: Vec<&RunResult> = cols.iter().map(|c| c.3).collect();
     let mut rows: Vec<Row> = hits_by_compound(&ordered)
         .into_iter()
         .filter_map(|(compound, found)| {
@@ -614,6 +621,9 @@ pub fn table(
             let values: Vec<Option<f64>> = found
                 .iter()
                 .map(|f| cell(f.as_ref()?, &ions, need, s))
+                .collect();
+            let rts_s = (values.iter().zip(&found))
+                .map(|(v, f)| v.and(f.map(|f| f.rt_s)))
                 .collect();
             let mut per_group: BTreeMap<&str, usize> = BTreeMap::new();
             // The old reproducibility filter runs before the rescan: what the rescan added does not count.
@@ -647,12 +657,19 @@ pub fn table(
                 rt_s: rts.iter().sum::<f64>() / rts.len() as f64,
                 ions,
                 values,
+                rts_s,
             })
         })
         .collect();
     rows.sort_by(|a, b| a.rt_s.total_cmp(&b.rt_s));
-    let (groups, runs) = cols.into_iter().map(|(g, n, _)| (g, n)).unzip();
-    Ok(Table { runs, groups, rows })
+    let sources = cols.iter().map(|c| c.2).collect();
+    let (groups, runs) = cols.into_iter().map(|(g, n, ..)| (g, n)).unzip();
+    Ok(Table {
+        runs,
+        sources,
+        groups,
+        rows,
+    })
 }
 
 #[cfg(test)]
@@ -680,7 +697,9 @@ mod tests {
                 rt_s: 12.5,
                 ions: vec![73, 147],
                 values: vec![Some(1500.0), None],
+                rts_s: vec![Some(750.0), None],
             }],
+            ..Default::default()
         };
         let mut out = Vec::new();
         t.write_csv(&mut out).unwrap();
@@ -703,7 +722,9 @@ mod tests {
                 rt_s: 1.0,
                 ions: vec![93],
                 values: vec![Some(-2.0), None, None],
+                rts_s: vec![None; 3],
             }],
+            ..Default::default()
         };
         let (mut csv, mut groups) = (Vec::new(), Vec::new());
         t.write_csv(&mut csv).unwrap();
@@ -733,6 +754,7 @@ mod tests {
             runs: vec!["a.cdf".into()],
             groups: vec!["ctrl".into()],
             rows: vec![],
+            ..Default::default()
         };
         let written = t.write_groups_file(&csv).unwrap().unwrap();
         assert!(written.exists());
@@ -758,6 +780,7 @@ mod tests {
             runs: vec![],
             groups: vec![],
             rows: vec![],
+            ..Default::default()
         };
         assert!(t.write_csv(Full).is_err());
     }

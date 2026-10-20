@@ -84,6 +84,7 @@ struct App {
     library_job: Option<identify::LibraryJob>,
     /// Search settings whose library preparation crashed; not retried until they change.
     library_failed: Option<md_core::search::SearchSettings>,
+    nist: identify::Nist,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     statistics: statistics::Statistics,
@@ -113,6 +114,7 @@ impl Default for App {
             library: None,
             library_job: None,
             library_failed: None,
+            nist: identify::Nist::default(),
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             statistics: statistics::Statistics::default(),
@@ -174,8 +176,10 @@ impl eframe::App for App {
         self.windows(ui.ctx());
         self.status_bar(ui);
         self.run_list(ui);
-        if let Some(run) = self.runs.get(self.active) {
-            detail::panel(ui, run, &mut self.mz, &mut self.trace);
+        if let Some(run) = self.runs.get(self.active)
+            && detail::panel(ui, run, &self.nist, &mut self.mz, &mut self.trace)
+        {
+            self.nist_search();
         }
         self.central_panel(ui);
     }
@@ -189,6 +193,7 @@ impl App {
             self.error = Some(e);
         }
         self.update_identification(ctx);
+        self.update_nist(ctx);
         self.poll_export();
     }
 
@@ -197,7 +202,8 @@ impl App {
         self.ri
             .window(ctx, &self.runs, self.active, self.library.as_deref());
         self.settings.window(ctx);
-        self.batch.use_settings(&self.settings.applied);
+        self.batch
+            .use_settings(&self.settings.applied, self.ri.rt_only);
         // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
