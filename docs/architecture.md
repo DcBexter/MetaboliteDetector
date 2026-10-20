@@ -117,8 +117,17 @@ plain `File`).
 detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
 0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
-`detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
-old app only uses in the RI calibration dialog (and deconvolution, §4.5).
+`matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
+
+`PeakSettings::detector` selects the old "Matched Filtering" method instead (`Detector::Matched`, old
+`MatchedPeakDetector`, §3.3). The old app offers it only in its *Calibration Setter* window, with peak
+width 10 and threshold 3 as the values after switching (`Detector::MATCHED`); the main window always uses
+the default detector, and the old settings file has no field for it. Here it is a field of `GcmsSettings`
+(not saved in the old file) and a choice in the app's settings window, so the app, the batch scan and the
+deconvolution all use the chosen detector. In the old code the matched peaks hold the filtered values and
+the deconvolution reads those, so `IonTraces::detect_peaks` overwrites each trace in place with its filtered
+values (one row copy per worker, no second index). The filter is computed per trace in parallel with one
+precomputed kernel; `detect_peaks_matched` runs the same detector on a single trace (RI markers).
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 

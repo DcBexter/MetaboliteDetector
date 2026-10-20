@@ -3,7 +3,8 @@
 # Run on Linux/WSL with the old binary from Old/MetaboliteDetector-3.3.20200313-Linux_0.deb installed
 # (or MD_APP pointing to metabolitedetector_app), g++, nm and python3:
 #   docs/reverse-engineering/tools/golden/make-reference.sh
-# Output: crates/md-core/tests/data/old-md-3.3.tsv (see golden.py for the format).
+# Output: crates/md-core/tests/data/old-md-3.3.tsv (default peak detector) and old-md-3.3-matched.tsv
+# (matched filtering, peak width 10, threshold 3: the Calibration Setter defaults); see golden.py for the format.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../../.." && pwd)
@@ -25,6 +26,7 @@ nm "$app" | awk '
     want["_ZNK4gcms12GCMSDiskScanIifE12getScanCountEv"] = "DISK_SCAN_COUNT"
     want["_ZNK4gcms12GCMSDiskScanIifE16getRetentionTimeEj"] = "DISK_SCAN_RT"
     want["_ZN4gcms19DefaultPeakDetectorIifEC1Ev"] = "DEFAULT_DETECTOR_CTOR"
+    want["_ZN4gcms19MatchedPeakDetectorIifEC1Emi"] = "MATCHED_DETECTOR_CTOR"
     want["_ZN4gcms12GCMSAnalyzerIifEC1ERKNS_12GCMSDiskScanIifEEPNS_20AbstractPeakDetectorIifEE"] = "ANALYZER_CTOR"
     want["_ZN4gcms12GCMSAnalyzerIifE14detectAllPeaksEbRKfS3_"] = "DETECT_ALL_PEAKS"
     want["_ZN4gcms12GCMSAnalyzerIifE23deconvoluteChromatogramEv"] = "DECONVOLUTE"
@@ -49,5 +51,8 @@ nm "$app" | awk '
 ' > "$work/syms.inc"
 
 g++ -std=c++17 -O1 -shared -fPIC -I"$work" -o "$work/old_md_dump.so" "$here/old_md_dump.cpp" -ldl
+out=$repo/crates/md-core/tests/data
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
-python3 "$here/golden.py" < "$work/raw.tsv" > "$repo/crates/md-core/tests/data/old-md-3.3.tsv"
+python3 "$here/golden.py" "static default settings" < "$work/raw.tsv" > "$out/old-md-3.3.tsv"
+MD_MATCHED="10 3" LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
+python3 "$here/golden.py" "matched filtering (peak width 10, threshold 3), other settings static defaults" < "$work/raw.tsv" > "$out/old-md-3.3-matched.tsv"

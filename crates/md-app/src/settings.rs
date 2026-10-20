@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::deconv::{Component, DeconvSettings, deconvolute};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::peaks::{Detector, IonTraces, PeakSettings};
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
 use crate::{Run, spawn};
@@ -51,7 +51,7 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key) -> Result<Vec<Component>, String> {
-    let traces = IonTraces::new(data).map_err(|e| e.to_string())?;
+    let mut traces = IonTraces::new(data).map_err(|e| e.to_string())?;
     let peaks = traces.detect_peaks(&key.0);
     let mut components = deconvolute(&traces, &peaks, &key.1);
     components.sort_by_key(|k| k.apex_scan);
@@ -182,6 +182,39 @@ impl Settings {
         let d = &mut self.draft;
         ui.strong("Peak detection and deconvolution (AN_*)");
         egui::Grid::new("an").num_columns(2).show(ui, |ui| {
+            ui.label("Peak detection method").on_hover_text(
+                "Matched Filtering: the old Calibration Setter's matched peak detector.",
+            );
+            egui::ComboBox::from_id_salt("detector")
+                .selected_text(match d.peak_detector {
+                    Detector::Default => "Default",
+                    Detector::Matched { .. } => "Matched Filtering",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.peak_detector, Detector::Default, "Default");
+                    if !matches!(d.peak_detector, Detector::Matched { .. }) {
+                        ui.selectable_value(
+                            &mut d.peak_detector,
+                            Detector::MATCHED,
+                            "Matched Filtering",
+                        );
+                    }
+                });
+            ui.end_row();
+            if let Detector::Matched { width, threshold } = &mut d.peak_detector {
+                ui.label("Peak width").on_hover_text(
+                    "Scans; the filter density is 4 × width. The thresholds below are not used.",
+                );
+                ui.add(egui::DragValue::new(width).range(1..=1000));
+                ui.end_row();
+                i32_row(
+                    ui,
+                    "Peak threshold",
+                    "A peak is a region where the filtered trace lies above this.",
+                    threshold,
+                    -1_000_000_000..=1_000_000_000,
+                );
+            }
             f64_row(
                 ui,
                 "AN_PEAK_THRESHOLD_BEGIN",
