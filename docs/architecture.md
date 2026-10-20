@@ -38,6 +38,13 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   examples/batch.rs     batch quantification timing on real files
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
+  src/main.rs           entry point, `App` state and one call per UI area in `ui`
+  src/menu.rs           top menu bar (File, Analysis)
+  src/status.rs         bottom status bar
+  src/run_list.rs       left list of the open runs
+  src/central.rs        centre: TIC/SIC plots, scan cursor, spectrum
+  src/loading.rs        opening files, load polling, SIC jobs
+  src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
@@ -500,7 +507,8 @@ Sonar scan, so Linux builds once for both; Windows only runs the tests, since no
 `crates/`, the Cargo files, the toolchain, `sonar-project.properties` or the workflow skip the build and only run the Sonar scan;
 `main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
 result for `main`. It does not fetch the example data, so those tests skip themselves;
-run them locally. Only `main` saves the cargo cache; PRs restore it.
+run them locally. Only `main` saves the cargo cache; PRs restore it. The cache key
+follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall.
 
 ## Compatibility goals
 
