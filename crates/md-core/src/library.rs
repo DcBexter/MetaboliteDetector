@@ -109,7 +109,7 @@ pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     } else {
         bytes
     };
-    let mut r = Reader { data, pos: 0 };
+    let mut r = Reader::new(data);
     match r.u32()? {
         2 => {}
         5 => {
@@ -126,7 +126,7 @@ pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     Ok(compounds)
 }
 
-fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
+pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
     let mut out = Vec::new();
     flate2::read::MultiGzDecoder::new(bytes)
         .take(MAX_LBR_BYTES + 1)
@@ -143,7 +143,8 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
     Ok(out)
 }
 
-fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
+/// `Spectrum<int,float>::toStream` record (file-formats.md §1.2), also the start of a `.cmp` compound.
+pub(crate) fn read_spectrum(r: &mut Reader) -> Result<LibrarySpectrum, LibraryError> {
     let scan = r.u32()?;
     let rt_ms = r.f64()?;
     let ri = r.f64()?;
@@ -156,14 +157,18 @@ fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
     if masses.len() != values.len() {
         return r.corrupt("spectrum has different numbers of masses and values");
     }
-    let spectrum = LibrarySpectrum {
+    Ok(LibrarySpectrum {
         scan,
         rt_ms,
         ri,
         bin_width,
         masses,
         values,
-    };
+    })
+}
+
+fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
+    let spectrum = read_spectrum(r)?;
 
     if r.u32()? != 0 {
         return Err(LibraryError::Unsupported(
@@ -205,17 +210,21 @@ fn read_compound(r: &mut Reader) -> Result<LibraryCompound, LibraryError> {
 }
 
 /// Little-endian reader that fails instead of panicking on short or inconsistent input.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn remaining(&self) -> usize {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.pos
     }
 
-    fn corrupt<T>(&self, reason: impl Into<String>) -> Result<T, LibraryError> {
+    pub(crate) fn corrupt<T>(&self, reason: impl Into<String>) -> Result<T, LibraryError> {
         Err(LibraryError::Corrupt {
             offset: self.pos,
             reason: reason.into(),
@@ -230,25 +239,25 @@ impl<'a> Reader<'a> {
         Ok(&self.data[self.pos - n..self.pos])
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], LibraryError> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], LibraryError> {
         let mut a = [0; N];
         a.copy_from_slice(self.take(N)?);
         Ok(a)
     }
 
-    fn u32(&mut self) -> Result<u32, LibraryError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, LibraryError> {
         self.array().map(u32::from_le_bytes)
     }
-    fn i32(&mut self) -> Result<i32, LibraryError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, LibraryError> {
         self.array().map(i32::from_le_bytes)
     }
-    fn i64(&mut self) -> Result<i64, LibraryError> {
+    pub(crate) fn i64(&mut self) -> Result<i64, LibraryError> {
         self.array().map(i64::from_le_bytes)
     }
-    fn f32(&mut self) -> Result<f32, LibraryError> {
+    pub(crate) fn f32(&mut self) -> Result<f32, LibraryError> {
         self.array().map(f32::from_le_bytes)
     }
-    fn f64(&mut self) -> Result<f64, LibraryError> {
+    pub(crate) fn f64(&mut self) -> Result<f64, LibraryError> {
         self.array().map(f64::from_le_bytes)
     }
 
@@ -263,7 +272,7 @@ impl<'a> Reader<'a> {
         Ok(n)
     }
 
-    fn list<T>(
+    pub(crate) fn list<T>(
         &mut self,
         min_bytes: usize,
         mut item: impl FnMut(&mut Self) -> Result<T, LibraryError>,
@@ -278,7 +287,7 @@ impl<'a> Reader<'a> {
     }
 
     /// i32 count (negative = null pointer) followed by f64 values.
-    fn f64_list_or_null(&mut self) -> Result<Option<Vec<f64>>, LibraryError> {
+    pub(crate) fn f64_list_or_null(&mut self) -> Result<Option<Vec<f64>>, LibraryError> {
         let Ok(n) = usize::try_from(self.i32()?) else {
             return Ok(None);
         };
@@ -289,18 +298,18 @@ impl<'a> Reader<'a> {
             .map(Some)
     }
 
-    fn bytes(&mut self) -> Result<&'a [u8], LibraryError> {
+    pub(crate) fn bytes(&mut self) -> Result<&'a [u8], LibraryError> {
         let n = self.u32()? as usize;
         self.take(n)
     }
 
-    fn string(&mut self) -> Result<String, LibraryError> {
+    pub(crate) fn string(&mut self) -> Result<String, LibraryError> {
         self.bytes().map(text)
     }
 }
 
 /// The old files carry no encoding: UTF-8 when valid, otherwise Latin-1 (every byte is one char).
-fn text(bytes: &[u8]) -> String {
+pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 

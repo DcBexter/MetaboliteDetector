@@ -9,7 +9,9 @@
 #include <dlfcn.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <new>
 #include <string>
 #include <vector>
@@ -100,12 +102,70 @@ void run(FILE* out, const char* cdf, const char* work) {
         }
         peaks->~vector();
     }
+    // MD_RESULTS: also save the components as the old GUI does ("Save compounds", .cmp).
+    if (const char* dir = std::getenv("MD_RESULTS")) {
+        std::string cmp = std::string(dir) + "/" + name.substr(0, name.rfind('.')) + ".cmp";
+        fn<void (*)(const std::vector<void*>&, const char*)>(COMPOUND_TO_DISK)(*comps, cmp.c_str());
+    }
     std::fflush(out);
     // Objects are leaked on purpose: the process ends after the last file.
 }
 
+// RICalculator: vtable, std::map rt2ri, drt, std::string source; the buffer is larger than that.
+struct Calib { alignas(16) char obj[512]; };
+
+void calib_new(Calib& c, const char* source) {
+    fn<void (*)(void*, const std::string&)>(RI_CTOR)(c.obj, std::string(source));
+}
+
+void calib_save(Calib& c, const std::string& stem) {
+    fn<void (*)(void*, const char*)>(RI_TO_DISK)(c.obj, (stem + ".calib").c_str());
+    std::ofstream bin(stem + ".calib.bin", std::ios::binary);
+    fn<void (*)(const void*, std::ostream&)>(RI_TO_STREAM)(c.obj, bin);
+}
+
+// A calibration with known values, written in both forms (text .calib and binary toStream).
+void write_calibration(const char* dir) {
+    Calib c;
+    calib_new(c, "harness");
+    const double pairs[][2] = {{300000, 1000}, {612345.678901, 1500.5}, {901234.5, 2000.25}, {1.5e6, 3000}};
+    for (auto& p : pairs) fn<void (*)(void*, const double&, const double&)>(RI_ADD_PAIR)(c.obj, p[0], p[1]);
+    calib_save(c, std::string(dir) + "/harness");
+}
+
+// Reads files with the old code and writes them again: IN.cmp -> OUT.cmp, IN.calib -> OUT.calib,
+// IN.calib.bin -> OUT.calib.bin (by suffix). Checks that the old program accepts our writer.
+int reread(int argc, char** argv) {
+    for (int i = 2; i + 1 < argc; i += 2) {
+        std::string in = argv[i], out = argv[i + 1];
+        auto ends = [](const std::string& s, const char* x) {
+            return s.size() >= std::strlen(x) && s.compare(s.size() - std::strlen(x), std::string::npos, x) == 0;
+        };
+        if (ends(in, ".cmp")) {
+            std::vector<void*> comps;
+            fn<void (*)(std::vector<void*>*, const char*)>(COMPOUND_FROM_DISK)(&comps, in.c_str());
+            fn<void (*)(const std::vector<void*>&, const char*)>(COMPOUND_TO_DISK)(comps, out.c_str());
+        } else {
+            Calib c;
+            calib_new(c, "");
+            if (ends(in, ".bin")) {
+                std::ifstream bin(in, std::ios::binary);
+                fn<void (*)(void*, std::istream&)>(RI_FROM_STREAM)(c.obj, bin);
+                std::ofstream o(out, std::ios::binary);
+                fn<void (*)(const void*, std::ostream&)>(RI_TO_STREAM)(c.obj, o);
+            } else {
+                fn<void (*)(void*, const char*)>(RI_FROM_DISK)(c.obj, in.c_str());
+                fn<void (*)(void*, const char*)>(RI_TO_DISK)(c.obj, out.c_str());
+            }
+        }
+    }
+    return 0;
+}
+
 // usage: LD_PRELOAD=old_md_dump.so metabolitedetector_app WORK_DIR OUT.tsv RUN.cdf...
+//        LD_PRELOAD=old_md_dump.so metabolitedetector_app --reread IN OUT [IN OUT]...
 int dump_main(int argc, char** argv, char**) {
+    if (argc >= 2 && std::strcmp(argv[1], "--reread") == 0) return reread(argc, argv);
     if (argc < 4) {
         std::fprintf(stderr, "usage: %s WORK_DIR OUT.tsv RUN.cdf...\n", argv[0]);
         return 2;
@@ -113,6 +173,7 @@ int dump_main(int argc, char** argv, char**) {
     FILE* out = std::fopen(argv[2], "w");
     if (!out) { std::perror(argv[2]); return 1; }
     for (int i = 3; i < argc; i++) run(out, argv[i], argv[1]);
+    if (const char* dir = std::getenv("MD_RESULTS")) write_calibration(dir);
     return std::fclose(out) == 0 ? 0 : 1;
 }
 

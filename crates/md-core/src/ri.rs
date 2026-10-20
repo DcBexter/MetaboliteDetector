@@ -157,6 +157,73 @@ impl RiCalibration {
     }
 }
 
+/// `RICalculator` in its binary form (`toStream`, file-formats.md §4.1): the old program stores it in
+/// a run's `.idx` when the RI wizard calibrates the run. Values are kept as stored (ms), so writing
+/// it back gives the same bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredCalibration {
+    /// (retention time in ms, RI) in file order (ascending time); empty when not calibrated.
+    pub points_ms: Vec<(f64, f64)>,
+    /// Retention time shift in ms.
+    pub drt_ms: f64,
+    /// Where the calibration came from ("not calibrated" in uncalibrated runs).
+    pub source: String,
+}
+
+impl StoredCalibration {
+    /// Parses the record at the start of `bytes`; returns it and its length in bytes.
+    pub fn parse(bytes: &[u8]) -> Result<(Self, usize), CalibError> {
+        let mut rest = bytes;
+        let mut take = |n: usize| match rest.split_at_checked(n) {
+            Some((a, b)) => {
+                rest = b;
+                Ok(a)
+            }
+            None => Err(CalibError::Invalid(
+                "binary calibration is truncated".into(),
+            )),
+        };
+        let u32 = |b: &[u8]| u32::from_le_bytes(b.try_into().unwrap()) as usize;
+        let f64 = |b: &[u8]| f64::from_le_bytes(b.try_into().unwrap());
+        let n = u32(take(4)?);
+        let pairs = take(n.saturating_mul(16))?;
+        let points_ms = (pairs.as_chunks::<16>().0)
+            .iter()
+            .map(|p| (f64(&p[..8]), f64(&p[8..])))
+            .collect();
+        let drt_ms = f64(take(8)?);
+        let len = u32(take(4)?);
+        let source = String::from_utf8_lossy(take(len)?).into_owned();
+        Ok((
+            Self {
+                points_ms,
+                drt_ms,
+                source,
+            },
+            bytes.len() - rest.len(),
+        ))
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = (self.points_ms.len() as u32).to_le_bytes().to_vec();
+        for (t, ri) in &self.points_ms {
+            w.extend(t.to_le_bytes());
+            w.extend(ri.to_le_bytes());
+        }
+        w.extend(self.drt_ms.to_le_bytes());
+        w.extend((self.source.len() as u32).to_le_bytes());
+        w.extend(self.source.as_bytes());
+        w
+    }
+
+    /// The calibration with its shift; an error for uncalibrated runs (fewer than two points).
+    pub fn calibration(&self) -> Result<RiCalibration, CalibError> {
+        let mut c = RiCalibration::new(self.points_ms.iter().map(|&(t, ri)| (t / 1000.0, ri)))?;
+        c.shift_s = self.drt_ms / 1000.0;
+        Ok(c)
+    }
+}
+
 /// Piecewise linear `y(x)` through `points` (ascending in x after `xy`), extrapolated with the first
 /// or last segment. The old code dereferenced `end()` above the last point (§6.2); here that case
 /// uses the last segment, as the old code does for every other point above the range.
@@ -310,6 +377,33 @@ mod tests {
             Err(CalibError::Line { line: 2, .. }) => {}
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn stored_calibration_round_trip() {
+        let s = StoredCalibration {
+            points_ms: vec![
+                (100_000.0, 1000.0),
+                (200_000.0, 1100.0),
+                (400_000.0, 1200.0),
+            ],
+            drt_ms: 0.0,
+            source: "alkanes".into(),
+        };
+        let mut bytes = s.to_bytes();
+        assert_eq!(bytes.len(), 4 + 3 * 16 + 8 + 4 + 7);
+        bytes.extend([1, 2, 3]); // the .idx continues after the record
+        assert_eq!(
+            StoredCalibration::parse(&bytes).unwrap(),
+            (s.clone(), bytes.len() - 3)
+        );
+        assert_eq!(s.calibration().unwrap(), alkanes());
+        for n in 0..bytes.len() - 3 {
+            assert!(StoredCalibration::parse(&bytes[..n]).is_err(), "cut at {n}");
+        }
+        let uncalibrated = StoredCalibration::parse(&[0; 16]).unwrap().0;
+        assert!(uncalibrated.calibration().is_err());
+        assert!(StoredCalibration::parse(&[0xff; 16]).is_err());
     }
 
     #[test]

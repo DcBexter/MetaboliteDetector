@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Chromatogram;
 use crate::andi::{self, AndiError};
+use crate::ri::StoredCalibration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiskScanError {
@@ -42,7 +43,7 @@ pub fn read(path: impl AsRef<Path>) -> Result<Chromatogram, DiskScanError> {
 }
 
 fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
-    let mut entries = read_index(idx)?;
+    let mut entries = read_index(idx)?.1;
     entries.sort_by_key(|e| e.scan);
     if let Some(w) = entries.windows(2).find(|w| w[0].scan == w[1].scan) {
         return corrupt(format!("scan {} listed twice", w[0].scan));
@@ -89,8 +90,16 @@ fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
     })
 }
 
+/// The RI calibration stored in a run's `.idx` (the old RI wizard writes it there); `path` may name
+/// the `.bin`, the `.idx` or the bare stem.
+pub fn read_calibration(path: impl AsRef<Path>) -> Result<StoredCalibration, DiskScanError> {
+    let p = path.as_ref().with_extension("idx");
+    let idx = std::fs::read(&p).map_err(|e| DiskScanError::Io(p, e))?;
+    Ok(read_index(&idx)?.0)
+}
+
 /// `DataProvider::readIndexFile` (0x75bf30), in its read order.
-fn read_index(idx: &[u8]) -> Result<Vec<Entry>, DiskScanError> {
+fn read_index(idx: &[u8]) -> Result<(StoredCalibration, Vec<Entry>), DiskScanError> {
     let mut r = Reader { buf: idx, pos: 0 };
     let magic = r.u64()? as i64;
     if magic != MAGIC {
@@ -115,10 +124,8 @@ fn read_index(idx: &[u8]) -> Result<Vec<Entry>, DiskScanError> {
         return corrupt("TOF-calibrated caches are not supported".into());
     }
     r.take(5 * 8)?; // global BaselineStatistics: 4 x f64 + i64
-    let ri = r.u32()? as usize; // RICalculator::toStream: (rt, ri) pairs, drt, name
-    r.take(ri.saturating_mul(16))?;
-    r.f64()?;
-    let len = r.u32()? as usize;
+    let (calibration, len) = StoredCalibration::parse(&r.buf[r.pos..])
+        .map_err(|e| DiskScanError::Corrupt(e.to_string()))?;
     r.take(len)?;
     let ions = r.u32()? as usize; // all distinct masses, f32
     r.take(ions.saturating_mul(4))?;
@@ -141,7 +148,8 @@ fn read_index(idx: &[u8]) -> Result<Vec<Entry>, DiskScanError> {
             r.take(4 + 5 * 8)?; // DataType, per-scan BaselineStatistics
             Ok(e)
         })
-        .collect()
+        .collect::<Result<_, _>>()
+        .map(|entries| (calibration, entries))
 }
 
 fn corrupt<T>(msg: String) -> Result<T, DiskScanError> {
@@ -194,6 +202,15 @@ impl<'a> Reader<'a> {
 mod tests {
     use super::*;
 
+    /// What the old RI wizard stores in the index of a calibrated run.
+    fn wizard_calibration() -> StoredCalibration {
+        StoredCalibration {
+            points_ms: vec![(1500.0, 1000.0), (2000.0, 1100.0)],
+            drt_ms: 100.0,
+            source: "C10-C11".into(),
+        }
+    }
+
     /// Index and data file as `GCMSDiskScanWriter` lays them out, scans given as (rt_ms, m/z, values).
     fn files(scans: &[(f64, &[f32], &[i32])]) -> (Vec<u8>, Vec<u8>) {
         let (mut idx, mut bin) = (Vec::new(), Vec::new());
@@ -206,9 +223,7 @@ mod tests {
         idx.push(b'v');
         u32s(&mut idx, &[0]); // no TOF polynomial
         idx.extend([0; 40]); // global baseline statistics
-        u32s(&mut idx, &[0]); // RICalculator: no entries, drt, name
-        idx.extend(0f64.to_le_bytes());
-        u32s(&mut idx, &[0]);
+        idx.extend(wizard_calibration().to_bytes());
         u32s(&mut idx, &[1]); // all ions
         idx.extend(73f32.to_le_bytes());
         for (scan, (rt, mz, values)) in scans.iter().enumerate() {
@@ -240,6 +255,9 @@ mod tests {
         assert_eq!(c.scan_times_s, vec![1.5, 2.0]);
         assert_eq!(c.offsets, vec![0, 2, 3]);
         assert_eq!(c.spectrum(0), (&[73.0, 147.0][..], &[10.0, 5.0][..]));
+        let stored = read_index(&idx).unwrap().0;
+        assert_eq!(stored, wizard_calibration());
+        assert_eq!(stored.calibration().unwrap().ri(1.85), 1050.0);
     }
 
     #[test]
