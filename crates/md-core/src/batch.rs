@@ -207,7 +207,7 @@ fn scan_and_save(
     let times = c.scan_times_s.clone();
     drop(c);
     let peaks = traces.detect_all_peaks(&s.peaks);
-    let comps = deconvolute(&traces, &peaks, &s.deconv);
+    let comps = deconvolute(&traces, &peaks, &times, &s.deconv);
     let masses: Vec<u32> = (peaks.iter())
         .map(|p| traces.masses[p.row as usize])
         .collect();
@@ -1305,7 +1305,7 @@ NUM PEAKS: 1
 
         let mut traces = IonTraces::new(&run).unwrap();
         let peaks = traces.detect_peaks(&s.peaks);
-        let comps = deconvolute(&traces, &peaks, &s.deconv);
+        let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
         let masses: Vec<u32> = peaks
             .iter()
             .map(|p| traces.masses[p.row as usize])
@@ -1379,7 +1379,7 @@ NUM PEAKS: 1
         // The saved components are those of the deconvolution, with the RI of the search.
         let mut traces = IonTraces::new(&run).unwrap();
         let peaks = traces.detect_all_peaks(&s.peaks);
-        let comps = deconvolute(&traces, &peaks, &s.deconv);
+        let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
         let (loaded, _, _) =
             crate::cmp::components_from_file(&saved[0], &run.scan_times_s).unwrap();
         let key = |c: &crate::deconv::Component| (c.apex_scan, c.spectrum.clone());
