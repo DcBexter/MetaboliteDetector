@@ -1,34 +1,22 @@
-//! Spectrum normalisation and export of the shown chromatogram and spectrum as CSV or PNG.
-//! CSV rows come from the same numbers the plots draw; PNG is a crop of egui's own screenshot.
+//! Spectrum normalisation and export of the shown chromatogram and spectrum as CSV, clipboard text
+//! or picture (see `plot_export`). Table rows come from the same numbers the plots draw.
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
 use eframe::egui;
-use md_core::csv::write_columns;
+use md_core::csv::{write_columns, write_tsv};
 use md_core::spectrum::{Normalization, normalize};
 
+use crate::plot_export::{self, Area};
 use crate::{App, Run, Trace};
 
+#[derive(Default)]
 pub struct Export {
     pub norm: Normalization,
-    /// Screen areas of the plots in the last frame, in points.
-    pub chromatograms: egui::Rect,
-    pub spectrum: egui::Rect,
-    /// Errors of screenshot callbacks, which run after the frame that asked for them.
-    errors: (mpsc::Sender<String>, mpsc::Receiver<String>),
-}
-
-impl Default for Export {
-    fn default() -> Self {
-        Self {
-            norm: Normalization::default(),
-            chromatograms: egui::Rect::NOTHING,
-            spectrum: egui::Rect::NOTHING,
-            errors: mpsc::channel(),
-        }
-    }
+    /// Screen areas of the plots in the last frame.
+    pub chromatograms: Area,
+    pub spectrum: Area,
 }
 
 /// The spectrum on screen: title, m/z and (normalised) intensities. The deconvoluted spectrum of a
@@ -75,19 +63,27 @@ pub(crate) fn write_file(
     })
 }
 
-/// PNG of `rect` (points) out of a full-window screenshot taken at `ppp` pixels per point.
+/// `rect` (points) out of a full-window screenshot taken at `ppp` pixels per point.
+pub(crate) fn crop(
+    shot: &egui::ColorImage,
+    rect: egui::Rect,
+    ppp: f32,
+) -> Result<egui::ColorImage, String> {
+    let size = egui::vec2(shot.width() as f32, shot.height() as f32) / ppp;
+    let rect = rect.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
+    if rect.width() < 1.0 || rect.height() < 1.0 {
+        return Err("nothing to export: the plot is not visible".into());
+    }
+    Ok(shot.region(&rect, Some(ppp)))
+}
+
 pub(crate) fn write_png(
     path: &Path,
     shot: &egui::ColorImage,
     rect: egui::Rect,
     ppp: f32,
 ) -> Result<(), String> {
-    let size = egui::vec2(shot.width() as f32, shot.height() as f32) / ppp;
-    let rect = rect.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
-    if rect.width() < 1.0 || rect.height() < 1.0 {
-        return Err("nothing to export: the plot is not visible".into());
-    }
-    let img = shot.region(&rect, Some(ppp));
+    let img = crop(shot, rect, ppp)?;
     write_file(path, |w| {
         let mut enc = png::Encoder::new(&mut *w, img.width() as u32, img.height() as u32);
         enc.set_color(png::ColorType::Rgba);
@@ -100,11 +96,12 @@ pub(crate) fn write_png(
 }
 
 impl App {
-    /// Shown chromatogram of the active run as CSV: time and the traces the plots draw.
-    fn chromatogram_csv(&self, path: &Path) -> Result<(), String> {
+    /// Shown chromatogram of the active run: header and columns, time first and then the traces the
+    /// plots draw.
+    fn chromatogram_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
         let run = self.runs.get(self.active).ok_or("no run open")?;
         let mut header = vec![format!("Retention time ({})", self.view.unit.label())];
-        let times: Vec<f64> = run.minutes.iter().map(|m| self.view.time(*m)).collect();
+        let mut columns = vec![run.minutes.iter().map(|m| self.view.time(*m)).collect()];
         // The plots show the derivative when it is on, so the file does too.
         let shape = |v: &[f64]| {
             if self.view.derivative {
@@ -113,10 +110,9 @@ impl App {
                 v.to_vec()
             }
         };
-        let mut owned = Vec::new();
         if self.trace != Trace::Sic {
             header.push(self.derivative_label("TIC".into()));
-            owned.push(shape(&run.tic));
+            columns.push(shape(&run.tic));
         }
         if self.trace != Trace::Tic {
             if run.sic_for != Some((self.mz, self.tolerance)) || run.sic.len() != run.minutes.len()
@@ -124,22 +120,19 @@ impl App {
                 return Err("the SIC is still being computed, try again in a moment".into());
             }
             header.push(self.derivative_label(format!("SIC m/z {} ± {}", self.mz, self.tolerance)));
-            owned.push(shape(&run.sic));
+            columns.push(shape(&run.sic));
         }
-        let mut columns: Vec<&[f64]> = vec![&times];
-        columns.extend(owned.iter().map(Vec::as_slice));
-        let header: Vec<&str> = header.iter().map(String::as_str).collect();
-        write_file(path, |w| write_columns(w, &header, &columns))
+        Ok((header, columns))
     }
 
-    fn spectrum_csv(&self, path: &Path) -> Result<(), String> {
+    fn spectrum_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
         let run = self.runs.get(self.active).ok_or("no run open")?;
         let (_, mz, y) = shown_spectrum(run, self.export.norm);
         let y_name = match self.export.norm {
             Normalization::None => "Intensity".to_owned(),
             n => format!("Intensity ({})", n.label().to_lowercase()),
         };
-        write_file(path, |w| write_columns(w, &["m/z", &y_name], &[&mz, &y]))
+        Ok((vec!["m/z".into(), y_name], vec![mz, y]))
     }
 
     /// File → Export items for the active run; save dialogs run on the UI thread like the NetCDF export.
@@ -147,61 +140,63 @@ impl App {
         let Some(name) = self.runs.get(self.active).map(|r| r.name.clone()) else {
             return;
         };
-        let save = |what: &str, kind: &str, ext: &str| {
-            rfd::FileDialog::new()
-                .add_filter(kind, &[ext])
-                .set_file_name(format!("{name}-{what}.{ext}"))
-                .save_file()
-        };
         let mut result = None;
-        if ui
-            .button("Export chromatogram as CSV…")
-            .on_hover_text("Save the plotted chromatogram traces as a table")
-            .clicked()
-            && let Some(p) = save("chromatogram", "CSV", "csv")
-        {
-            result = Some(self.chromatogram_csv(&p));
-        }
-        if ui
-            .button("Export spectrum as CSV…")
-            .on_hover_text("Save the shown spectrum (m/z and intensity) as a table")
-            .clicked()
-            && let Some(p) = save("spectrum", "CSV", "csv")
-        {
-            result = Some(self.spectrum_csv(&p));
-        }
-        for (label, what, rect) in [
+        for (what, area, table) in [
             (
-                "Export chromatogram as PNG…",
                 "chromatogram",
                 self.export.chromatograms,
+                self.chromatogram_table(),
             ),
-            ("Export spectrum as PNG…", "spectrum", self.export.spectrum),
+            ("spectrum", self.export.spectrum, self.spectrum_table()),
         ] {
-            if ui
-                .button(label)
-                .on_hover_text("Save the plot as it is shown on screen")
-                .clicked()
-                && let Some(path) = save(what, "PNG image", "png")
-            {
-                // The screenshot is read after the next frame, so the dialog is gone from it.
-                let (ctx, errors) = (ui.ctx().clone(), self.export.errors.0.clone());
-                let ppp = ctx.pixels_per_point();
-                ctx.request_screenshot(move |shot| {
-                    if let Err(e) = write_png(&path, &shot, rect, ppp) {
-                        errors.send(e).ok();
+            ui.menu_button(format!("Export {what}"), |ui| {
+                let (header, columns) = match &table {
+                    Ok(t) => (&t.0, &t.1),
+                    Err(e) => {
+                        ui.label(e);
+                        return;
                     }
-                });
-            }
+                };
+                let hdr: Vec<&str> = header.iter().map(String::as_str).collect();
+                let cols: Vec<&[f64]> = columns.iter().map(Vec::as_slice).collect();
+                if ui
+                    .button("As CSV…")
+                    .on_hover_text("Save the plotted values as a table")
+                    .clicked()
+                    && let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV", &["csv"])
+                        .set_file_name(format!("{name}-{what}.csv"))
+                        .save_file()
+                {
+                    result = Some(write_file(&p, |w| write_columns(w, &hdr, &cols)));
+                    ui.close();
+                }
+                if ui
+                    .button("Copy data")
+                    .on_hover_text("Copy the plotted values as tab-separated text")
+                    .clicked()
+                {
+                    let mut text = Vec::new();
+                    match write_tsv(&mut text, &hdr, &cols) {
+                        Ok(()) => ui
+                            .ctx()
+                            .copy_text(String::from_utf8_lossy(&text).into_owned()),
+                        Err(e) => result = Some(Err(e.to_string())),
+                    }
+                    ui.close();
+                }
+                ui.separator();
+                plot_export::entries(ui, area, &format!("{name}-{what}"));
+            });
         }
         if let Some(Err(e)) = result {
             self.error = Some(e);
         }
     }
 
-    /// Shows errors of finished screenshot exports.
-    pub fn poll_export(&mut self) {
-        if let Ok(e) = self.export.errors.1.try_recv() {
+    /// Runs a picture export asked for in the last frame and shows errors of finished ones.
+    pub fn poll_export(&mut self, ctx: &egui::Context) {
+        if let Some(e) = plot_export::finish(ctx) {
             self.error = Some(e);
         }
     }

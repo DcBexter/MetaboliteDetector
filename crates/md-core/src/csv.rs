@@ -5,23 +5,41 @@ use std::io::{self, Write};
 
 /// Writes `header` and then one row per index of the equally long `columns`.
 pub fn write_columns(out: &mut impl Write, header: &[&str], columns: &[&[f64]]) -> io::Result<()> {
+    let names: Vec<String> = header.iter().map(|h| quote(h)).collect();
+    write_rows(out, &names, columns, ',')
+}
+
+/// The same table tab-separated, as spreadsheets paste it; tabs and line breaks in names become spaces.
+pub fn write_tsv(out: &mut impl Write, header: &[&str], columns: &[&[f64]]) -> io::Result<()> {
+    let names: Vec<String> = header
+        .iter()
+        .map(|h| h.replace(['\t', '\n', '\r'], " "))
+        .collect();
+    write_rows(out, &names, columns, '\t')
+}
+
+fn write_rows(
+    out: &mut impl Write,
+    names: &[String],
+    columns: &[&[f64]],
+    sep: char,
+) -> io::Result<()> {
     let rows = columns.first().map_or(0, |c| c.len());
-    if header.len() != columns.len() || columns.iter().any(|c| c.len() != rows) {
+    if names.len() != columns.len() || columns.iter().any(|c| c.len() != rows) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "CSV columns differ in length",
         ));
     }
-    let names: Vec<String> = header.iter().map(|h| quote(h)).collect();
-    writeln!(out, "{}", names.join(","))?;
+    writeln!(out, "{}", names.join(&sep.to_string()))?;
     for r in 0..rows {
         for (i, c) in columns.iter().enumerate() {
             if i > 0 {
-                out.write_all(b",")?;
+                write!(out, "{sep}")?;
             }
             write!(out, "{}", c[r])?;
         }
-        out.write_all(b"\n")?;
+        writeln!(out)?;
     }
     Ok(())
 }
@@ -38,6 +56,13 @@ pub fn quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tsv_uses_tabs() {
+        let mut out = Vec::new();
+        write_tsv(&mut out, &["a\tb", "c"], &[&[1.5], &[2.0]]).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a b\tc\n1.5\t2\n");
+    }
 
     #[test]
     fn rows_match_the_input_values() {

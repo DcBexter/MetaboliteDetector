@@ -1,8 +1,6 @@
 //! Biomarker statistics window (F14, F15): two-group table, box plots and PCA of the batch table
 //! the user sees. The numbers come from `md_core::stats`.
 
-use std::sync::mpsc;
-
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -13,7 +11,8 @@ use md_core::batch::Table;
 use md_core::normalize::POOL_GROUP;
 use md_core::stats::{self, Biomarker, Pca, Samples, TwoGroups};
 
-use crate::export::{write_file, write_png};
+use crate::export::write_file;
+use crate::plot_export::{self, Area};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -53,8 +52,6 @@ pub struct Statistics {
     cache: Option<Cache>,
     pca: Option<(u64, bool, Result<Pca, String>)>,
     note: String,
-    /// Errors of screenshot callbacks, which run after the frame that asked for them.
-    errors: (mpsc::Sender<String>, mpsc::Receiver<String>),
 }
 
 /// Comparison of the table generation `0` with the groups and options in `1`.
@@ -79,7 +76,6 @@ impl Default for Statistics {
             cache: None,
             pca: None,
             note: String::new(),
-            errors: mpsc::channel(),
         }
     }
 }
@@ -333,9 +329,6 @@ impl Statistics {
 impl Statistics {
     /// `table` is the batch table as shown (normalised), with a number that changes with it.
     pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>, z_scored: bool) {
-        if let Ok(e) = self.errors.1.try_recv() {
-            self.note = e;
-        }
         self.z_scored = z_scored;
         let mut open = self.open;
         egui::Window::new("Biomarker statistics")
@@ -498,7 +491,8 @@ impl Statistics {
                 )
             })
             .collect();
-        let plot = Plot::new("biomarker box plot")
+        let top = ui.cursor().min;
+        Plot::new("biomarker box plot")
             .x_axis_label("Replicate group")
             .y_axis_label("Intensity")
             .x_axis_formatter(move |m, _| {
@@ -510,7 +504,7 @@ impl Statistics {
                 }
             })
             .show(ui, |p| p.box_plot(BoxPlot::new("boxes", boxes)));
-        self.png_button(ui, plot.response.rect, "box-plot");
+        plot_export::button(ui, Area::since(ui, top), "box-plot");
     }
 
     fn pca_tab(&mut self, ui: &mut egui::Ui, generation: u64, t: &Table) {
@@ -559,41 +553,24 @@ impl Statistics {
                 }
             }
         });
-        let rect = match self.pca_view {
+        let top = ui.cursor().min;
+        match self.pca_view {
             PcaView::Scores => scores_plot(ui, t, p, self.pc),
             PcaView::Loadings => loadings_plot(ui, t, p, self.pc),
             PcaView::Variance => variance_plot(ui, p),
-        };
+        }
+        let area = Area::since(ui, top);
         let name = match self.pca_view {
             PcaView::Scores => "pca-scores",
             PcaView::Loadings => "pca-loadings",
             PcaView::Variance => "pca-variance",
         };
-        self.png_button(ui, rect, name);
-    }
-
-    /// Saves the plot area as PNG: a crop of egui's own screenshot, like the chromatogram export.
-    fn png_button(&mut self, ui: &mut egui::Ui, rect: egui::Rect, what: &str) {
-        if ui.button("Save PNG…").clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter("PNG image", &["png"])
-                .set_file_name(format!("{what}.png"))
-                .save_file()
-        {
-            // The screenshot is read after the next frame, so the dialog is gone from it.
-            let (ctx, errors) = (ui.ctx().clone(), self.errors.0.clone());
-            let ppp = ctx.pixels_per_point();
-            ctx.request_screenshot(move |shot| {
-                if let Err(e) = write_png(&path, &shot, rect, ppp) {
-                    errors.send(e).ok();
-                }
-            });
-        }
+        plot_export::button(ui, area, name);
     }
 }
 
-/// Samples in the plane of two components, one colour per replicate group. Returns the plot area.
-fn scores_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui::Rect {
+/// Samples in the plane of two components, one colour per replicate group.
+fn scores_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) {
     let label = |c: usize| format!("PC{} ({:.1} %)", c + 1, 100.0 * p.proportion[c]);
     let mut groups: Vec<&str> = Vec::new();
     for c in &p.samples {
@@ -622,13 +599,11 @@ fn scores_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui::R
                     plot.text(Text::new("", at(i).into(), text).anchor(egui::Align2::LEFT_BOTTOM));
                 }
             }
-        })
-        .response
-        .rect
+        });
 }
 
 /// The substances with the largest weight in the two components ("impact of metabolites").
-fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui::Rect {
+fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) {
     const SHOWN: usize = 25;
     let weight = |j: usize| p.loadings[pc[0]][j].hypot(p.loadings[pc[1]][j]);
     let mut order: Vec<usize> = (0..p.rows.len()).collect();
@@ -668,13 +643,11 @@ fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) -> egui:
                     .horizontal()
                     .color(color(1)),
             );
-        })
-        .response
-        .rect
+        });
 }
 
 /// Share of the variance per component and the running total.
-fn variance_plot(ui: &mut egui::Ui, p: &Pca) -> egui::Rect {
+fn variance_plot(ui: &mut egui::Ui, p: &Pca) {
     let mut sum = 0.0;
     let cumulative: PlotPoints = p
         .proportion
@@ -698,7 +671,5 @@ fn variance_plot(ui: &mut egui::Ui, p: &Pca) -> egui::Rect {
         .show(ui, |plot| {
             plot.bar_chart(BarChart::new("single", bars).color(color(0)));
             plot.line(Line::new("cumulative", cumulative).color(color(1)));
-        })
-        .response
-        .rect
+        });
 }
