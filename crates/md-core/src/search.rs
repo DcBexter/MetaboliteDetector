@@ -72,6 +72,54 @@ pub struct PreparedLibrary {
     /// RI per entry; `None` where the library has none (old value -1).
     ris: Vec<Option<f64>>,
     rt_only: bool,
+    /// Fragment ions per entry (old `red_spectrum.frag`), ascending: entry `i` owns
+    /// `frag_offsets[i]..frag_offsets[i + 1]`.
+    frag_offsets: Vec<usize>,
+    frag_ions: Vec<u32>,
+    fragment_filter: bool,
+}
+
+/// `SQL_MAX_NUMBER_FRAGMENTS`: the strongest query fragments the pre-filter compares.
+const MAX_FRAGMENTS: usize = 5;
+/// `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`, applied as `hits > 3`: an entry must share at least 4 of them.
+const MIN_EQUAL_FRAGMENTS: usize = 3;
+
+/// Old `Spectrum::getSpectrumFragments` and `Fragment` (file-formats.md §6.3) over ascending, unique
+/// masses: a fragment is a falling run (each next mass is 1 higher with a lower intensity) holding at
+/// least 1 % of the total signal, extended downwards by the lone peaks right below it (M-1, M-2, …).
+/// Returns (ion, summed intensity), the ion being the most intense mass (the lowest on ties).
+fn fragments(peaks: &[(u32, f64)]) -> Vec<(u32, f64)> {
+    let total: f64 = peaks.iter().map(|p| p.1).sum();
+    let mut lone = vec![false; peaks.len()];
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, &(m, v)) in peaks.iter().enumerate() {
+        let falls = peaks.get(i + 1).is_some_and(|&(n, w)| n == m + 1 && v > w);
+        match (falls, start) {
+            (true, None) => start = Some(i),
+            (true, Some(_)) => {}
+            (false, Some(s)) => {
+                let sum: f64 = peaks[s..=i].iter().map(|p| p.1).sum();
+                if 100.0 * sum / total >= 1.0 {
+                    runs.push((s, i));
+                }
+                start = None;
+            }
+            (false, None) => lone[i] = true,
+        }
+    }
+    runs.into_iter()
+        .map(|(mut s, e)| {
+            while s > 0 && lone[s - 1] && peaks[s - 1].0 + 1 == peaks[s].0 {
+                s -= 1;
+            }
+            let run = &peaks[s..=e];
+            let ion = run
+                .iter()
+                .fold(run[0], |a, &p| if p.1 > a.1 { p } else { a });
+            (ion.0, run.iter().map(|p| p.1).sum())
+        })
+        .collect()
 }
 
 impl PreparedLibrary {
@@ -99,8 +147,11 @@ impl PreparedLibrary {
             norms: Vec::new(),
             ris: Vec::new(),
             rt_only,
+            frag_offsets: vec![0],
+            frag_ions: Vec::new(),
+            fragment_filter: false,
         };
-        let mut peaks = Vec::new();
+        let (mut peaks, mut merged) = (Vec::new(), Vec::new());
         for c in library {
             // shortcut: rounds to nominal mass and sums, because the old getBinnedCentroidCompound is not
             // decoded (§5.9) and components are unit-mass; high-resolution search needs the old binning.
@@ -114,17 +165,27 @@ impl PreparedLibrary {
                     .map(|(m, v)| (m.round() as u32, *v as f64)),
             );
             peaks.sort_unstable_by_key(|p| p.0);
+            merged.clear();
+            merged.extend(
+                peaks
+                    .chunk_by(|a, b| a.0 == b.0)
+                    .map(|c| (c[0].0, c.iter().map(|p| p.1).sum::<f64>())),
+            );
             let mut norm = 0.0;
-            for chunk in peaks.chunk_by(|a, b| a.0 == b.0) {
-                let mass = chunk[0].0;
+            for &(mass, v) in &merged {
                 if s.filtered(mass) {
                     continue;
                 }
-                let v = s.scale(mass, chunk.iter().map(|p| p.1).sum());
+                let v = s.scale(mass, v);
                 lib.masses.push(mass);
                 lib.values.push(v);
                 norm += v * v;
             }
+            // The old index is built from the stored spectrum, before mass filter and scaling.
+            // Runs are disjoint and in mass order, so the ions come out ascending.
+            lib.frag_ions
+                .extend(fragments(&merged).into_iter().map(|f| f.0));
+            lib.frag_offsets.push(lib.frag_ions.len());
             lib.offsets.push(lib.masses.len());
             lib.norms.push(norm);
             lib.ris.push(known_ri(ri(c)));
@@ -135,6 +196,13 @@ impl PreparedLibrary {
     /// Built with [`Self::new_rt_only`].
     pub fn is_rt_only(&self) -> bool {
         self.rt_only
+    }
+
+    /// Old NIST search (`SQLLibrary::getPotentialHits`): only entries that share at least 4 of the 5
+    /// strongest fragments of the component are scored. Use for [`crate::library::is_nist`] libraries.
+    pub fn with_fragment_filter(mut self, on: bool) -> Self {
+        self.fragment_filter = on;
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -195,8 +263,22 @@ pub fn library_hits(
     }
     let ri = ri.and_then(known_ri);
     let nm2 = s.no_match * s.no_match;
+    let query: Option<Vec<u32>> = lib.fragment_filter.then(|| {
+        let peaks: Vec<_> = spectrum.iter().map(|&(m, h)| (m, h as f64)).collect();
+        let mut f = fragments(&peaks);
+        // Old `compare_intens` order: strongest first.
+        f.sort_by(|a, b| b.1.total_cmp(&a.1));
+        f.iter().take(MAX_FRAGMENTS).map(|f| f.0).collect()
+    });
     let mut hits: Vec<LibraryHit> = (0..lib.len())
         .filter_map(|k| {
+            if let Some(q) = &query {
+                let ions = &lib.frag_ions[lib.frag_offsets[k]..lib.frag_offsets[k + 1]];
+                let shared = q.iter().filter(|i| ions.binary_search(i).is_ok()).count();
+                if shared <= MIN_EQUAL_FRAGMENTS {
+                    return None;
+                }
+            }
             let ri_sim = ri.zip(lib.ris[k]).map(|(a, b)| ri_score(b, a, s.ri_diff));
             if s.use_ri && ri_sim.is_some_and(|r| r <= 0.0) {
                 return None;
@@ -580,5 +662,34 @@ mod tests {
             Some(1.0)
         );
         assert!(library_hits(&spectrum, Some(200.0), &lib, &s).is_empty());
+    }
+
+    #[test]
+    fn fragments_match_the_old_red_spectrum() {
+        let f = |p: &[(u32, f64)]| fragments(p);
+        // Rows the old importNIST wrote for the synthetic records (tests/data/synthetic-nist.sdf).
+        let kappa = [
+            (70, 5.0),
+            (71, 100.0),
+            (72, 12.0),
+            (77, 40.0),
+            (78, 9.0),
+            (91, 80.0),
+        ];
+        assert_eq!(f(&kappa), [(71, 117.0), (77, 49.0)]);
+        let lambda = [
+            (119, 10.0),
+            (120, 100.0),
+            (133, 100.0),
+            (134, 10.0),
+            (135, 50.0),
+            (150, 1.0),
+            (151, 1.0),
+            (200, 1000.0),
+        ];
+        // Rising pairs and lone peaks are no fragment; 135 rises again and stays alone.
+        assert_eq!(f(&lambda), [(133, 110.0)]);
+        // A falling run below 1 % of the total signal is dropped.
+        assert!(f(&[(100, 1.0), (101, 0.5), (200, 1000.0)]).is_empty());
     }
 }
