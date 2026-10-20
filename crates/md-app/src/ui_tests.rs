@@ -181,6 +181,15 @@ fn screenshots() {
         wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
         shots.save(&mut h, &format!("02-main-{tag}"));
         guided_shots(&shots, &mut h, tag);
+        // The triangles on the time axis stay with the derivative and in the SIC.
+        h.state_mut().view.derivative = true;
+        h.state_mut().trace = Trace::Both;
+        wait(&mut h, |a| {
+            a.runs
+                .iter()
+                .all(|r| r.sic_job.is_none() && !r.sic.is_empty())
+        });
+        shots.save(&mut h, &format!("02c-derivative-sic-{tag}"));
     }
     // The smallest window the layout is checked at: the spectrum must stay in view.
     let mut h = Harness::builder()
