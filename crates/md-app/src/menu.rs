@@ -105,9 +105,7 @@ impl App {
         }
         self.updater.menu(ui);
         ui.separator();
-        // Seam for #256: the guided mode switches on here once it exists.
-        ui.add_enabled(false, egui::Button::new("Guided mode"))
-            .on_disabled_hover_text("Comes with the guided mode");
+        crate::guided::switch(ui, &mut self.guided.mode);
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
@@ -120,7 +118,7 @@ impl App {
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.label("MIT licence");
                 ui.separator();
-                ui.label("Rewrite by Milan Burgmann. Original program (3.3, 2009): Karsten Hiller et al.");
+                ui.label("Rewrite (2026): vaultdex. Original program, version 3.3 (2009): the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.");
                 ui.label("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.");
                 ui.hyperlink_to("Source code", REPO);
             });
@@ -292,10 +290,9 @@ impl App {
                 ),
             ],
         ];
-        for (i, group) in groups.into_iter().enumerate() {
-            if i > 0 {
-                ui.separator();
-            }
+        self.flows_menu(ui);
+        for group in groups {
+            ui.separator();
             for (name, hint, open, needs_run) in group {
                 // Run info shows nothing without a run; the others explain their empty state.
                 if ui

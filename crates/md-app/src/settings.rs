@@ -167,6 +167,7 @@ impl Settings {
         &mut self,
         ctx: &egui::Context,
         libraries: [Option<&Path>; 2],
+        mode: &mut crate::guided::Mode,
         times: Option<&[f64]>,
     ) -> Option<Pick> {
         let mut open = self.open;
@@ -179,7 +180,10 @@ impl Settings {
                     .max_height(ui.available_height() - 60.0)
                     .show(ui, |ui| {
                         pick = self.libraries(ui, libraries);
-                        self.fields(ui, times);
+                        ui.strong(crate::guided::text::MODE);
+                        crate::guided::switch(ui, mode);
+                        ui.add_space(8.0);
+                        crate::guided::advanced(ui, "settings", |ui| self.fields(ui, times));
                     });
                 ui.separator();
                 self.buttons(ui, times);
