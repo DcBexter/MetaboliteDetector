@@ -27,6 +27,14 @@ struct Row {
     used: bool,
 }
 
+/// The calibration that RT-only alignment replaced.
+struct Saved {
+    cal: Option<Arc<RiCalibration>>,
+    source: String,
+    rows: Vec<Row>,
+    applied: Vec<Row>,
+}
+
 type RowsJob = (String, mpsc::Receiver<Result<Vec<Row>, String>>);
 
 pub struct Calibration {
@@ -43,6 +51,7 @@ pub struct Calibration {
     own: HashMap<PathBuf, Arc<RiCalibration>>,
     /// RT-only alignment: `cal` is the identity and the library is searched by its retention times.
     pub rt_only: bool,
+    saved: Option<Saved>,
     /// Calibration mix: names of library compounds with RI, and the text filtering the picker.
     mix: BTreeSet<String>,
     mix_filter: String,
@@ -76,6 +85,7 @@ impl Default for Calibration {
             applied: Vec::new(),
             own: HashMap::new(),
             rt_only: false,
+            saved: None,
             mix: BTreeSet::new(),
             mix_filter: String::new(),
             mix_job: None,
@@ -157,7 +167,9 @@ impl Calibration {
         if self.rows == self.applied {
             return;
         }
-        let used = (self.rows.iter().filter(|r| r.used)).map(|r| (r.rt_min * 60.0, r.ri));
+        // A time of 0 is a line just added by hand (no marker elutes then), not yet a point.
+        let used = (self.rows.iter().filter(|r| r.used && r.rt_min > 0.0))
+            .map(|r| (r.rt_min * 60.0, r.ri));
         match RiCalibration::new(used) {
             Ok(cal) => (self.cal, self.error) = (Some(Arc::new(cal)), None),
             Err(e) => self.error = Some(e.to_string()),
@@ -165,10 +177,42 @@ impl Calibration {
         self.applied = self.rows.clone();
     }
 
+    /// Adds an empty line by hand (markers without an alkane mix, e.g. FAMEs). It joins the calibration
+    /// once it is valid, see `apply_edits`.
+    fn add_point(&mut self) {
+        if self.rows.is_empty() {
+            self.source = "entered by hand".into();
+        }
+        self.rows.push(Row {
+            name: String::new(),
+            ri: 0.0,
+            rt_min: 0.0,
+            used: true,
+        });
+    }
+
     fn clear(&mut self) {
         (self.cal, self.job, self.mix_job) = (None, None, None);
-        (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
-        self.own.clear();
+        (self.rows, self.applied, self.rt_only, self.error) = (Vec::new(), Vec::new(), false, None);
+        (self.own, self.saved) = (HashMap::new(), None);
+    }
+
+    /// Switches RT-only alignment. The identity maps time to "RI" (the library is searched by its
+    /// retention times); the calibration in use before is kept and comes back when it is switched off.
+    fn set_rt_only(&mut self, on: bool) {
+        self.rt_only = on;
+        if on {
+            let saved = Saved {
+                cal: self.cal.take(),
+                source: std::mem::take(&mut self.source),
+                rows: std::mem::take(&mut self.rows),
+                applied: std::mem::take(&mut self.applied),
+            };
+            self.set(RiCalibration::identity(), "retention time only".into());
+            self.saved = Some(saved);
+        } else if let Some(s) = self.saved.take() {
+            (self.cal, self.source, self.rows, self.applied) = (s.cal, s.source, s.rows, s.applied);
+        }
     }
 
     pub fn window(
@@ -221,11 +265,7 @@ impl Calibration {
              are not reproducible and the results cannot be compared between instruments and labs.",
         );
         if self.rt_only != was {
-            // The identity maps time to "RI"; the library is searched by its retention times.
-            match self.rt_only {
-                true => self.set(RiCalibration::identity(), "retention time only".into()),
-                false => self.clear(),
-            }
+            self.set_rt_only(self.rt_only);
         }
         if self.rt_only {
             ui.colored_label(
@@ -398,6 +438,7 @@ impl Calibration {
             ui.label(
                 "Not calibrated: components have no RI, the library search uses the spectrum only.",
             );
+            self.add_point_button(ui);
             return;
         }
         ui.label(format!(
@@ -452,8 +493,22 @@ impl Calibration {
                         }
                     });
             });
+        self.add_point_button(ui);
         if !busy {
             self.apply_edits();
+        }
+    }
+
+    fn add_point_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Add point")
+            .on_hover_text(
+                "A new line for a marker you know (e.g. FAMEs): its time in this run and its RI. \
+                 At least two points with rising times and RIs make a calibration.",
+            )
+            .clicked()
+        {
+            self.add_point();
         }
     }
 
@@ -630,6 +685,62 @@ mod tests {
             peaks: Vec::new(),
             exact_spectrum: Vec::new(),
         }
+    }
+
+    #[test]
+    fn rt_only_off_brings_back_the_previous_calibration() {
+        let cal = RiCalibration::new([(60.0, 1000.0), (120.0, 1100.0)]).unwrap();
+        let mut c = Calibration::default();
+        c.set(cal.clone(), "x.calib".into());
+        let before = (c.cal.clone(), c.rows.clone());
+        c.set_rt_only(true);
+        assert_eq!(c.source, "retention time only");
+        c.set_rt_only(false);
+        assert_eq!((c.cal.clone(), c.rows.clone()), before);
+        assert_eq!(c.source, "x.calib");
+        assert_eq!(c.cal.as_deref(), Some(&cal));
+    }
+
+    #[test]
+    fn points_entered_by_hand_make_a_calibration() {
+        // FAME markers of the example run 7235eg08 (RT in s, RI).
+        let fames = [
+            (252.46, 262_320.0),
+            (311.36, 323_120.0),
+            (369.61, 381_020.0),
+        ];
+        let mut c = Calibration::default();
+        for (rt, ri) in fames {
+            c.add_point();
+            // The empty line the button adds (time 0) does not disturb the calibration so far.
+            let before = c.cal.clone();
+            c.apply_edits();
+            assert_eq!(c.cal, before);
+            let r = c.rows.last_mut().unwrap();
+            (r.rt_min, r.ri) = (rt / 60.0, ri);
+            // One point is not a calibration yet; the table keeps its error and no `cal`.
+            c.apply_edits();
+            assert_eq!(c.cal.is_some(), c.rows.len() > 1);
+        }
+        assert_eq!(c.source, "entered by hand");
+        assert!(c.error.is_none());
+        let cal = c.cal.as_ref().unwrap();
+        for (rt, ri) in fames {
+            assert!((cal.ri(rt) - ri).abs() < 1e-6);
+        }
+        // Switching a point off recalibrates from the rest.
+        c.rows[2].used = false;
+        c.apply_edits();
+        assert_eq!(c.cal.as_ref().unwrap().points().len(), 2);
+    }
+
+    #[test]
+    fn rt_only_off_without_calibration_stays_uncalibrated() {
+        let mut c = Calibration::default();
+        c.set_rt_only(true);
+        assert!(c.cal.is_some());
+        c.set_rt_only(false);
+        assert!(c.cal.is_none() && c.rows.is_empty() && c.source.is_empty() && !c.rt_only);
     }
 
     #[test]
