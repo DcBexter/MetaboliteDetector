@@ -233,29 +233,8 @@ impl Batch {
         });
     }
 
-    fn contents(
-        &mut self,
-        ui: &mut egui::Ui,
-        lib: Option<&Arc<Library>>,
-        cal: Option<&RiCalibration>,
-        reference: Option<(&str, f64)>,
-    ) {
-        ui.horizontal(|ui| {
-            if ui.button("Add runs…").clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("NetCDF", &["cdf", "CDF", "nc"])
-                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-                    .pick_files()
-            {
-                self.paths.extend(p);
-                self.paths.sort();
-                self.paths.dedup();
-            }
-            if ui.button("Clear").clicked() {
-                self.paths.clear();
-            }
-            ui.label(format!("{} runs", self.paths.len()));
-        });
+    /// Scan options, quant ions and the filters of the table.
+    fn settings_grid(&mut self, ui: &mut egui::Ui) {
         let s = &mut self.settings;
         egui::Grid::new("batch settings").show(ui, |ui| {
             ui.label("Runs in memory at once");
@@ -330,6 +309,32 @@ impl Batch {
             "Ion ranges (m/z from–to) never picked as quant ions.",
             &mut s.quant.excluded,
         );
+    }
+
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        lib: Option<&Arc<Library>>,
+        cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui.button("Add runs…").clicked()
+                && let Some(p) = rfd::FileDialog::new()
+                    .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                    .pick_files()
+            {
+                self.paths.extend(p);
+                self.paths.sort();
+                self.paths.dedup();
+            }
+            if ui.button("Clear").clicked() {
+                self.paths.clear();
+            }
+            ui.label(format!("{} runs", self.paths.len()));
+        });
+        self.settings_grid(ui);
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
                 let d = job.done.load(Relaxed);
