@@ -78,6 +78,11 @@ impl Edits {
         self.cols.is_none() && self.rows.is_empty()
     }
 
+    /// "Restore removed": brings back all runs and substances and the original order.
+    fn restore(&mut self) {
+        *self = Self::default();
+    }
+
     /// Applies what the user asked for in the shown table with `n` columns in the base table.
     fn apply(&mut self, act: Act, n: usize) {
         let mut cols = self.cols(n);
@@ -805,7 +810,7 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
                 )
                 .clicked()
         {
-            *edits = Edits::default();
+            edits.restore();
         }
     });
 }
@@ -1326,10 +1331,13 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
-        // After "Restore removed" (which resets the edits) the shown table is the whole one again.
-        n.edits = Edits::default();
+        // "Restore removed" brings back the runs, the substances and the original order.
+        n.kind = Kind::None;
+        n.edits.apply(Act::MoveRun(0, 1), 3);
+        n.edits.restore();
         let shown = shown_table(&t, &n, None);
-        assert_eq!((shown.runs.len(), shown.rows.len()), (3, 2));
+        assert_eq!(shown.runs, t.runs);
+        assert_eq!(shown.rows, t.rows);
     }
 
     #[test]
