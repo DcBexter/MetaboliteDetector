@@ -1258,42 +1258,47 @@ fn table_view(
         totals: totals.unwrap_or_default(),
     };
     let mut act = None;
-    egui::ScrollArea::horizontal().show(ui, |ui| {
-        // Rows have a fixed height, so cells must not wrap.
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-        TableBuilder::new(ui)
-            .id_salt("batch table")
-            .striped(true)
-            .column(Column::exact(28.0))
-            .column(Column::auto().at_least(160.0))
-            .columns(Column::auto(), 2)
-            .columns(Column::auto().at_least(70.0), heads.len())
-            .header(54.0, |mut h| {
-                h.col(|_| {});
-                for title in ["Substance", "RT (min)", "Quant ions"] {
-                    h.col(|ui| {
-                        ui.strong(title);
-                    });
-                }
-                for (j, (title, sub)) in heads.iter().enumerate() {
-                    h.col(|ui| {
-                        ui.vertical(|ui| {
+    // Both bars belong to this area, so they sit at the window edges. The table's own vertical bar
+    // would be at the far end of the wide table, out of sight; the header then scrolls with the rows.
+    egui::ScrollArea::both()
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            // Rows have a fixed height, so cells must not wrap.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            TableBuilder::new(ui)
+                .id_salt("batch table")
+                .vscroll(false)
+                .striped(true)
+                .column(Column::exact(28.0))
+                .column(Column::auto().at_least(160.0))
+                .columns(Column::auto(), 2)
+                .columns(Column::auto().at_least(70.0), heads.len())
+                .header(54.0, |mut h| {
+                    h.col(|_| {});
+                    for title in ["Substance", "RT (min)", "Quant ions"] {
+                        h.col(|ui| {
                             ui.strong(title);
-                            ui.label(sub);
-                            if v.mode != Mode::Groups {
-                                act = run_buttons(ui, j, heads.len()).or(act);
-                            }
                         });
+                    }
+                    for (j, (title, sub)) in heads.iter().enumerate() {
+                        h.col(|ui| {
+                            ui.vertical(|ui| {
+                                ui.strong(title);
+                                ui.label(sub);
+                                if v.mode != Mode::Groups {
+                                    act = run_buttons(ui, j, heads.len()).or(act);
+                                }
+                            });
+                        });
+                    }
+                })
+                .body(|rows| {
+                    rows.rows(18.0, lines.len(), |mut row| {
+                        let line = lines[row.index()];
+                        act = body.draw(&mut row, line).or(act);
                     });
-                }
-            })
-            .body(|rows| {
-                rows.rows(18.0, lines.len(), |mut row| {
-                    let line = lines[row.index()];
-                    act = body.draw(&mut row, line).or(act);
                 });
-            });
-    });
+        });
     act
 }
 
