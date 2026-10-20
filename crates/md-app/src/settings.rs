@@ -1,5 +1,6 @@
-//! Settings of the old version (`AN_*`, `LS_*`, `QUANT_*`, …): a dialog with the old defaults, load and
-//! save of the old settings file, and the background re-analysis of open runs when they change.
+//! Settings of the old version: a dialog with plain names (the old `AN_*`, `LS_*`, … keys on hover),
+//! the old defaults, load and save of the old settings file, and the background re-analysis of open
+//! runs when they change.
 
 use std::io::Read;
 use std::ops::RangeInclusive;
@@ -127,26 +128,41 @@ impl Settings {
 
     fn buttons(&mut self, ui: &mut egui::Ui) {
         let valid = self.draft.validate();
+        let fix = "Fix the value shown in red first (it names the old key)";
         ui.horizontal(|ui| {
             let changed = self.draft != self.applied;
             if ui
                 .add_enabled(valid.is_ok() && changed, egui::Button::new("Apply"))
                 .on_hover_text("Re-runs peak detection, deconvolution and the library search")
+                .on_disabled_hover_text(if valid.is_ok() {
+                    "Nothing changed"
+                } else {
+                    fix
+                })
                 .clicked()
             {
                 self.applied = self.draft.clone();
                 self.note = None;
             }
-            if ui.button("Old defaults").clicked() {
+            if ui
+                .button("Old defaults")
+                .on_hover_text("Fill in the old version's defaults; Apply uses them")
+                .clicked()
+            {
                 self.draft = GcmsSettings::default();
             }
-            if ui.button("Load…").clicked()
+            if ui
+                .button("Load…")
+                .on_hover_text("Read an old GCMSSettings file and apply it")
+                .clicked()
                 && let Some(path) = dialog().pick_file()
             {
                 self.note = Some(self.load(&path));
             }
             if ui
                 .add_enabled(valid.is_ok(), egui::Button::new("Save…"))
+                .on_hover_text("Write these values as an old GCMSSettings file")
+                .on_disabled_hover_text(fix)
                 .clicked()
                 && let Some(path) = dialog().set_file_name("GCMSSettings").save_file()
             {
@@ -186,11 +202,11 @@ impl Settings {
 
     fn fields(&mut self, ui: &mut egui::Ui) {
         let d = &mut self.draft;
-        ui.strong("Peak detection and deconvolution (AN_*)");
+        ui.strong("Peak detection and deconvolution");
         egui::Grid::new("an").num_columns(2).show(ui, |ui| {
-            ui.label("Peak detection method").on_hover_text(
-                "Matched Filtering: the old Calibration Setter's matched peak detector.",
-            );
+            let hint = "Default: the old version's slope detector. \
+                Matched Filtering: the old Calibration Setter's matched peak detector.";
+            let label = ui.label("Peak detection method").on_hover_text(hint);
             egui::ComboBox::from_id_salt("detector")
                 .selected_text(match d.peak_detector {
                     Detector::Default => "Default",
@@ -203,199 +219,240 @@ impl Settings {
                     if ui.selectable_label(matched, "Matched Filtering").clicked() && !matched {
                         d.peak_detector = Detector::MATCHED;
                     }
-                });
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text(hint);
             ui.end_row();
             if let Detector::Matched { width, threshold } = &mut d.peak_detector {
-                ui.label("Peak width").on_hover_text(
-                    "Scans; the filter density is 4 × width. The thresholds below are not used.",
+                row(
+                    ui,
+                    "Peak width",
+                    "",
+                    "Scans; the filter density is 4 × width. The slopes and Minimum S/N below are not used.",
+                    egui::DragValue::new(width).range(1..=1000),
                 );
-                ui.add(egui::DragValue::new(width).range(1..=1000));
-                ui.end_row();
-                i32_row(
+                row(
                     ui,
                     "Peak threshold",
+                    "",
                     "A peak is a region where the filtered trace lies above this.",
-                    threshold,
-                    -1_000_000_000..=1_000_000_000,
+                    egui::DragValue::new(threshold).range(-1_000_000_000..=1_000_000_000),
                 );
             }
-            f64_row(
+            row(
                 ui,
+                "Peak start slope",
                 "AN_PEAK_THRESHOLD_BEGIN",
                 "Smoothed slope that starts a peak.",
-                &mut d.an_peak_threshold_begin,
+                num(&mut d.an_peak_threshold_begin, ANY),
             );
-            f64_row(
+            row(
                 ui,
+                "Peak end slope",
                 "AN_PEAK_THRESHOLD_END",
-                "Falling flank ends once the slope stays above this.",
-                &mut d.an_peak_threshold_end,
+                "The falling flank ends once the slope stays above this.",
+                num(&mut d.an_peak_threshold_end, ANY),
             );
-            range_row(
+            row(
                 ui,
+                "Minimum S/N",
                 "AN_MIN_PEAK_HEIGHT",
-                "Minimum height above the baseline in noise units (S/N).",
-                &mut d.an_min_peak_height,
-                0.0..=1e9,
+                "Minimum height above the baseline, in noise units.",
+                num(&mut d.an_min_peak_height, 0.0..=1e9),
             );
-            i32_row(
+            row(
                 ui,
+                "Apex steps per scan",
                 "AN_NUMBER_BINS",
-                "Sub-scan steps of the precise apex.",
-                &mut d.an_number_bins,
-                1..=100,
+                "Sub-scan steps for locating the precise apex.",
+                egui::DragValue::new(&mut d.an_number_bins).range(1..=100),
             );
-            range_row(
+            row(
                 ui,
+                "Deconvolution width",
                 "AN_DECONVOLUTION_WIDTH",
                 "Width in scans of the matched filter over the apex histogram.",
-                &mut d.an_deconvolution_width,
-                0.1..=100.0,
+                num(&mut d.an_deconvolution_width, 0.1..=100.0),
             );
-            i32_row(
+            row(
                 ui,
+                "Minimum ions per component",
                 "AN_MIN_PEAK_NUMBER",
-                "Minimum ion peaks per component.",
-                &mut d.an_min_peak_number,
-                1..=10_000,
+                "Components with fewer ion peaks are dropped.",
+                egui::DragValue::new(&mut d.an_min_peak_number).range(1..=10_000),
             );
-            range_row(
+            row(
                 ui,
+                "Minimum share of base peak",
                 "AN_MIN_HEIGHT_BP",
                 "Ions below this fraction of the base peak leave the spectrum (0 = keep all).",
-                &mut d.an_min_height_bp,
-                0.0..=1.0,
+                num(&mut d.an_min_height_bp, 0.0..=1.0),
             );
-            bool_row(
+            row(
                 ui,
+                "Integrate fitted model",
                 "AN_MODELED_VALUES_FOR_INTEGRATION",
                 "Integrate the fitted model instead of the raw trace.",
-                &mut d.an_modeled_values_for_integration,
+                egui::Checkbox::without_text(&mut d.an_modeled_values_for_integration),
             );
         });
         ranges(
             ui,
-            "QUANT_EXCL_IONS",
-            "Ion ranges (m/z from–to) not used for the model peak.",
+            "Ions left out of the model peak",
+            &explain(
+                "Ion ranges (m/z from–to) not used for the model peak.",
+                "QUANT_EXCL_IONS",
+            ),
             &mut d.quant_excl_ions,
         );
 
         ui.add_space(8.0);
-        ui.strong("Library search (LS_*)");
+        ui.strong("Library search");
         egui::Grid::new("ls").num_columns(2).show(ui, |ui| {
-            range_row(
+            row(
                 ui,
+                "RI tolerance (sigma)",
                 "LS_RI_DIFF",
                 "Sigma of the RI score; differences above 3 sigma score 0.",
-                &mut d.ls_ri_diff,
-                1e-6..=1e9,
+                num(&mut d.ls_ri_diff, 1e-6..=1e9),
             );
-            range_row(
+            row(
                 ui,
+                "Pure spectrum weight",
                 "LS_PURE_FACTOR",
                 "Weight of the pure spectrum score.",
-                &mut d.ls_pure_factor,
-                0.0..=1e9,
+                num(&mut d.ls_pure_factor, 0.0..=1e9),
             );
-            range_row(
+            row(
                 ui,
+                "Impure spectrum weight",
                 "LS_IMPURE_FACTOR",
                 "Weight of the impure spectrum score.",
-                &mut d.ls_impure_factor,
-                0.0..=1e9,
+                num(&mut d.ls_impure_factor, 0.0..=1e9),
             );
-            f64_row(
+            row(
                 ui,
+                "Mass exponent",
                 "LS_SCALE_FACTOR_ION",
-                "Peaks are weighted as mass^a · intensity^b: a.",
-                &mut d.ls_scale_factor_ion,
+                "Peaks are weighted as mass^a · intensity^b: this is a.",
+                num(&mut d.ls_scale_factor_ion, ANY),
             );
-            f64_row(
+            row(
                 ui,
+                "Intensity exponent",
                 "LS_SCALE_FACTOR_VALUE",
-                "… and b.",
-                &mut d.ls_scale_factor_value,
+                "Peaks are weighted as mass^a · intensity^b: this is b.",
+                num(&mut d.ls_scale_factor_value, ANY),
             );
-            f64_row(
+            row(
                 ui,
+                "Unmatched peak factor",
                 "LS_SCALE_FACTOR_NO_MATCH",
                 "Factor for peaks without a partner in the other spectrum.",
-                &mut d.ls_scale_factor_no_match,
+                num(&mut d.ls_scale_factor_no_match, ANY),
             );
-            bool_row(
+            row(
                 ui,
+                "Use RI score",
                 "LS_USE_RI",
-                "RI score counts in the overall score.",
-                &mut d.ls_use_ri,
+                "The RI score counts in the overall score.",
+                egui::Checkbox::without_text(&mut d.ls_use_ri),
             );
-            bool_row(
+            row(
                 ui,
+                "Use spectrum score",
                 "LS_USE_SPEC",
-                "Spectrum score counts in the overall score.",
-                &mut d.ls_use_spec,
+                "The spectrum score counts in the overall score.",
+                egui::Checkbox::without_text(&mut d.ls_use_spec),
             );
         });
         ranges(
             ui,
-            "LS_MASS_FILTER",
-            "Mass ranges (m/z from–to) ignored in both spectra.",
+            "Ignored masses",
+            &explain(
+                "Mass ranges (m/z from–to) ignored in both spectra.",
+                "LS_MASS_FILTER",
+            ),
             &mut d.ls_mass_filter,
         );
 
         ui.add_space(8.0);
         egui::CollapsingHeader::new("Stored in the file, not used yet").show(ui, |ui| {
+            let unused = "Kept in the settings file; this version does not use it.";
             egui::Grid::new("stored").num_columns(2).show(ui, |ui| {
-                f64_row(
+                let stored: [(&str, &str, &mut f64); 10] = [
+                    (
+                        "Spectrum filter: peak start",
+                        "SF_PEAK_THRESHOLD_BEGIN",
+                        &mut d.sf_peak_threshold_begin,
+                    ),
+                    (
+                        "Spectrum filter: peak end",
+                        "SF_PEAK_THRESHOLD_END",
+                        &mut d.sf_peak_threshold_end,
+                    ),
+                    (
+                        "Spectrum filter: baseline deviation",
+                        "SF_MAX_BASE_DEV",
+                        &mut d.sf_max_base_dev,
+                    ),
+                    ("Spectrum filter: FWHM", "SF_FWHM", &mut d.sf_fwhm),
+                    (
+                        "Centroid: peak start",
+                        "SF_CENTROID_THRESHOLD_BEGIN",
+                        &mut d.sf_centroid_threshold_begin,
+                    ),
+                    (
+                        "Centroid: peak end",
+                        "SF_CENTROID_THRESHOLD_END",
+                        &mut d.sf_centroid_threshold_end,
+                    ),
+                    (
+                        "Centroid: baseline deviation",
+                        "SF_CENTROID_MAX_BASE_DEV",
+                        &mut d.sf_centroid_max_base_dev,
+                    ),
+                    (
+                        "Peak baseline deviation",
+                        "AN_MAX_BASE_DEV",
+                        &mut d.an_max_base_dev,
+                    ),
+                    (
+                        "Quant ion minimum distance",
+                        "QUANT_MIN_DIST_IONS",
+                        &mut d.quant_min_dist_ions,
+                    ),
+                    (
+                        "Quant quality cutoff",
+                        "QUANT_QUALITY_CUTOFF",
+                        &mut d.quant_quality_cutoff,
+                    ),
+                ];
+                for (name, key, v) in stored {
+                    row(ui, name, key, unused, num(v, ANY));
+                }
+                row(
                     ui,
-                    "SF_PEAK_THRESHOLD_BEGIN",
-                    "",
-                    &mut d.sf_peak_threshold_begin,
+                    "Search resolution",
+                    "LS_RESOLUTION",
+                    unused,
+                    num(&mut d.ls_resolution, -1e9..=1e9),
                 );
-                f64_row(
+                row(
                     ui,
-                    "SF_PEAK_THRESHOLD_END",
-                    "",
-                    &mut d.sf_peak_threshold_end,
+                    "Use scaled library",
+                    "LS_USE_SCALED_LIB",
+                    unused,
+                    egui::Checkbox::without_text(&mut d.ls_use_scaled_lib),
                 );
-                f64_row(ui, "SF_MAX_BASE_DEV", "", &mut d.sf_max_base_dev);
-                f64_row(ui, "SF_FWHM", "", &mut d.sf_fwhm);
-                f64_row(
+                row(
                     ui,
-                    "SF_CENTROID_THRESHOLD_BEGIN",
-                    "",
-                    &mut d.sf_centroid_threshold_begin,
-                );
-                f64_row(
-                    ui,
-                    "SF_CENTROID_THRESHOLD_END",
-                    "",
-                    &mut d.sf_centroid_threshold_end,
-                );
-                f64_row(
-                    ui,
-                    "SF_CENTROID_MAX_BASE_DEV",
-                    "",
-                    &mut d.sf_centroid_max_base_dev,
-                );
-                f64_row(
-                    ui,
-                    "AN_MAX_BASE_DEV",
-                    "The old peak detector does not read it.",
-                    &mut d.an_max_base_dev,
-                );
-                let mut res = d.ls_resolution as f64;
-                f64_row(ui, "LS_RESOLUTION", "", &mut res);
-                d.ls_resolution = res as f32;
-                bool_row(ui, "LS_USE_SCALED_LIB", "", &mut d.ls_use_scaled_lib);
-                i32_row(
-                    ui,
+                    "Quant ions",
                     "QUANT_ION_NUMBER",
-                    "",
-                    &mut d.quant_ion_number,
-                    0..=10_000,
+                    unused,
+                    egui::DragValue::new(&mut d.quant_ion_number).range(0..=10_000),
                 );
-                f64_row(ui, "QUANT_MIN_DIST_IONS", "", &mut d.quant_min_dist_ions);
-                f64_row(ui, "QUANT_QUALITY_CUTOFF", "", &mut d.quant_quality_cutoff);
             });
         });
     }
@@ -406,57 +463,68 @@ fn dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
 }
 
-fn f64_row(ui: &mut egui::Ui, name: &str, hint: &str, v: &mut f64) {
-    range_row(ui, name, hint, v, -1e9..=1e9);
+const ANY: RangeInclusive<f64> = -1e9..=1e9;
+
+/// What a setting does, then its key in the old 3.3 settings file.
+fn explain(hint: &str, key: &str) -> String {
+    match key {
+        "" => hint.to_owned(),
+        _ => format!("{hint}\nOld key: {key}"),
+    }
 }
 
-fn range_row(ui: &mut egui::Ui, name: &str, hint: &str, v: &mut f64, range: RangeInclusive<f64>) {
-    ui.label(name).on_hover_text(hint);
-    ui.add(
-        egui::DragValue::new(v)
-            .range(range)
-            .speed(0.1)
-            .max_decimals(6),
-    );
+/// One grid row: the plain name, then the field it names; both explain on hover.
+fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: impl egui::Widget) {
+    let hint = explain(hint, key);
+    let label = ui.label(name).on_hover_text(&hint);
+    ui.add(field).labelled_by(label.id).on_hover_text(hint);
     ui.end_row();
 }
 
-fn i32_row(ui: &mut egui::Ui, name: &str, hint: &str, v: &mut i32, range: RangeInclusive<i32>) {
-    ui.label(name).on_hover_text(hint);
-    ui.add(egui::DragValue::new(v).range(range));
-    ui.end_row();
-}
-
-fn bool_row(ui: &mut egui::Ui, name: &str, hint: &str, v: &mut bool) {
-    ui.label(name).on_hover_text(hint);
-    ui.checkbox(v, "");
-    ui.end_row();
+fn num<N: egui::emath::Numeric>(v: &mut N, range: RangeInclusive<N>) -> egui::DragValue<'_> {
+    egui::DragValue::new(v)
+        .range(range)
+        .speed(0.1)
+        .max_decimals(6)
 }
 
 /// Editable list of inclusive m/z ranges.
 pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(name).on_hover_text(hint);
+    let list_name = ui.horizontal(|ui| {
+        let list_name = ui.label(name).on_hover_text(hint);
         if ui.small_button("+").on_hover_text("Add a range").clicked() {
             list.push((0.0, 0.0));
         }
+        list_name.id
     });
+    let list_name = list_name.inner;
     let mut remove = None;
     for (i, (lo, hi)) in list.iter_mut().enumerate() {
         ui.horizontal(|ui| {
+            let from = ui.label("from");
             ui.add(
                 egui::DragValue::new(lo)
                     .range(0.0..=100_000.0)
                     .max_decimals(2),
-            );
-            ui.label("–");
+            )
+            .labelled_by(list_name)
+            .labelled_by(from.id)
+            .on_hover_text(hint);
+            let to = ui.label("to");
             ui.add(
                 egui::DragValue::new(hi)
                     .range(0.0..=100_000.0)
                     .max_decimals(2),
-            );
-            if ui.small_button("×").clicked() {
+            )
+            .labelled_by(list_name)
+            .labelled_by(to.id)
+            .on_hover_text(hint);
+            if ui
+                .small_button("×")
+                .on_hover_text("Remove this range")
+                .clicked()
+            {
                 remove = Some(i);
             }
         });
