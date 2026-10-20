@@ -56,6 +56,16 @@ impl App {
         if !self.runs.is_empty() {
             ui.menu_button("Export as NetCDF", |ui| self.netcdf_menu(ui));
         }
+        if ui
+            .add_enabled(
+                !self.runs.is_empty(),
+                egui::Button::new("Export all runs as NetCDF…"),
+            )
+            .on_hover_text("Write every open run into one folder")
+            .clicked()
+        {
+            self.export_all.open = true;
+        }
         self.export_menu(ui);
         ui.separator();
         if ui

@@ -17,6 +17,7 @@ mod central;
 mod detail;
 mod detected_peaks;
 mod export;
+mod export_all;
 mod identify;
 mod isotopes;
 mod jobs;
@@ -109,6 +110,7 @@ struct App {
     mid: mid::MidWindow,
     results: results::Results,
     export: export::Export,
+    export_all: export_all::ExportAll,
     view: view::View,
     spectrum_mode: detail::Mode,
     updater: update::Updater,
@@ -146,6 +148,7 @@ impl Default for App {
             mid: mid::MidWindow::default(),
             results: results::Results::default(),
             export: export::Export::default(),
+            export_all: export_all::ExportAll::default(),
             view: view::View::default(),
             spectrum_mode: detail::Mode::default(),
             updater: update::Updater::default(),
@@ -257,5 +260,6 @@ impl App {
         self.info_window(ctx);
         self.library_editor(ctx);
         self.updater.window(ctx);
+        self.export_all_window(ctx);
     }
 }

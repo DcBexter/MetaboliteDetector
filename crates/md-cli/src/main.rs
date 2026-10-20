@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
-    RunResult, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs, settings_path,
-    table,
+    RunResult, SampleTable, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs,
+    settings_path, table,
 };
 use md_core::library;
 use md_core::ri::RiCalibration;
@@ -20,7 +20,7 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc, old
+Finds the substances of a library (.mdlib, .lbr, .msl, TargetSearch .txt, NIST .msp or .sdf) in many runs (.cdf, .nc, old
 .bin or saved components .cmp, which are not deconvoluted again and cannot be rescanned) and writes the
 substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read
 (or saved).
@@ -29,12 +29,16 @@ Options:
   -l, --library FILE          library (required)
   -s, --settings FILE         old MetaboliteDetector settings file (default: the old defaults)
   -c, --calibration FILE      RI calibration (.calib); without it the search uses the spectrum only
-  -o, --output FILE           CSV file (default: standard output); with --replicates the group of each
+  -o, --output FILE           CSV file (default: standard output); with groups (--replicates, --sample-table) the group of each
                               run goes to FILE.groups.csv and the statistics of the groups (mean, rel.
                               std. error, hits, p-value against a group BLANK, ANOVA) to FILE.groupstats.csv,
                               the settings used to FILE.settings.csv
   -j, --parallel N            runs in memory at once (default 4)
       --replicates REGEX      replicate group = first capture group of the file name
+      --sample-table FILE     replicate groups from a CSV/TSV table (first line = column names); runs it
+                              lacks are grouped by --replicates
+      --sample-file-column NAME column with the run file names (default: CDF_FILE, else the first)
+      --sample-group-column NAME column with the group (default: TIME_POINT, else the last)
       --min-reproducibility F keep a substance only if a group quantifies it in this share of its runs
       --min-ions N            quant ions that must be found for a value
       --ions N                quant ions per substance (default: QUANT_ION_NUMBER of the settings)
@@ -44,6 +48,8 @@ Options:
       --min-sn F              an ion counts only with at least this signal-to-noise ratio
       --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
       --ion-integrals         also write the integral of every quant ion to FILE.ions.csv (needs -o)
+      --excel-de              write the CSV files for a spreadsheet with German locale: `;` and decimal
+                              commas (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
       --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
@@ -58,6 +64,9 @@ struct Args {
     output: Option<PathBuf>,
     parallel: usize,
     replicates: String,
+    sample_table: Option<PathBuf>,
+    sample_file_column: Option<String>,
+    sample_group_column: Option<String>,
     min_reproducibility: Option<f64>,
     min_ions: Option<usize>,
     ions: Option<usize>,
@@ -67,6 +76,7 @@ struct Args {
     min_sn: Option<f32>,
     max_discrepancy: Option<f32>,
     ion_integrals: bool,
+    excel_de: bool,
     untargeted: bool,
     rescan: bool,
     save_cmp: Option<PathBuf>,
@@ -104,6 +114,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         output: None,
         parallel: 4,
         replicates: String::new(),
+        sample_table: None,
+        sample_file_column: None,
+        sample_group_column: None,
         min_reproducibility: None,
         min_ions: None,
         ions: None,
@@ -113,6 +126,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         min_sn: None,
         max_discrepancy: None,
         ion_integrals: false,
+        excel_de: false,
         untargeted: false,
         rescan: false,
         save_cmp: None,
@@ -150,6 +164,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "-o" | "--output" => a.output = Some(value()?.into()),
             "-j" | "--parallel" => a.parallel = num(1.0, 64.0)? as usize,
             "--replicates" => a.replicates = text()?,
+            "--sample-table" => a.sample_table = Some(value()?.into()),
+            "--sample-file-column" => a.sample_file_column = Some(text()?),
+            "--sample-group-column" => a.sample_group_column = Some(text()?),
             "--min-reproducibility" => a.min_reproducibility = Some(num(0.0, 1.0)?),
             "--min-ions" => a.min_ions = Some(num(1.0, 20.0)? as usize),
             "--ions" => a.ions = Some(num(1.0, 20.0)? as usize),
@@ -159,6 +176,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--min-sn" => a.min_sn = Some(num(0.0, 1e6)? as f32),
             "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
             "--ion-integrals" => a.ion_integrals = true,
+            "--excel-de" => a.excel_de = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
             "--save-cmp" => a.save_cmp = Some(value()?.into()),
@@ -171,8 +189,16 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
     if a.runs.is_empty() {
         return Err("no runs given".into());
     }
+    if a.sample_table.is_none()
+        && (a.sample_file_column.is_some() || a.sample_group_column.is_some())
+    {
+        return Err("--sample-file-column and --sample-group-column need --sample-table".into());
+    }
     if a.ion_integrals && a.output.is_none() {
         return Err("--ion-integrals needs -o".into());
+    }
+    if a.excel_de && a.output.is_none() {
+        return Err("--excel-de needs -o".into());
     }
     Ok(Some(a))
 }
@@ -203,6 +229,22 @@ fn run(a: Args) -> Result<bool, String> {
         replicates: a.replicates,
         ..Default::default()
     };
+    if let Some(p) = &a.sample_table {
+        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let t = SampleTable::parse(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+        let col = |name: &Option<String>, default| match name {
+            Some(n) => t.column(n),
+            None => Ok(default),
+        };
+        let (file, group) = t.default_columns();
+        let (file, group) = (
+            col(&a.sample_file_column, file)?,
+            col(&a.sample_group_column, group)?,
+        );
+        ts.sample_groups = t
+            .groups(file, group)
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+    }
     ts.quant.ion_number = a.ions.unwrap_or(ts.quant.ion_number);
     ts.quant.min_dist = a.min_dist.unwrap_or(ts.quant.min_dist);
     ts.quant.quality_cutoff = a.quality_cutoff.unwrap_or(ts.quant.quality_cutoff);
@@ -283,11 +325,15 @@ fn run(a: Args) -> Result<bool, String> {
     }
     // Groups, settings and ion integrals go next to a CSV file; standard output has no room for more tables.
     if let Some(p) = &a.output {
-        table.write_groups_file(p).map_err(io)?;
-        table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
+        // Every file written, with the number of leading name columns `--excel-de` leaves as they are.
+        let mut written = vec![(p.clone(), 3)];
+        written.extend(table.write_groups_file(p).map_err(io)?.map(|f| (f, 2)));
+        let stats = table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
+        written.extend(stats.map(|f| (f, 3)));
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
         ts.write_csv(&how, f).map_err(io)?;
+        written.push((settings_path(p), 2));
         if !a.ion_integrals {
             // An older ions file would not match this results file.
             std::fs::remove_file(ions_path(p)).ok();
@@ -295,6 +341,13 @@ fn run(a: Args) -> Result<bool, String> {
             let by_column: Vec<&RunResult> = table.sources.iter().map(|i| &runs[*i]).collect();
             let f = create(&ions_path(p)).map_err(io)?;
             table.write_ions_csv(&by_column, &ts, f).map_err(io)?;
+            written.push((ions_path(p), 2));
+        }
+        if a.excel_de {
+            // The files are written in the standard format first; the German variant is a rewrite.
+            for (f, text_cols) in &written {
+                md_core::csv::excel_de_file(f, *text_cols).map_err(io)?;
+            }
         }
     }
     eprintln!(
@@ -440,6 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn excel_de_rewrites_the_whole_export_and_the_default_stays() {
+        let dir = std::env::temp_dir().join(format!("md-cli-de-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&format!("--excel-de {line}")).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(
+            csv.starts_with("\u{feff}Substance;RT_s;Quant_ions;ctrl_1.cdf\n"),
+            "{csv}"
+        );
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run;Group\nctrl_1.cdf;ctrl\n");
+        assert!(args("-l lib.msl --excel-de a.cdf").is_err());
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        assert!(csv.starts_with("\u{feff}Substance,RT_s,"), "{csv}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn writes_the_table_of_a_study() {
         let dir = std::env::temp_dir().join(format!("md-cli-study-{}", std::process::id()));
         let line = study(&dir);
@@ -487,6 +559,28 @@ mod tests {
         assert!(fails(&calib));
         std::fs::remove_file(dir.join("lib.msl")).unwrap();
         assert!(fails(&line));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_sample_table_sets_the_groups() {
+        let dir = std::env::temp_dir().join(format!("md-cli-samples-{}", std::process::id()));
+        let line = study(&dir);
+        let table = dir.join("samples.txt");
+        std::fs::write(&table, "NOTE\tCDF_FILE\tTIME_POINT\nx\tctrl_1.CDF\t5\n").unwrap();
+        let with = |opts: &str| format!("{line} --sample-table {} {opts}", table.display());
+        // The table wins over --replicates for the runs it names; the columns are chosen by name.
+        let cols = "--sample-file-column cdf_file --sample-group-column TIME_POINT";
+        assert!(run(args(&with(cols)).unwrap().unwrap()).unwrap());
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,5\n");
+        // Without names CDF_FILE and TIME_POINT are used.
+        assert!(run(args(&with("")).unwrap().unwrap()).unwrap());
+        let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,5\n");
+        let err = run(args(&with("--sample-group-column nope")).unwrap().unwrap()).unwrap_err();
+        assert!(err.contains("no column nope"), "{err}");
+        assert!(args(&format!("{line} --sample-group-column x")).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

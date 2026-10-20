@@ -31,6 +31,7 @@ From source (any OS with Rust): `cargo run --release -p metabolite-detector`.
 ```
 
 On Linux/macOS: `example-data/fetch.sh`. The runs land in `example-data/TargetSearchData/inst/gc-ms-data/`.
+Their library is `library.txt` in the same folder (TargetSearch format, RI on its FAME scale in ms): open it with **File → Open library…** or pass it to `md-cli --library`.
 
 ## Load runs
 
@@ -101,7 +102,9 @@ filter. **Export CSV…** saves the list, **Save components…** writes an old-s
 
 1. Open a library (and an RI calibration, if you use RI).
 2. **Add runs…**, set quant ions and filters. **Replicate groups** is a regex on the file name, e.g.
-   `^(.+)_\d+\.cdf$`, so runs of one group are compared.
+   `^(.+)_d+.cdf$`, so runs of one group are compared. If the file names do not tell the group, load a
+   sample table (CSV/TSV, e.g. `samples.txt` with `CDF_FILE` and `TIME_POINT`) with **Table…** and pick its
+   file and group columns; the table wins for the runs it names.
 3. **Start**. The result is a substance × run table; **Export CSV…** writes it (UTF-8, opens in Excel;
    R: `scripts/r/load_results.R`).
 

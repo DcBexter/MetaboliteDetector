@@ -7,6 +7,7 @@ use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Plot};
 use md_core::library::{LibraryCompound, MslType, save_mdlib, write_msl_as};
+use md_core::library_add::check;
 
 mod add;
 mod extras;
@@ -36,6 +37,8 @@ pub struct LibraryEditor {
     /// Replacement of the edited library that waits for "Discard" of unsaved changes.
     pending: Option<Replace>,
     error: Option<String>,
+    /// Entries named by the last save or export because they are incomplete.
+    warning: Option<String>,
     /// "Add component" and "Copy retention times" while they are open.
     add: Option<AddDialog>,
     rt: Option<RtDialog>,
@@ -121,8 +124,18 @@ impl LibraryEditor {
             ),
             _ => (Vec::new(), None, String::new()),
         };
-        (self.dirty, self.pending, self.error) = (false, None, None);
+        (self.dirty, self.pending, self.error, self.warning) = (false, None, None, None);
         self.select(None);
+    }
+
+    /// Names the entries with problems (empty when all are fine); saving and exporting still write them.
+    fn incomplete(&self) -> Option<String> {
+        let names: Vec<_> = (self.compounds.iter())
+            .filter(|c| !check(c).is_empty())
+            .map(|c| c.name.as_str())
+            .collect();
+        (!names.is_empty())
+            .then(|| format!("Incomplete entries were written: {}.", names.join(", ")))
     }
 
     fn save(&mut self, path: PathBuf) -> Option<PathBuf> {
@@ -136,6 +149,7 @@ impl LibraryEditor {
             .to_string_lossy()
             .into();
         (self.dirty, self.error, self.path) = (false, None, Some(path.clone()));
+        self.warning = self.incomplete();
         Some(path)
     }
 
@@ -166,6 +180,11 @@ impl LibraryEditor {
                             .map(|e| format!("{}: {e}", path.display()))
                     } else {
                         Some(format!("{}: export as .msl.", path.display()))
+                    };
+                    self.warning = if self.error.is_none() {
+                        self.incomplete()
+                    } else {
+                        None
                     };
                 }
             }
@@ -236,6 +255,9 @@ impl LibraryEditor {
         if let Some(e) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
+        if let Some(w) = &self.warning {
+            ui.colored_label(ui.visuals().warn_fg_color, w);
+        }
         ui.separator();
         self.add_windows(ui.ctx());
 
@@ -305,11 +327,28 @@ impl LibraryEditor {
         let row = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical().show_rows(ui, row, shown.len(), |ui, rows| {
             for &i in &shown[rows] {
-                let name = &self.compounds[i].name;
-                if ui
-                    .selectable_label(self.selected == Some(i), name)
-                    .clicked()
-                {
+                let c = &self.compounds[i];
+                let mut name = egui::RichText::new(&c.name);
+                let issues = check(c);
+                if !issues.is_empty() {
+                    name = name.color(ui.visuals().warn_fg_color);
+                }
+                let r = ui.selectable_label(self.selected == Some(i), name);
+                let r = if issues.is_empty() {
+                    r
+                } else {
+                    r.on_hover_text(
+                        issues
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(
+                                "
+",
+                            ),
+                    )
+                };
+                if r.clicked() {
                     self.select(Some(i));
                 }
             }
@@ -367,6 +406,14 @@ impl LibraryEditor {
                     }
                     if parse_ions(&self.ions).is_none() {
                         ui.colored_label(ui.visuals().error_fg_color, "m/z values > 0");
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.vertical(|ui| {
+                    ui.weak("m/z values separated by spaces, commas or semicolons.");
+                    for issue in check(c) {
+                        ui.colored_label(ui.visuals().warn_fg_color, issue.to_string());
                     }
                 });
                 ui.end_row();
@@ -601,12 +648,23 @@ mod tests {
         c.features.insert("COMMENT".into(), "checked".into());
         ed.dirty = true;
         let path = std::env::temp_dir().join(format!("md-app-{}.mdlib", std::process::id()));
+        ed.compounds.push(LibraryCompound::new("Empty"));
         let saved = ed.save(path.clone());
+        assert!(ed.warning.as_ref().is_some_and(|w| w.contains("Empty")));
         let again = read_mdlib(&path);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(saved.as_ref(), Some(&path));
         assert_eq!((ed.path.as_ref(), ed.dirty), (Some(&path), false));
         assert_eq!(again.unwrap(), ed.compounds);
+    }
+
+    #[test]
+    fn saving_names_incomplete_entries() {
+        let mut ed = LibraryEditor::default();
+        ed.compounds.push(LibraryCompound::new("Test"));
+        assert!(ed.incomplete().is_some_and(|w| w.contains("Test")));
+        ed.compounds.clear();
+        assert_eq!(ed.incomplete(), None);
     }
 
     #[test]

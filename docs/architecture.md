@@ -342,6 +342,8 @@ rescan:
   `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
   cell is the summed integral of the quant ions found in that run.
 - **Replicate groups**: the first capture group (else the whole match) of a regex on the file name.
+  A sample table (`SampleTable`, CSV/TSV; file name → group; extension and case do not matter) wins for the
+  runs it names; the CLI takes it with `--sample-table`, `--sample-file-column` and `--sample-group-column`.
 - **Filters**: minimum quant ions found per cell, minimum reproducibility (share of runs in a group),
   minimum S/N of an ion and maximum discrepancy index (mean peak quality of the ions of a cell). A
   substance without any value left drops out of the table.
@@ -418,6 +420,12 @@ which takes them from `Table::group_stats`; the app writes it not for z-scores, 
 view had the p-value column too, #222); `-o FILE` always
 writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
+The default CSV format (`,` and decimal points) never changes, so scripts keep working; a spreadsheet with German
+locale reads `.` as thousands mark (`293.808` becomes 293808, #249). `--excel-de` (the app: "Excel (German)")
+rewrites every file of the export with `csv::to_excel_de`: `;` separators and decimal commas in the number
+columns; header lines, name columns (so a group `0.5` stays) and the values of `FILE.settings.csv` (text for
+`load_results.R`) keep their text, quoting as before. `load_results.R` reads both. A group name like `01` is still
+read as a number by a spreadsheet.
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 

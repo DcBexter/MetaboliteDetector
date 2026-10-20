@@ -137,6 +137,7 @@ mod tests {
         (app.editor.open, app.view.info_open, app.updater.open) = (true, true, true);
         app.tof = crate::tof_calibration::TofWindow::demo();
         (app.statistics.open, app.mid.open) = (true, true);
+        app.export_all.open = true;
         let mut c = md_core::library::LibraryCompound::new("Phenylalanine 2TMS");
         (c.spectrum.masses, c.spectrum.values) = (vec![73.0, 218.0], vec![1000, 800]);
         app.editor.compounds = vec![c];

@@ -258,6 +258,16 @@ fn cells_of(t: &Table, r: &Biomarker) -> [String; 10] {
     ]
 }
 
+/// Substance left, numbers right so the digits line up; the header uses the same layout, or its
+/// titles sit over the neighbouring column.
+fn cell_layout(col: usize) -> egui::Layout {
+    if col == 0 {
+        egui::Layout::left_to_right(egui::Align::Center)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Center)
+    }
+}
+
 /// The comparison table; returns the table row that was clicked.
 fn biomarker_table(
     ui: &mut egui::Ui,
@@ -292,9 +302,11 @@ fn biomarker_table(
                 .column(Column::auto().at_least(160.0))
                 .columns(Column::auto().at_least(60.0), 9)
                 .header(20.0, |mut h| {
-                    for title in TITLES {
+                    for (i, title) in TITLES.into_iter().enumerate() {
                         h.col(|ui| {
-                            ui.strong(title);
+                            ui.with_layout(cell_layout(i), |ui| {
+                                ui.strong(title);
+                            });
                         });
                     }
                 })
@@ -304,13 +316,7 @@ fn biomarker_table(
                         row.set_selected(selected == Some(r.row));
                         for (i, c) in cells_of(t, r).into_iter().enumerate() {
                             row.col(|ui| {
-                                // Numbers right-aligned so the digits line up.
-                                let align = if i == 0 {
-                                    egui::Layout::left_to_right(egui::Align::Center)
-                                } else {
-                                    egui::Layout::right_to_left(egui::Align::Center)
-                                };
-                                ui.with_layout(align, |ui| {
+                                ui.with_layout(cell_layout(i), |ui| {
                                     ui.add(egui::Label::new(c).selectable(false));
                                 });
                             });
@@ -678,4 +684,46 @@ fn variance_plot(ui: &mut egui::Ui, p: &Pca) {
             plot.bar_chart(BarChart::new("single", bars).color(color(0)));
             plot.line(Line::new("cumulative", cumulative).color(color(1)));
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use md_core::batch::Row;
+
+    #[test]
+    fn header_and_numbers_share_an_edge() {
+        let t = Table {
+            runs: vec!["a".into(), "b".into()],
+            sources: vec![0, 1],
+            groups: vec!["g1".into(), "g2".into()],
+            rows: vec![Row {
+                compound: 0,
+                name: "X".into(),
+                rt_s: 60.0,
+                ions: vec![],
+                values: vec![],
+                rts_s: vec![],
+            }],
+        };
+        let b = Biomarker {
+            row: 0,
+            hits: [111, 222],
+            mean: [1.0, 2.0],
+            sd: [1.0, 2.0],
+            ratio: 0.5,
+            p: Some(0.5),
+        };
+        let mut h = Harness::new_ui(|ui| {
+            biomarker_table(ui, &t, &[&b], None);
+        });
+        h.run();
+        for (title, cell) in [("Hits 1", "111"), ("Hits 2", "222")] {
+            let head = h.get_by_label(title).rect().right();
+            let num = h.get_by_label(cell).rect().right();
+            assert!((head - num).abs() < 1.0, "{title}: {head} vs {num}");
+        }
+    }
 }
