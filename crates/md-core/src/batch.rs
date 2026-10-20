@@ -119,7 +119,7 @@ pub fn scan_runs(
 ) -> Option<(Vec<RunResult>, Vec<String>)> {
     let next = AtomicUsize::new(0);
     let mut out: Vec<(usize, Result<RunResult, String>)> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..parallel.max(1))
+        let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
             .map(|_| {
                 scope.spawn(|| {
                     let mut mine = Vec::new();
