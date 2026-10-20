@@ -3,7 +3,7 @@
 
 use std::fmt::Write;
 
-use super::{FragmentMid, Method, Mids};
+use super::{FragmentMid, Method, MidFit, Mids};
 use crate::library::LibraryCompound;
 
 /// A number as Qt's `QTextStream` writes it: `%g` with 6 significant digits, `nan`, `inf`, and `0` for
@@ -57,12 +57,18 @@ pub fn group_stat(f: &FragmentMid, k: usize) -> (f64, f64) {
 impl Mids {
     /// Export of the group methods (old `MIDResultWidget::actExportTriggered` 0x4e9212): per
     /// fragment a row `Name_ion (Mk)`, MID, CI and R² (-1 where there is none), then an empty line.
+    /// A fragment without MID is the old solver's empty result: one row `M0` with -1 everywhere.
     pub fn group_text(&self, lib: &[LibraryCompound]) -> String {
+        let none = MidFit {
+            mids: vec![-1.0],
+            r2: None,
+            cis: vec![None],
+        };
         let mut s = String::new();
         for c in &self.compounds {
             let name = &lib[c.compound].name;
             for f in &c.fragments {
-                for fit in f.fits.iter().flatten() {
+                for fit in f.fits.iter().map(|x| x.as_ref().unwrap_or(&none)) {
                     for (k, m) in fit.mids.iter().take(f.isotopomers).enumerate() {
                         let ci = fit.cis.get(k).copied().flatten().unwrap_or(-1.0);
                         let r2 = fit.r2.unwrap_or(-1.0);
