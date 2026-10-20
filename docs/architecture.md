@@ -24,7 +24,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
   src/diskscan.rs       old raw-data cache (.bin + .idx) reader
-  src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export,
+  src/library.rs        compound libraries: old .lbr (versions 2-5) reader, AMDIS MSL import/export,
                         library text format (.mdlib) read/write
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
@@ -52,6 +52,8 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
+  src/style.rs          app-wide look egui lacks (symbol font fallback); rules in DESIGN.md
+  src/ui_tests.rs       glyph check for UI strings; ignored headless screenshot test (docs/ui-quality.md)
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
   src/main.rs           options, settings/library/calibration loading, CSV output
   tests/                runs the binary on the 15 example runs
@@ -367,26 +369,28 @@ The golden test found three porting errors in peak detection, now fixed:
 
 ## Libraries
 
-`md_core::library` reads the old binary `.lbr` libraries (gzip or raw, version 2, layout in
+`md_core::library` reads the old binary `.lbr` libraries (gzip or raw, versions 2 to 5, layout in
 [file-formats.md](reverse-engineering/file-formats.md) §1) and imports and exports AMDIS MSL (§6).
 Library files come from users, so reading is a trust boundary: every length is checked against the
 remaining bytes before anything is allocated, check values are verified, gzip output is capped at 1 GiB,
-and errors are returned instead of panics. Version 5 (the old writer's current version) and compounds
-with peak records are rejected as not supported until a sample file shows their layout. Strings are read
-as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kept verbatim.
-`tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
-`MD_LBR_SAMPLE` points to it; the file is never committed.
+and errors are returned instead of panics. Versions 4 and 5 carry peaks and a model peak per compound
+(§1.6, `LibraryCompound::peaks` and `model`), version 3 adds `formulas`, version 5 `mid_sizes`. Version 2
+and 3 compounds with peak records are rejected as not supported (their layout is unknown). Strings are read
+as UTF-8, falling back to Latin-1. The 40-byte peak records of versions 2 and 3 (§1.3) are kept verbatim
+as `blocks`. `tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
+`MD_LBR_SAMPLE` points to it, and with `MD_LBR_V5_DIR` the version 5 files that the old program wrote and
+read back (`tools/golden/make-lbr-v5.sh`); none of these files is committed.
 
 ### Library text format (.mdlib)
 
-Edited libraries are saved in a new text format, not as `.lbr`: the old writer's current version 5 is not
-decoded (#41), and a text file can be read, diffed and repaired by hand. It needs no new dependency (no
+Edited libraries are saved in a new text format, not as `.lbr`: a text file can be read, diffed and
+repaired by hand. It needs no new dependency (no
 serde in `md-core`), and unlike JSON it keeps NaN and infinity. `write_mdlib` and `parse_mdlib` keep
 every field of `LibraryCompound` bit for bit (only a NaN loses its sign and payload), so `.lbr` →
 `.mdlib` → reading back loses nothing.
 
 ```
-MetaboliteDetector library 1
+MetaboliteDetector library 2
 compound
 name Serine 3TMS
 scan 0
@@ -409,15 +413,20 @@ spec_count 1
 ris 1369
 block 0707…07
 source Initial import from/home/kh/Desktop/test.msl
+peak 204 1 250 0 -1 1 2169 2363 1 2223 0
+model 73 -1 -1 0 -1 0 0 0 1 0 0 0.5 0
+formula 73 147 C3H9Si
+mid_size 73 147 2
 end
 ```
 
 - UTF-8 text (a leading byte order mark is skipped), one `key value` per line (value = everything after the first space). Blank lines and lines
   starting with `#` are ignored. The first other line is the header; its number is the format version.
-  A reader rejects a newer version and every unknown key, so a new field means a new version.
+  A reader rejects a newer version and every unknown key, so a new field means a new version. Version 2
+  added `peak`, `model`, `formula` and `mid_size`; version 1 files still read.
 - `compound` … `end` is one compound. Inside, `name` is required; every other key is optional and
   defaults to a new compound's value (as after MSL import). Each key appears at most once, except
-  `feature`, `block` and `source`, which repeat in order.
+  `feature`, `block`, `source`, `peak`, `formula` and `mid_size`, which repeat in order.
 - Numbers are written as Rust prints them: the shortest text that reads back to the same `f32`/`f64`
   (`NaN`, `inf`, `-0` included). Lists are space-separated; `m/z:value` pairs are joined by `:`.
   `peaks` holds the spectrum (`masses`, `values`); `fwhm` and `integrals` are `null` or a list (the old
@@ -426,6 +435,10 @@ end
   error. A feature is `KEY<tab>value` with a unique key (MSL import makes an empty one from `: x`). MID fragments are the feature `FRAG`
   (syntax `(174/8)(261/5)`, F16) and comments the feature `COMMENT`; both keys occur in the old binary.
 - `block` is one 40-byte record of `.lbr` §1.3 as 80 hex digits.
+- `peak` is one `.lbr` §1.6 peak: ion, sharpness, integral, quality, signal to noise, count, first scan,
+  last scan, model parameter, max scan, interpolated max scan. `model` is the same 11 fields, then the
+  noise factor and the model values. `formula` is `begin end formula` (formula escaped like text, may be
+  empty), `mid_size` is `begin end size`.
 - Reading is a trust boundary like `.lbr`: files over 1 GiB are rejected, every error names its line.
   `save_mdlib` writes `<file>.tmp`, syncs it to disk and renames it over the target, so a failed save
   never leaves half a library.
