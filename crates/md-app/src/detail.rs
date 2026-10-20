@@ -123,8 +123,8 @@ pub fn panel(ui: &mut egui::Ui, run: &Run, mz: &mut f32, trace: &mut Trace) {
     let Some(k) = run.component else {
         return;
     };
-    egui::Panel::right("hits").show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| body(ui, run, k, mz, trace));
+    crate::layout::side_panel(ui, egui::Panel::right("hits"), |ui| {
+        body(ui, run, k, mz, trace);
     });
 }
 

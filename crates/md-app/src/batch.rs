@@ -136,6 +136,19 @@ impl Batch {
         self.shown.as_ref().map(|s| (self.generation, &s.1))
     }
 
+    /// A finished scan, as if the batch had run; for tests that draw the result table.
+    #[cfg(test)]
+    pub fn finished(&mut self, lib: Arc<Library>, runs: Vec<RunResult>) {
+        self.scan = Some(Scan {
+            lib,
+            runs,
+            extra: Vec::new(),
+            rescanned: 0,
+            errors: Vec::new(),
+            took: Duration::ZERO,
+        });
+    }
+
     /// Whether the shown table is z-scored; a missing value cannot count as 0 there.
     pub fn z_scored(&self) -> bool {
         self.shown.as_ref().is_some_and(|s| s.0.z_score)

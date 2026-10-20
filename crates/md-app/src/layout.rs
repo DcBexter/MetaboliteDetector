@@ -20,6 +20,14 @@ pub fn list_and_details<T>(
     egui::CentralPanel::default().show(ui, |ui| details(state, ui));
 }
 
+/// A panel beside the plots: at most 30 % of the width, so the plots and their controls keep room
+/// in a narrow window; content wider or longer than the panel scrolls.
+pub fn side_panel(ui: &mut egui::Ui, panel: egui::Panel, add: impl FnOnce(&mut egui::Ui)) {
+    panel
+        .max_size(ui.available_width() * 0.3)
+        .show(ui, |ui| egui::ScrollArea::both().show(ui, add));
+}
+
 #[cfg(test)]
 mod tests {
     use crate::*;
@@ -44,38 +52,41 @@ mod tests {
         (c.spectrum.masses, c.spectrum.values) = (vec![73.0, 218.0], vec![1000, 800]);
         app.editor.compounds = vec![c];
         app.editor.select(Some(0));
-        let data = md_core::Chromatogram {
-            scan_times_s: vec![60.0, 61.0],
-            offsets: vec![0, 1, 2],
-            mz: vec![73.0, 73.0],
-            intensity: vec![1.0, 2.0],
+        // A run with an identified component selected, so the hit list shows.
+        let mut run = results::tests::run();
+        (run.name, run.component) = ("a_long_run_name_from_the_lab_01".into(), Some(0));
+        run.analysis = settings::Analysis::new(app.settings.key());
+        let lib = run.ident.as_ref().unwrap().0.0.clone();
+        app.runs.push(run);
+        app.results.open = true;
+        app.statistics.open = true;
+        let found = |rt_s| md_core::batch::RunResult {
+            path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
+            found: vec![md_core::batch::Found {
+                compound: 0,
+                score: 0.9,
+                rt_s,
+                ions: [(73, 900.0), (147, 400.0)]
+                    .map(|(mass, integral)| md_core::batch::IonPeak {
+                        mass,
+                        integral,
+                        quality: 0.1,
+                        signal_to_noise: 10.0,
+                    })
+                    .into(),
+                rescanned: false,
+            }],
+            ..Default::default()
         };
-        app.runs.push(Run {
-            path: "a_long_run_name_from_the_lab_01.cdf".into(),
-            name: "a_long_run_name_from_the_lab_01".into(),
-            minutes: vec![1.0, 61.0 / 60.0],
-            tic: data.tic(),
-            data: std::sync::Arc::new(data),
-            sic: Vec::new(),
-            sic_for: None,
-            sic_job: None,
-            components: Vec::new(),
-            peak_masses: Vec::new(),
-            peaks: Vec::new(),
-            analysis: settings::Analysis::new(app.settings.key()),
-            scan: 0,
-            component: None,
-            visible: true,
-            ident: None,
-            ident_job: None,
-            saved_calibration: None,
-            rev: 0,
-        });
+        app.batch.finished(lib, vec![found(60.0), found(61.0)]);
         let ctx = egui::Context::default();
         style::apply(&ctx);
         ctx.enable_accesskit();
         let mut frame = eframe::Frame::_new_kittest();
+        app.open_editor_dialogs(&ctx);
         let mut names = HashMap::new();
+        // (control, its label): egui draws a labelled combo box inside its label widget.
+        let mut labelled = std::collections::HashSet::new();
         for _ in 0..4 {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
@@ -91,32 +102,76 @@ mod tests {
             {
                 let text = node.label().or(node.value()).unwrap_or_default().to_owned();
                 names.insert(id, (format!("{:?}", node.role()), text));
+                labelled.extend(node.labelled_by().iter().map(|l| (id, *l)));
             }
+        }
+        let shown = [
+            "RI calibration",
+            "Settings",
+            "Batch quantification",
+            "Natural isotopes",
+            "Run info",
+            "Library editor",
+            "Add component to library",
+            "Copy retention times",
+            "Results",
+            "Biomarker statistics",
+            "Library hits",
+            "a_long_run_name_from_the_lab_60.cdf",
+        ];
+        for title in shown {
+            let drawn = names.values().any(|(_, text)| text.starts_with(title));
+            assert!(
+                drawn,
+                "{title} was not drawn; the test would check nothing there"
+            );
         }
         ctx.viewport(|v| {
             let mut found = Vec::new();
             for (_, widgets) in v.prev_pass.widgets.layers() {
-                // Clipped by a scroll area vertically is fine; cut off at the side is not.
+                // Horizontal scroll bars: what they scroll to may be cut off at the side.
+                let bars: Vec<egui::Rect> = (widgets.iter())
+                    .filter(|w| {
+                        let r = w.interact_rect;
+                        names
+                            .get(&w.id.accesskit_id())
+                            .is_some_and(|n| n.0 == "ScrollBar")
+                            && r.width() > r.height()
+                    })
+                    .map(|w| w.interact_rect)
+                    .collect();
+                // Clipped by a scroll area vertically is fine; cut off at the side only above a
+                // horizontal scroll bar.
                 for w in widgets {
                     let r = (w.rect, w.interact_rect);
+                    let scrolls = |b: &egui::Rect| {
+                        // The clip edge, which is all that is left of a control clipped entirely.
+                        let x = b.x_range().expand(1.0);
+                        b.min.y >= r.0.min.y && (x.contains(r.1.min.x) || x.contains(r.1.max.x))
+                    };
                     if let Some(name) = names.get(&w.id.accesskit_id())
                         && !CONTAINERS.contains(&name.0.as_str())
                         && w.rect.width() > 0.0
                         && (r.1.min.x > r.0.min.x + 0.5 || r.1.max.x < r.0.max.x - 0.5)
+                        && !bars.iter().any(scrolls)
                     {
                         found.push(format!("{name:?} {:?} is cut off at {:?}", r.0, r.1));
                     }
                 }
                 let controls: Vec<_> = widgets
                     .iter()
-                    .filter_map(|w| Some((names.get(&w.id.accesskit_id())?, w.interact_rect)))
-                    .filter(|((role, _), r)| {
+                    .filter_map(|w| {
+                        let id = w.id.accesskit_id();
+                        Some((id, names.get(&id)?, w.interact_rect))
+                    })
+                    .filter(|(_, (role, _), r)| {
                         !CONTAINERS.contains(&role.as_str()) && r.is_positive()
                     })
                     .collect();
-                for (i, (a, ra)) in controls.iter().enumerate() {
-                    for (b, rb) in &controls[i + 1..] {
-                        if ra.shrink(0.5).intersects(rb.shrink(0.5)) {
+                for (i, (ia, a, ra)) in controls.iter().enumerate() {
+                    for (ib, b, rb) in &controls[i + 1..] {
+                        let pair = labelled.contains(&(*ia, *ib)) || labelled.contains(&(*ib, *ia));
+                        if !pair && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
                             found.push(format!("{a:?} {ra:?} overlaps {b:?} {rb:?}"));
                         }
                     }

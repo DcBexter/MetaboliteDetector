@@ -51,7 +51,8 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
-  src/layout.rs         list/details split; a test checks no control covers another or is cut off
+  src/layout.rs         list/details split, side panels; a test opens every window and checks no control
+                        covers another or is cut off
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
