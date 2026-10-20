@@ -35,10 +35,18 @@ fn trace_plot(
             let (lo, hi) = if p.auto_bounds().x {
                 (f64::NEG_INFINITY, f64::INFINITY)
             } else {
-                (
-                    view.minutes(p.plot_bounds().min()[0]),
-                    view.minutes(p.plot_bounds().max()[0]),
-                )
+                let b = p.plot_bounds();
+                let old = view.bounds_in.unwrap_or(view.unit);
+                let to_min = |x: f64| old.to_seconds(x) / 60.0;
+                if old != view.unit {
+                    // Keep the zoomed window when the unit changes.
+                    let conv = |x: f64| view.time(to_min(x));
+                    p.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                        [conv(b.min()[0]), b.min()[1]],
+                        [conv(b.max()[0]), b.max()[1]],
+                    ));
+                }
+                (to_min(b.min()[0]), to_min(b.max()[0]))
             };
             let mut y_span: Option<(f64, f64)> = None;
             let width = p.response().rect.width().max(100.0) as usize;
@@ -134,7 +142,7 @@ impl App {
         });
     }
 
-    fn derivative_label(&self, label: String) -> String {
+    pub fn derivative_label(&self, label: String) -> String {
         if self.view.derivative {
             format!("d/dscan {label}")
         } else {
@@ -215,6 +223,7 @@ impl App {
         }
         self.export.chromatograms =
             egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
+        self.view.bounds_in = None;
         clicked
     }
 

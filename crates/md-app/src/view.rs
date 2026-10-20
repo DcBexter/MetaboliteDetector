@@ -7,6 +7,8 @@ use crate::{App, Run};
 
 pub struct View {
     pub unit: TimeUnit,
+    /// Unit the zoomed plot bounds are still in for one frame after a change of `unit`.
+    pub bounds_in: Option<TimeUnit>,
     pub derivative: bool,
     pub auto_y: bool,
     /// Show names with score ≤ 0.7, > 0.7 and > 0.9 (old label switches); a name shows if any matching switch is on.
@@ -18,6 +20,7 @@ impl Default for View {
     fn default() -> Self {
         Self {
             unit: TimeUnit::default(),
+            bounds_in: None,
             derivative: false,
             auto_y: true,
             score_filter: [true; 3],
@@ -49,6 +52,7 @@ impl View {
             );
         ui.checkbox(&mut self.auto_y, "Auto Y")
             .on_hover_text("Fit the Y axis to the visible time range");
+        let before = self.unit;
         egui::ComboBox::from_id_salt("time unit")
             .selected_text(format!("Time: {}", self.unit.label()))
             .show_ui(ui, |ui| {
@@ -56,6 +60,9 @@ impl View {
                     ui.selectable_value(&mut self.unit, u, u.label());
                 }
             });
+        if self.unit != before {
+            self.bounds_in = Some(before);
+        }
         ui.label("Show names with score");
         for (on, text) in self
             .score_filter
@@ -109,7 +116,14 @@ impl App {
                     times.last().unwrap_or(&0.0) - times.first().unwrap_or(&0.0)
                 ),
             ),
-            ("Lowest mass", format!("{lowest:.2}")),
+            (
+                "Lowest mass",
+                if lowest.is_finite() {
+                    format!("{lowest:.2}")
+                } else {
+                    "–".into()
+                },
+            ),
             (
                 "Mass traces (nominal)",
                 format!("{}", (highest.round() - lowest.round() + 1.0).max(0.0)),

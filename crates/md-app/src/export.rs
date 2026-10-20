@@ -105,19 +105,29 @@ impl App {
         let run = self.runs.get(self.active).ok_or("no run open")?;
         let mut header = vec![format!("Retention time ({})", self.view.unit.label())];
         let times: Vec<f64> = run.minutes.iter().map(|m| self.view.time(*m)).collect();
-        let mut columns: Vec<&[f64]> = vec![&times];
+        // The plots show the derivative when it is on, so the file does too.
+        let shape = |v: &[f64]| {
+            if self.view.derivative {
+                md_core::first_derivative(v)
+            } else {
+                v.to_vec()
+            }
+        };
+        let mut owned = Vec::new();
         if self.trace != Trace::Sic {
-            header.push("TIC".into());
-            columns.push(&run.tic);
+            header.push(self.derivative_label("TIC".into()));
+            owned.push(shape(&run.tic));
         }
         if self.trace != Trace::Tic {
             if run.sic_for != Some((self.mz, self.tolerance)) || run.sic.len() != run.minutes.len()
             {
                 return Err("the SIC is still being computed, try again in a moment".into());
             }
-            header.push(format!("SIC m/z {} ± {}", self.mz, self.tolerance));
-            columns.push(&run.sic);
+            header.push(self.derivative_label(format!("SIC m/z {} ± {}", self.mz, self.tolerance)));
+            owned.push(shape(&run.sic));
         }
+        let mut columns: Vec<&[f64]> = vec![&times];
+        columns.extend(owned.iter().map(Vec::as_slice));
         let header: Vec<&str> = header.iter().map(String::as_str).collect();
         write_file(path, |w| write_columns(w, &header, &columns))
     }
