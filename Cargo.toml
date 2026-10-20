@@ -25,6 +25,9 @@ thiserror = "2.0.21"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+
 # Analysis speed matters more than build time for users.
 [profile.release]
 lto = "fat"
