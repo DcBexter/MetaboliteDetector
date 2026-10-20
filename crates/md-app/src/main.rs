@@ -13,6 +13,7 @@ mod batch;
 mod calibration;
 mod identify;
 mod isotopes;
+mod layout;
 mod library_editor;
 mod settings;
 
@@ -27,6 +28,7 @@ fn main() -> eframe::Result {
         "MetaboliteDetector",
         options,
         Box::new(|cc| {
+            layout::apply(&cc.egui_ctx);
             let mut app = App::default();
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
