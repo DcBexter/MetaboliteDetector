@@ -115,7 +115,7 @@ impl Settings {
     pub fn window(&mut self, ctx: &egui::Context) {
         let mut open = self.open;
         egui::Window::new("Settings")
-            .tool_window(ctx, 0, [480.0, 420.0])
+            .tool_window(ctx, 0, [560.0, 680.0])
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
