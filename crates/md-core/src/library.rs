@@ -465,6 +465,7 @@ pub fn import_nist(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, Libra
 pub fn parse_nist(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     let mut out = Vec::new();
     let mut fields: Vec<(&str, String)> = Vec::new();
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for line in text.lines().chain(["$$$$"]) {
         let line = line.trim_matches([' ', '\n', '\r', '\t']);
         if line == "$$$$" {
@@ -1583,6 +1584,8 @@ mod tests {
         assert_eq!((a.spectrum.ri, a.spectrum.rt_ms), (-1.0, -1.0));
         // The last record needs no `$$$$`.
         assert_eq!(b.name, "last");
+        let bom = parse_nist("\u{feff}> <NAME>\nx\n> <MASS SPECTRAL PEAKS>\n71 1\n").unwrap();
+        assert_eq!(bom[0].name, "x");
         assert!(matches!(
             parse_nist("> <NAME>\nx\n$$$$\n"),
             Err(LibraryError::Unsupported(_))

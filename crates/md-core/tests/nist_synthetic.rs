@@ -118,4 +118,20 @@ fn search_uses_the_old_fragment_prefilter() {
     let plain = PreparedLibrary::new(&lib, &all);
     assert!(names(&plain).contains(&"Synthetic iota"));
     assert!(names(&plain).contains(&"Synthetic gamma"));
+
+    // Strong falling pairs below m/z 70 take the query's top slots but are never stored on the library
+    // side, so nothing passes: the old binary returns no candidate for this query either.
+    let mut low = vec![
+        (41, 300),
+        (42, 30),
+        (43, 290),
+        (44, 29),
+        (55, 280),
+        (56, 28),
+        (57, 270),
+        (58, 27),
+    ];
+    low.extend(ALPHA);
+    assert!(library_hits(&low, Some(1455.0), &prepared, &all).is_empty());
+    assert!(!library_hits(&low, Some(1455.0), &plain, &all).is_empty());
 }

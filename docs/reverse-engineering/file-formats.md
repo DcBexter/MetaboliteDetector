@@ -619,8 +619,8 @@ Grammar (Observed, 10 records parsed):
   contain spaces (`ESTIMATED KOVATS RI`).
 - The value is the following lines up to the next field or `$$$$`, each trimmed with `" \n\r\t"`, blank
   lines dropped, joined with `\n`.
-- Fields may be missing and come in any order. Lines before the first field (an SDF mol block) are
-  ignored by the rewrite (Inferred for the old parser).
+- Fields may be missing and come in any order. Lines before the first field (an SDF mol block) and a
+  leading UTF-8 byte order mark are ignored by the rewrite (Inferred for the old parser).
 
 Import (`importNIST` 0x6e4024, one SQLite `compound` row per record):
 
@@ -652,7 +652,10 @@ Pre-filter (`SQLLibrary::getPotentialHits` 0x6e2350): the query's fragments are 
 strongest first (`compare_intens`), and the first `SQL_MAX_NUMBER_FRAGMENTS` = 5 are matched against the
 stored ions with `frag = ion`. A compound is a candidate with `hits > SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`
 (3), so at least 4 shared fragments (Verified: 4 shared → candidate, 3 shared → not). The tolerance
-argument is never read. The candidates are then scored like `LibrarySearch` (§5 of algorithms.md):
+argument is never read. Query ions below m/z 70 are not dropped: a query whose strongest fragments lie
+below 70 (41/42, 43/44, 55/56, 57/58) finds no candidate, because the library side never stores them
+(Verified: no candidate and 0 hits in the old binary, the same in the rewrite). The candidates are then
+scored like `LibrarySearch` (§5 of algorithms.md):
 Verified for an identical spectrum (S = 1, RI 0.969233234, O = 0.989637399) and for a different one
 (S = 0.773023519, O = 0.842290311); the rewrite agrees to 1e-8.
 

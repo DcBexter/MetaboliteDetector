@@ -65,11 +65,19 @@ RI 1455
 161 20
 EOF
 
+# The same query with strong falling pairs below m/z 70, which the library side never stores: shows
+# whether the query side drops them before choosing its 5 strongest fragments.
+{ head -2 "$work/query.txt"; printf '41 300\n42 30\n43 290\n44 29\n55 280\n56 28\n57 270\n58 27\n'
+  tail -n +3 "$work/query.txt"; } > "$work/query-low.txt"
+
 echo "== parse (NISTParser fields) =="
 LD_PRELOAD="$work/nist_dump.so" "$app" parse "$nist"
 
 echo "== library (importNIST, getPotentialHits, getLibraryHits) =="
 LD_PRELOAD="$work/nist_dump.so" "$app" library "$work/lib.sqlite" "$nist" "$work/query.txt"
+
+echo "== library, query with strong ions below m/z 70 =="
+LD_PRELOAD="$work/nist_dump.so" "$app" library "$work/lib-low.sqlite" "$nist" "$work/query-low.txt"
 
 echo "== sqlite tables written by importNIST =="
 python3 -I - "$work/lib.sqlite" <<'PY'
