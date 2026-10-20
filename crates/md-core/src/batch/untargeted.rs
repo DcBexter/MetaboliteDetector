@@ -58,6 +58,7 @@ pub fn add_unknowns(
                 ions: u.ions,
                 rescanned: false,
                 rescued: Vec::new(),
+                alternatives: Vec::new(),
             });
         }
         prepared = PreparedLibrary::new(&lib, &s.search);

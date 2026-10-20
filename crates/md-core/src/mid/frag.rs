@@ -166,6 +166,7 @@ mod tests {
             ions,
             rescanned: false,
             rescued: Vec::new(),
+            alternatives: Vec::new(),
         };
         let mut ala = LibraryCompound::new("Ala");
         ala.features.insert("FRAG".into(), "(10/2)".into());
