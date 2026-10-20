@@ -573,6 +573,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         .set_file_name("mids.csv")
         .save_file()?;
     let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
+    let names = t.runs.clone();
     let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
     Some(spawn(ui.ctx(), move || {
         let n = lib.compounds.len();
@@ -587,7 +588,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
                 ))
             })
             .collect();
-        let e = frag_export(&runs, &compounds);
+        let e = frag_export(&shown_runs(&runs, &names), &compounds);
         let mut note = match std::fs::write(&p, &e.csv) {
             Ok(()) => format!("Saved {}", p.display()),
             Err(err) => format!("Export failed: {err}"),
@@ -602,6 +603,19 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         }
         note
     }))
+}
+
+/// The scanned runs of the shown table's columns, in its order: removed runs stay out of exports.
+/// shortcut: files are found by name, so equal names in different folders are not told apart.
+fn shown_runs(runs: &[RunResult], names: &[String]) -> Vec<RunResult> {
+    let by_name: std::collections::HashMap<_, _> = runs
+        .iter()
+        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), r)))
+        .collect();
+    names
+        .iter()
+        .filter_map(|n| by_name.get(n).copied().cloned())
+        .collect()
 }
 
 /// The export has the values the table shows. Returns a note after a save attempt.
@@ -1083,5 +1097,20 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
+    }
+
+    #[test]
+    fn exports_use_the_runs_of_the_shown_table_in_its_order() {
+        let run = |n: &str| RunResult {
+            path: format!("dir/{n}.cdf").into(),
+            ..Default::default()
+        };
+        let runs = [run("a"), run("b"), run("c")];
+        let shown = shown_runs(&runs, &["c.cdf".into(), "a.cdf".into()]);
+        let names: Vec<_> = shown
+            .iter()
+            .map(|r| r.path.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["c.cdf", "a.cdf"]);
     }
 }
