@@ -3,7 +3,7 @@
 //! the printed dump matches `docs/reverse-engineering/tools/dump_lbr.py` field by field.
 //! Passes without checking anything when the variable is not set.
 
-use md_core::library::{parse_msl, read_lbr, write_msl};
+use md_core::library::{parse_msl, read_lbr, read_mdlib, save_mdlib, write_mdlib, write_msl};
 
 #[test]
 fn reads_sample_library() {
@@ -62,6 +62,15 @@ fn reads_sample_library() {
             c.sources,
         );
     }
+
+    // .lbr → .mdlib → reading back keeps every field (text equality also covers NaN).
+    let path = std::env::temp_dir().join(format!("lbr-sample-{}.mdlib", std::process::id()));
+    save_mdlib(&path, &lib).unwrap();
+    let reopened = read_mdlib(&path);
+    std::fs::remove_file(&path).unwrap();
+    let reopened = reopened.unwrap();
+    assert_eq!(write_mdlib(&reopened), write_mdlib(&lib));
+    assert_eq!(reopened, lib);
 
     let again = parse_msl(&write_msl(&lib)).unwrap();
     assert_eq!(again.len(), lib.len());

@@ -17,7 +17,7 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.lbr or .msl) in many runs (.cdf, .nc or old .bin) and writes the
+Finds the substances of a library (.mdlib, .lbr or .msl) in many runs (.cdf, .nc or old .bin) and writes the
 substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
 
 Options:

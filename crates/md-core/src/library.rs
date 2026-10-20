@@ -1,5 +1,6 @@
-//! Compound libraries: the old binary `.lbr` format (read) and AMDIS MSL text (import and export).
-//! Layouts: `docs/reverse-engineering/file-formats.md` §1 (`.lbr`) and §6 (MSL).
+//! Compound libraries: the old binary `.lbr` format (read), AMDIS MSL text (import and export) and the
+//! library text format `.mdlib` (read and write). Layouts: `docs/reverse-engineering/file-formats.md`
+//! §1 (`.lbr`) and §6 (MSL); `.mdlib` in `docs/architecture.md` (Libraries).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -16,6 +17,8 @@ pub enum LibraryError {
     Corrupt { offset: usize, reason: String },
     #[error("MSL line {line}: {reason}")]
     Msl { line: usize, reason: String },
+    #[error("library line {line}: {reason}")]
+    Mdlib { line: usize, reason: String },
 }
 
 /// Reference spectrum of a library compound (`Spectrum<int,float>`).
@@ -52,6 +55,37 @@ pub struct LibraryCompound {
     /// 40-byte records of unknown meaning (file-formats.md §1.3), kept verbatim.
     pub blocks: Vec<[u8; BLOCK_BYTES]>,
     pub sources: Vec<String>,
+}
+
+impl LibraryCompound {
+    /// A compound without spectrum, with the defaults the old MSL importer left (sample library).
+    pub fn new(name: &str) -> Self {
+        Self {
+            spectrum: LibrarySpectrum {
+                scan: 0,
+                rt_ms: 0.0,
+                ri: 0.0,
+                bin_width: 1.0,
+                masses: Vec::new(),
+                values: Vec::new(),
+            },
+            name: name.to_string(),
+            fwhm: None,
+            integrals: None,
+            quant_ions: Vec::new(),
+            auto_quant_ions: Vec::new(),
+            features: BTreeMap::new(),
+            drt: 0.0,
+            time_stamp: 0,
+            id: 0,
+            comb_spec: Vec::new(),
+            ion_freq: Vec::new(),
+            spec_count: 1,
+            ris: Vec::new(),
+            blocks: Vec::new(),
+            sources: Vec::new(),
+        }
+    }
 }
 
 const BLOCK_BYTES: usize = 40;
@@ -270,15 +304,14 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
-/// Opens a library by extension: `.lbr`, else AMDIS `.msl`.
+/// Opens a library by extension: `.lbr`, `.mdlib`, else AMDIS `.msl`.
 pub fn open(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
     let path = path.as_ref();
-    match path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"))
-    {
-        true => read_lbr(path),
-        false => import_msl(path),
+    let ext = path.extension().unwrap_or_default().to_ascii_lowercase();
+    match ext.to_str() {
+        Some("lbr") => read_lbr(path),
+        Some("mdlib") => read_mdlib(path),
+        _ => import_msl(path),
     }
 }
 
@@ -321,7 +354,7 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
         let (key, value) = (key.trim().to_ascii_uppercase(), value.trim());
         if key == "NAME" {
             out.extend(finish_msl(cur.take())?);
-            cur = Some((msl_compound(value), n, None));
+            cur = Some((LibraryCompound::new(value), n, None));
             continue;
         }
         let Some((c, _, peaks)) = cur.as_mut() else {
@@ -351,34 +384,6 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     }
     out.extend(finish_msl(cur)?);
     Ok(out)
-}
-
-fn msl_compound(name: &str) -> LibraryCompound {
-    LibraryCompound {
-        spectrum: LibrarySpectrum {
-            scan: 0,
-            rt_ms: 0.0,
-            ri: 0.0,
-            bin_width: 1.0,
-            masses: Vec::new(),
-            values: Vec::new(),
-        },
-        name: name.to_string(),
-        fwhm: None,
-        integrals: None,
-        quant_ions: Vec::new(),
-        auto_quant_ions: Vec::new(),
-        features: BTreeMap::new(),
-        drt: 0.0,
-        time_stamp: 0,
-        id: 0,
-        comb_spec: Vec::new(),
-        ion_freq: Vec::new(),
-        spec_count: 1,
-        ris: Vec::new(),
-        blocks: Vec::new(),
-        sources: Vec::new(),
-    }
 }
 
 /// Appends the `(m/z intensity)` pairs of one peak line to the spectrum.
@@ -463,6 +468,257 @@ pub fn write_msl(compounds: &[LibraryCompound]) -> String {
     s
 }
 
+/// First line of a `.mdlib` file; the number is the format version.
+const MDLIB_HEADER: &str = "MetaboliteDetector library 1";
+
+/// Reads a `.mdlib` library file.
+pub fn read_mdlib(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let path = path.as_ref();
+    if std::fs::metadata(path)?.len() > MAX_LBR_BYTES {
+        return Err(LibraryError::Unsupported(format!(
+            "libraries larger than {MAX_LBR_BYTES} bytes"
+        )));
+    }
+    parse_mdlib(&std::fs::read_to_string(path)?)
+}
+
+/// Saves `compounds` as `.mdlib`. Writes `<path>.tmp` first and renames it over `path`, so a failed
+/// save never leaves half a library behind.
+pub fn save_mdlib(
+    path: impl AsRef<Path>,
+    compounds: &[LibraryCompound],
+) -> Result<(), LibraryError> {
+    let path = path.as_ref();
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    // Synced before the rename, so a crash cannot leave an empty file under the real name.
+    let result = std::fs::File::create(&tmp)
+        .and_then(|mut f| {
+            std::io::Write::write_all(&mut f, write_mdlib(compounds).as_bytes())?;
+            f.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(result?)
+}
+
+/// Writes compounds as `.mdlib` text; [`parse_mdlib`] reads every field back bit for bit, except
+/// that a NaN loses its sign and payload.
+pub fn write_mdlib(compounds: &[LibraryCompound]) -> String {
+    fn join<T: std::fmt::Display>(items: impl IntoIterator<Item = T>) -> String {
+        let items: Vec<_> = items.into_iter().map(|x| x.to_string()).collect();
+        items.join(" ")
+    }
+    fn pairs<A: std::fmt::Display, B: std::fmt::Display>(p: &[(A, B)]) -> String {
+        join(p.iter().map(|(a, b)| format!("{a}:{b}")))
+    }
+    let opt = |v: &Option<Vec<f64>>| v.as_ref().map_or("null".into(), join);
+    let mut s = format!("{MDLIB_HEADER}\n");
+    for c in compounds {
+        let sp = &c.spectrum;
+        let peaks: Vec<_> = sp.masses.iter().zip(&sp.values).collect();
+        let mut lines = vec![
+            ("compound", String::new()),
+            ("name", escape(&c.name)),
+            ("scan", sp.scan.to_string()),
+            ("rt_ms", sp.rt_ms.to_string()),
+            ("ri", sp.ri.to_string()),
+            ("bin_width", sp.bin_width.to_string()),
+            ("peaks", pairs(&peaks)),
+            ("fwhm", opt(&c.fwhm)),
+            ("integrals", opt(&c.integrals)),
+            ("quant_ions", join(&c.quant_ions)),
+            ("auto_quant_ions", join(&c.auto_quant_ions)),
+        ];
+        for (k, v) in &c.features {
+            lines.push(("feature", format!("{}\t{}", escape(k), escape(v))));
+        }
+        lines.extend([
+            ("drt", c.drt.to_string()),
+            ("time_stamp", c.time_stamp.to_string()),
+            ("id", c.id.to_string()),
+            ("comb_spec", pairs(&c.comb_spec)),
+            ("ion_freq", pairs(&c.ion_freq)),
+            ("spec_count", c.spec_count.to_string()),
+            ("ris", join(&c.ris)),
+        ]);
+        for b in &c.blocks {
+            lines.push(("block", b.iter().map(|x| format!("{x:02x}")).collect()));
+        }
+        for src in &c.sources {
+            lines.push(("source", escape(src)));
+        }
+        lines.push(("end", String::new()));
+        for (key, value) in lines {
+            s.push_str(key);
+            if !value.is_empty() {
+                s.push(' ');
+                s.push_str(&value);
+            }
+            s.push('\n');
+        }
+    }
+    s
+}
+
+/// Parses `.mdlib` text. Strict: unknown keys, repeated keys and a newer version are errors.
+pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
+    // Editors on Windows may put a byte order mark in front.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut lines = (text.lines().enumerate())
+        .map(|(i, l)| (i + 1, l))
+        .filter(|(_, l)| !l.trim().is_empty() && !l.starts_with('#'));
+    let err = |line: usize, reason: String| LibraryError::Mdlib { line, reason };
+    const PREFIX: &str = "MetaboliteDetector library ";
+    match lines.next() {
+        Some((_, l)) if l.trim_end() == MDLIB_HEADER => {}
+        Some((_, l)) if l.starts_with(PREFIX) => {
+            return Err(LibraryError::Unsupported(format!(
+                "library text format version {}",
+                &l[PREFIX.len()..]
+            )));
+        }
+        other => {
+            let line = other.map_or(1, |(n, _)| n);
+            return Err(err(line, format!("expected `{MDLIB_HEADER}`")));
+        }
+    }
+    let mut out = Vec::new();
+    // Compound in progress, the line it started on, and the single-use keys it has seen.
+    let mut cur: Option<(LibraryCompound, usize, Vec<&str>)> = None;
+    for (n, line) in lines {
+        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+        match (key, cur.as_mut()) {
+            ("compound", None) => cur = Some((LibraryCompound::new(""), n, Vec::new())),
+            ("end", Some((_, start, seen))) => {
+                if !seen.contains(&"name") {
+                    return Err(err(*start, "compound without `name`".into()));
+                }
+                out.extend(cur.take().map(|(c, ..)| c));
+            }
+            (_, None) => return Err(err(n, "expected `compound`".into())),
+            ("compound", Some(_)) => return Err(err(n, "`compound` before `end`".into())),
+            (key, Some((c, _, seen))) => {
+                if !matches!(key, "feature" | "block" | "source") {
+                    if seen.contains(&key) {
+                        return Err(err(n, format!("`{key}` given twice")));
+                    }
+                    seen.push(key);
+                }
+                set_mdlib_field(c, key, value).map_err(|r| err(n, r))?;
+            }
+        }
+    }
+    if let Some((_, start, _)) = cur {
+        return Err(err(start, "compound without `end`".into()));
+    }
+    Ok(out)
+}
+
+fn set_mdlib_field(c: &mut LibraryCompound, key: &str, v: &str) -> Result<(), String> {
+    fn num<T: std::str::FromStr>(v: &str) -> Result<T, String> {
+        v.parse().map_err(|_| format!("invalid number `{v}`"))
+    }
+    fn list<T: std::str::FromStr>(v: &str) -> Result<Vec<T>, String> {
+        v.split_whitespace().map(num).collect()
+    }
+    fn pairs<A: std::str::FromStr, B: std::str::FromStr>(v: &str) -> Result<Vec<(A, B)>, String> {
+        (v.split_whitespace())
+            .map(|p| {
+                let (a, b) =
+                    (p.split_once(':')).ok_or(format!("expected `m/z:value`, got `{p}`"))?;
+                Ok((num(a)?, num(b)?))
+            })
+            .collect()
+    }
+    let opt = |v: &str| match v {
+        "null" => Ok(None),
+        v => list(v).map(Some),
+    };
+    let s = &mut c.spectrum;
+    match key {
+        "name" => c.name = unescape(v)?,
+        "scan" => s.scan = num(v)?,
+        "rt_ms" => s.rt_ms = num(v)?,
+        "ri" => s.ri = num(v)?,
+        "bin_width" => s.bin_width = num(v)?,
+        "peaks" => (s.masses, s.values) = pairs::<f32, i32>(v)?.into_iter().unzip(),
+        "fwhm" => c.fwhm = opt(v)?,
+        "integrals" => c.integrals = opt(v)?,
+        "quant_ions" => {
+            c.quant_ions = list(v)?;
+            c.quant_ions.sort_by(f32::total_cmp);
+            c.quant_ions.dedup();
+        }
+        "auto_quant_ions" => c.auto_quant_ions = list(v)?,
+        "feature" => {
+            let (k, value) = v.split_once('\t').ok_or("expected `KEY<tab>value`")?;
+            // An empty key is valid: MSL import makes one from a line like `: x`.
+            let k = unescape(k)?;
+            if c.features.contains_key(&k) {
+                return Err(format!("feature `{k}` given twice"));
+            }
+            c.features.insert(k, unescape(value)?);
+        }
+        "drt" => c.drt = num(v)?,
+        "time_stamp" => c.time_stamp = num(v)?,
+        "id" => c.id = num(v)?,
+        "comb_spec" => c.comb_spec = pairs(v)?,
+        "ion_freq" => c.ion_freq = pairs(v)?,
+        "spec_count" => c.spec_count = num(v)?,
+        "ris" => c.ris = list(v)?,
+        "block" => {
+            if v.len() != 2 * BLOCK_BYTES || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(format!("block must be {} hex digits", 2 * BLOCK_BYTES));
+            }
+            let mut b = [0; BLOCK_BYTES];
+            for (i, x) in b.iter_mut().enumerate() {
+                *x = u8::from_str_radix(&v[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
+            }
+            c.blocks.push(b);
+        }
+        "source" => c.sources.push(unescape(v)?),
+        _ => return Err(format!("unknown key `{key}`")),
+    }
+    Ok(())
+}
+
+/// Keeps text values on one line and frees the tab to separate a feature's key from its value.
+fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(s: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(ch) = it.next() {
+        out.push(match ch {
+            '\\' => match it.next() {
+                Some('\\') => '\\',
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some('t') => '\t',
+                Some(other) => return Err(format!("unknown escape `\\{other}`")),
+                None => return Err("`\\` at the end of a value".into()),
+            },
+            c => c,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -476,6 +732,9 @@ mod tests {
         let lbr = dir.join("lib.LBR");
         std::fs::copy(&msl, &lbr).unwrap();
         assert!(super::open(&lbr).is_err());
+        let mdlib = dir.join("lib.MDLIB");
+        super::save_mdlib(&mdlib, &super::open(&msl).unwrap()).unwrap();
+        assert_eq!(super::open(&mdlib).unwrap(), super::open(&msl).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -646,5 +905,107 @@ mod tests {
         let mut c = parse_msl("NAME: x\nNUM PEAKS: 0\n").unwrap().remove(0);
         c.name = "two\nNAME: lines".into();
         assert_eq!(parse_msl(&write_msl(&[c])).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mdlib_keeps_every_field_bit_for_bit() {
+        let mut lib = parse_lbr(&sample_payload()).unwrap();
+        let mut odd = lib[0].clone();
+        odd.name = "a\\b\nc\td\r e ".into();
+        odd.features.insert("K\tE\\Y".into(), "v\nw".into());
+        odd.features
+            .insert(String::new(), "from `: x` in MSL".into());
+        (odd.fwhm, odd.integrals) = (Some(vec![]), Some(vec![1.5, -0.0, f64::INFINITY]));
+        (odd.spectrum.ri, odd.drt, odd.spectrum.bin_width) = (-1.0, f64::NAN, 0.1);
+        odd.sources.clear();
+        lib.push(odd);
+        lib.push(LibraryCompound::new("bare"));
+        let text = write_mdlib(&lib);
+        let again = parse_mdlib(&text).unwrap();
+        // Text equality also covers NaN and -0.0, which `==` cannot tell apart.
+        assert_eq!(write_mdlib(&again), text);
+        assert_eq!(again[0], lib[0]);
+        assert_eq!(
+            (&again[1].name, &again[1].features),
+            (&lib[1].name, &lib[1].features)
+        );
+        assert!(again[1].drt.is_nan());
+        assert_eq!(
+            again[1].integrals.as_ref().unwrap()[1].to_bits(),
+            (-0.0f64).to_bits()
+        );
+        assert_eq!(again[2], lib[2]);
+    }
+
+    #[test]
+    fn mdlib_edited_library_reopens_with_its_values() {
+        let mut lib = parse_msl(MSL).unwrap();
+        lib.remove(1);
+        let g = &mut lib[0];
+        g.name = "Glycine 3TMS".into();
+        g.spectrum.ri = 1305.5;
+        g.quant_ions = vec![174.0, 248.0];
+        g.features.insert("FRAG".into(), "(174/2)(248/2)".into());
+        g.features
+            .insert("COMMENT".into(), "edited\nin the app".into());
+        lib.push(LibraryCompound::new("New compound"));
+        let path = std::env::temp_dir().join(format!("md-core-{}.mdlib", std::process::id()));
+        save_mdlib(&path, &lib).unwrap();
+        let again = read_mdlib(&path);
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp_left = Path::new(&tmp).exists();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(again.unwrap(), lib);
+        assert!(!tmp_left);
+    }
+
+    #[test]
+    fn mdlib_rejects_broken_files() {
+        let h = "MetaboliteDetector library 1\n";
+        let line = |body: &str| match parse_mdlib(&format!("{h}{body}")) {
+            Err(LibraryError::Mdlib { line, .. }) => line,
+            r => panic!("{body:?} gave {r:?}"),
+        };
+        assert_eq!(line("compound\nname a\nbogus 1\nend\n"), 4);
+        assert_eq!(line("compound\nname a\nname b\nend\n"), 4);
+        assert_eq!(line("compound\nri 1\nend\n"), 2);
+        assert_eq!(line("compound\nname a\n"), 2);
+        assert_eq!(line("name a\n"), 2);
+        assert_eq!(line("compound\nname a\ncompound\n"), 4);
+        assert_eq!(line("compound\nname a\\x\nend\n"), 3);
+        assert_eq!(line("compound\nname a\\\nend\n"), 3);
+        assert_eq!(line("compound\nname a\nri x\nend\n"), 4);
+        assert_eq!(line("compound\nname a\npeaks 73:1 74\nend\n"), 4);
+        assert_eq!(line("compound\nname a\nfeature K\nend\n"), 4);
+        assert_eq!(
+            line("compound\nname a\nfeature K\tv\nfeature K\tw\nend\n"),
+            5
+        );
+        assert_eq!(line("compound\nname a\nblock 00\nend\n"), 4);
+        assert_eq!(
+            line(&format!(
+                "compound\nname a\nblock +{}\nend\n",
+                "0".repeat(79)
+            )),
+            4
+        );
+        assert!(matches!(
+            parse_mdlib("NAME: x\n"),
+            Err(LibraryError::Mdlib { line: 1, .. })
+        ));
+        assert!(matches!(parse_mdlib(""), Err(LibraryError::Mdlib { .. })));
+        assert!(matches!(
+            parse_mdlib("MetaboliteDetector library 2\n"),
+            Err(LibraryError::Unsupported(_))
+        ));
+        // Comments, blank lines and CRLF are fine; missing keys take a new compound's values.
+        let lib = parse_mdlib(&format!(
+            "\u{feff}# x\r\n{h}\r\ncompound\r\nname a\r\nquant_ions 9 7 9\r\nend\r\n"
+        ))
+        .unwrap();
+        let mut want = LibraryCompound::new("a");
+        want.quant_ions = vec![7.0, 9.0];
+        assert_eq!(lib, [want]);
     }
 }
