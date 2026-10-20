@@ -734,7 +734,12 @@ Unknown; probably the display/export of a compound, not this reader).
 `parse_msl` also reads MSP files as published by NIST and MoNA/MassBank: keys `Name:`, `Synon:`, `Formula:`,
 `MW:`, `CAS#:`, `NIST#:`, `Comments:`, `Num Peaks:`; after `Num Peaks:` a line that starts with a digit holds
 `m/z intensity` pairs separated by `;` or spaces, each optionally followed by a quoted annotation. Repeated
-keys (`Synon:`) are joined with `\n`. Retention-index notations in comments are not read.
+keys (`Synon:`) are joined with `\n`. Retention index: the old program reads only `RI:` and keeps
+`Retention_index:` as a feature (checked with its own import and export on a synthetic file: the export writes
+`RETENTION_INDEX: 1817.1` and `RI:-1.0000`). The rewrite deviates on purpose for MoNA and MS-DIAL files:
+`Retention_index:`, `RetentionIndex:` and `Retention index:` (any case) set the retention index when no `RI:` is
+given; `RI:` wins in either order, and a spelling without a number stays a feature. Notations inside comments
+(`RI=`) are not read.
 
 ### Unknowns (section 6)
 - Full MSL line grammar, rt/ri key names, and handling of multiple spectra per block.

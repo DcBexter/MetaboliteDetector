@@ -307,6 +307,121 @@ fn amino_acids_get_ri_score_with_lib_aa() {
     }
 }
 
+/// MoNA GC-MS export (NIST MSP, `MD_MONA_MSP`; mixed licences, never in the repo) with the FAME RI
+/// calibration of the example runs. The FiehnLib part of the file has `Retention_index:` on the same
+/// scale as TargetSearch's `library.txt` (FAME RI in ms), so the markers calibrate the runs directly.
+/// Prints, per run and over all runs, what the search finds with and without the RI score; a hit is
+/// "wrong by RI" when the library RI is known and more than 3 sigma from the component. The targets of
+/// `library.txt` count as found when a component inside the target's RI window is assigned a MoNA
+/// substance of the same name.
+#[test]
+fn mona_msp_finds_the_targets_with_ri() {
+    use md_core::ri::{RiCalibration, marker_peaks, window_points};
+    use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+    let Ok(msp) = std::env::var("MD_MONA_MSP") else {
+        eprintln!("skipped: MD_MONA_MSP not set");
+        return;
+    };
+    let runs = runs();
+    let Some(dir) = runs.first().and_then(|p| p.parent()) else {
+        return;
+    };
+    let lib = md_core::library::import_msl(&msp).unwrap();
+    let known = lib.iter().filter(|c| c.spectrum.ri >= 0.0).count();
+    eprintln!(
+        "MoNA: {} spectra, {known} with a retention index",
+        lib.len()
+    );
+    let windows: Vec<(f64, f64, f64)> = table(&dir.join("rimLimits.txt"))
+        .iter()
+        .map(|r| {
+            (
+                r[0].parse().unwrap(),
+                r[1].parse().unwrap(),
+                r[2].parse().unwrap(),
+            )
+        })
+        .collect();
+    // (name without the derivative, RI, window)
+    let targets: Vec<(String, f64, f64)> = table(&dir.join("library.txt"))
+        .iter()
+        .map(|r| {
+            let name = r[0].split(" (").next().unwrap().to_lowercase();
+            (name, r[1].parse().unwrap(), r[2].parse().unwrap())
+        })
+        .collect();
+    // FAME RI is in ms: the sigma of the RI score is 2 s, not the 20 RI units of alkane indices.
+    let with = SearchSettings {
+        ri_diff: 2000.0,
+        ..Default::default()
+    };
+    let without = SearchSettings {
+        use_ri: false,
+        ..with.clone()
+    };
+    let (prep_with, prep_without) = (
+        PreparedLibrary::new(&lib, &with),
+        PreparedLibrary::new(&lib, &without),
+    );
+    // [hits, wrong by RI, targets found] for [spectrum only, with RI]
+    let mut total = [[0usize; 3]; 2];
+    for path in &runs {
+        let c = md_core::andi::read(path).unwrap();
+        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let cal = RiCalibration::new(window_points(&fame, &windows)).unwrap();
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(&PeakSettings::default());
+        let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
+        let ris = cal.component_ris(&c.scan_times_s, &comps);
+        let mut line = String::new();
+        for (k, (s, prep)) in [(&without, &prep_without), (&with, &prep_with)]
+            .into_iter()
+            .enumerate()
+        {
+            let id = map_compounds_to_library(&comps, Some(&ris), prep, s);
+            let mut n = [0usize; 3];
+            let mut found = Vec::new();
+            for (i, h) in id.assigned.iter().enumerate() {
+                let Some(h) = h else { continue };
+                let (c, ri) = (&lib[h.compound], ris[i]);
+                n[0] += 1;
+                n[1] +=
+                    (c.spectrum.ri >= 0.0 && (c.spectrum.ri - ri).abs() > 3.0 * s.ri_diff) as usize;
+                let name = c.name.to_lowercase();
+                if let Some(t) = targets
+                    .iter()
+                    .find(|t| t.0 == name && (t.1 - ri).abs() <= t.2)
+                {
+                    n[2] += 1;
+                    found.push(t.0.clone());
+                }
+            }
+            line += &format!(
+                " | {} {:?}: {found:?}",
+                if k == 0 { "spec" } else { "RI" },
+                &n[..2]
+            );
+            for (t, v) in total[k].iter_mut().zip(n) {
+                *t += v;
+            }
+        }
+        eprintln!("{}{line}", name(path));
+    }
+    eprintln!(
+        "spectrum only: hits, wrong by RI, targets found = {:?}",
+        total[0]
+    );
+    eprintln!(
+        "with RI:       hits, wrong by RI, targets found = {:?}",
+        total[1]
+    );
+    if !runs.is_empty() {
+        assert_eq!(total[1][1], 0, "an RI hit is more than 3 sigma off");
+        assert!(total[1][0] <= total[0][0]);
+        assert!(total[1][2] >= total[0][2], "RI lost targets");
+    }
+}
+
 /// Result table of a real run: components whose own spectra form the library are found again, with
 /// their quant-ion area, and the CSV has one line per component.
 #[test]
