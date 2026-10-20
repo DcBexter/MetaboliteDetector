@@ -78,6 +78,11 @@ impl Edits {
         self.cols.is_none() && self.rows.is_empty()
     }
 
+    /// "Restore removed": brings back all runs and substances and the original order.
+    fn restore(&mut self) {
+        *self = Self::default();
+    }
+
     /// Applies what the user asked for in the shown table with `n` columns in the base table.
     fn apply(&mut self, act: Act, n: usize) {
         let mut cols = self.cols(n);
@@ -421,12 +426,12 @@ impl Batch {
         );
     }
 
-    /// Progress and Cancel while a scan runs, else Start and what it will use.
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
     fn library_ready(&self, lib: &Library) -> bool {
         lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
     }
 
+    /// Progress and Cancel while a scan runs, else Start and what it will use.
     fn job_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -475,7 +480,7 @@ impl Batch {
                     None => ui.label("Open a library first (File → Open library)."),
                 };
                 if lib.is_some_and(|l| !self.library_ready(l)) {
-                    ui.label("Library is being prepared for the new search settings.");
+                    ui.label("Library is being prepared for the new search or RT-only settings.");
                 }
                 ui.label(&self.note);
             }
@@ -559,6 +564,7 @@ impl Batch {
                         &mut self.view,
                         &mut self.norm.edits,
                         &group_names(shown),
+                        self.norm.z_score,
                     );
                     if self.view.totals && self.totals.0 != self.generation {
                         self.totals = (self.generation, shown.total_intensities());
@@ -756,7 +762,18 @@ fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
     apply(base, &mode(n, base, &times), n.z_score).without_rows(&n.edits.rows)
 }
 
-fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&str]) {
+/// With `z_scored` there are no group statistics: the old program computes them on the normalised
+/// values only, and a mean, hits above 0 or a missing value as 0 say nothing about z-scores.
+fn view_controls(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    edits: &mut Edits,
+    groups: &[&str],
+    z_scored: bool,
+) {
+    if z_scored && v.mode == Mode::Groups {
+        v.mode = Mode::Values;
+    }
     // Two rows: the window must not need more than the room beside the run list.
     ui.horizontal(|ui| {
         for (mode, title) in [
@@ -764,9 +781,13 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
             (Mode::Times, "Retention times (min)"),
             (Mode::Groups, "Group statistics"),
         ] {
-            let r = ui.selectable_value(&mut v.mode, mode, title);
+            let locked = mode == Mode::Groups && z_scored;
+            let r = ui
+                .add_enabled_ui(!locked, |ui| ui.selectable_value(&mut v.mode, mode, title))
+                .inner;
             if mode == Mode::Groups {
-                r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.");
+                r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.")
+                    .on_disabled_hover_text("Not with z-scores: a missing value cannot count as 0 there, and \"#\" (values above 0) means nothing. Turn the z-score off; the group statistics then use the normalised values, like the old program.");
             }
         }
     });
@@ -805,7 +826,7 @@ fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&
                 )
                 .clicked()
         {
-            *edits = Edits::default();
+            edits.restore();
         }
     });
 }
@@ -836,6 +857,24 @@ fn number(v: f64, decimals: usize) -> String {
     }
 }
 
+/// A mean with 6 significant digits, like the old table (Qt shows a double as `'g'` with 6), so
+/// normalised fractions stay readable; without exponent.
+fn significant(v: f64) -> String {
+    if v == 0.0 || !v.is_finite() {
+        return number(v, 0);
+    }
+    if v.abs() < 1e-10 {
+        return format!("{v:.5e}");
+    }
+    let decimals = (5 - v.abs().log10().floor() as i32).clamp(0, 15) as usize;
+    let s = format!("{v:.decimals$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').into()
+    } else {
+        s
+    }
+}
+
 /// Titles and sub-titles of the columns after "Quant ions".
 fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, String)> {
     if v.mode != Mode::Groups {
@@ -863,7 +902,7 @@ fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> V
     for g in groups {
         let x = values(g);
         let s = summary(&x);
-        out.push(number(s.mean, 0));
+        out.push(significant(s.mean));
         out.push(number(s.rel_std_err, 3));
         out.push(s.hits.to_string());
         if let Some(b) = &blanks {
@@ -1300,6 +1339,66 @@ mod tests {
     }
 
     #[test]
+    fn group_statistics_are_readable_after_normalising_and_locked_for_z_scores() {
+        let t = Table {
+            runs: vec!["a".into(), "b".into(), "c".into()],
+            groups: vec!["A".into(); 3],
+            rows: vec![md_core::batch::Row {
+                compound: 0,
+                name: "s0".into(),
+                rt_s: 60.0,
+                ions: vec![73],
+                values: vec![Some(1.0), Some(2.0), Some(10.0)],
+                rts_s: vec![Some(60.0); 3],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            group_cells(&t, 0, &["A"], None)[..3],
+            ["4.33333", "0.657", "3"]
+        );
+        // By total signal every value is 1: the old code rounded the mean to "1" and fractions to 0.
+        let mut n = Norm {
+            kind: Kind::TotalSignal,
+            ..Default::default()
+        };
+        let shown = shown_table(&t, &n, None);
+        assert_eq!(group_cells(&shown, 0, &["A"], None)[0], "1");
+        let shown = Table {
+            rows: vec![md_core::batch::Row {
+                values: vec![Some(0.0123), Some(0.0124), Some(0.0128)],
+                ..t.rows[0].clone()
+            }],
+            ..t.clone()
+        };
+        assert_eq!(group_cells(&shown, 0, &["A"], None)[0], "0.0125");
+        assert_eq!(significant(1_234_567.0), "1234567");
+        assert_eq!(significant(-0.0123456789), "-0.0123457");
+        assert_eq!(significant(f64::NAN), "–");
+        assert_eq!(significant(-1e-20), "-1.00000e-20");
+
+        // z-scores of 1, 2, 10: only one is above 0, so "#" would say 1 of 3 hits.
+        n = Norm {
+            z_score: true,
+            ..Default::default()
+        };
+        let z: Vec<String> = (shown_table(&t, &n, None).rows[0].values.iter())
+            .map(|v| format!("{:.2}", v.unwrap()))
+            .collect();
+        assert_eq!(z, ["-0.68", "-0.47", "1.15"]);
+        let mut v = View {
+            mode: Mode::Groups,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            view_controls(ui, &mut v, &mut Edits::default(), &["A"], true);
+        });
+        out.textures_delta.clear();
+        assert!(v.mode == Mode::Values);
+    }
+
+    #[test]
     fn the_shown_table_has_no_removed_runs_or_substances() {
         let row = |compound, values: [f64; 3]| md_core::batch::Row {
             compound,
@@ -1326,6 +1425,13 @@ mod tests {
         n.kind = Kind::TotalSignal;
         let shown = shown_table(&t, &n, None);
         assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
+        // "Restore removed" brings back the runs, the substances and the original order.
+        n.kind = Kind::None;
+        n.edits.apply(Act::MoveRun(0, 1), 3);
+        n.edits.restore();
+        let shown = shown_table(&t, &n, None);
+        assert_eq!(shown.runs, t.runs);
+        assert_eq!(shown.rows, t.rows);
     }
 
     #[test]
