@@ -297,17 +297,22 @@ fn compound_check(c: &LibraryCompound) -> u32 {
 /// renamed, so a failed write never leaves a broken file in its place.
 pub fn write_cmp(path: impl AsRef<Path>, compounds: &[LibraryCompound]) -> std::io::Result<()> {
     let path = path.as_ref();
+    // Per process and never over an existing file: a leftover or foreign `.part` stays untouched.
     let mut part = path.as_os_str().to_owned();
-    part.push(".part");
+    part.push(format!(".{}.part", std::process::id()));
+    let created = std::cell::Cell::new(false);
     let write = || {
-        let file = std::fs::File::create(&part)?;
+        let file = (std::fs::OpenOptions::new().write(true).create_new(true)).open(&part)?;
+        created.set(true);
         let mut gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
         gz.write_all(&cmp_payload(compounds))?;
         gz.finish()?.sync_all()?;
         std::fs::rename(&part, path)
     };
     write().inspect_err(|_| {
-        std::fs::remove_file(&part).ok();
+        if created.get() {
+            std::fs::remove_file(&part).ok();
+        }
     })
 }
 

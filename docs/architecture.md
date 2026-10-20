@@ -455,7 +455,7 @@ components and RIs the search used, so it costs no second pass; a failed write, 
 batch map to (two `x.cdf` into one folder, neither is saved; names compared without case on Windows and
 macOS), or a name that is itself an input of the batch, is an error of that run and keeps its result.
 `.cmp` inputs are not saved again. In a folder a FastFlight run (`r1/MsData.FFT`) is saved as `r1.cmp`.
-`write_cmp` writes `<name>.part` and renames it, so a failed write leaves no broken `.cmp`; an existing
+`write_cmp` writes a new `<name>.<pid>.part` and renames it, so a failed write leaves no broken `.cmp`; an existing
 file is replaced, as by the old wizard.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):

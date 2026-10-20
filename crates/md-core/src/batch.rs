@@ -312,6 +312,11 @@ pub fn scan_runs(
     // `out/x.cmp` and `./out\x.cmp` are one file; on Windows and macOS so are `X.cmp` and `x.cmp`.
     let key = |p: &Path| {
         let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        // Symlinks: the folder as the file system sees it (the file itself may not exist yet).
+        let p = match (p.parent().map(std::fs::canonicalize), p.file_name()) {
+            (Some(Ok(dir)), Some(name)) => dir.join(name),
+            _ => p,
+        };
         match cfg!(any(windows, target_os = "macos")) {
             true => p.to_string_lossy().to_lowercase(),
             false => p.to_string_lossy().into_owned(),
