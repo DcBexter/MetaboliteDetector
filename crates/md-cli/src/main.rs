@@ -22,7 +22,8 @@ Usage: md-cli --library FILE [options] RUN...
 
 Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc, old
 .bin or saved components .cmp, which are not deconvoluted again and cannot be rescanned) and writes the
-substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
+substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read
+(or saved).
 
 Options:
   -l, --library FILE          library (required)
@@ -45,6 +46,7 @@ Options:
       --ion-integrals         also write the integral of every quant ion to FILE.ions.csv (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
+      --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
       --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
       --shift-cutoff F        min. score of the reference in a run (default: the library search cutoff)
   -h, --help                  this text";
@@ -67,6 +69,7 @@ struct Args {
     ion_integrals: bool,
     untargeted: bool,
     rescan: bool,
+    save_cmp: Option<PathBuf>,
     shift_reference: Option<String>,
     shift_cutoff: Option<f64>,
     runs: Vec<PathBuf>,
@@ -112,6 +115,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         ion_integrals: false,
         untargeted: false,
         rescan: false,
+        save_cmp: None,
         shift_reference: None,
         shift_cutoff: None,
         runs: Vec::new(),
@@ -157,6 +161,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--ion-integrals" => a.ion_integrals = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
+            "--save-cmp" => a.save_cmp = Some(value()?.into()),
             "--shift-reference" => a.shift_reference = Some(text()?),
             "--shift-cutoff" => a.shift_cutoff = Some(num(0.0, 1.0)?),
             _ => return Err(format!("unknown option {name}")),
@@ -208,6 +213,11 @@ fn run(a: Args) -> Result<bool, String> {
     ts.max_discrepancy = a.max_discrepancy.unwrap_or(ts.max_discrepancy);
     let mut scan = settings.scan(calibration);
     scan.untargeted = a.untargeted;
+    if let Some(dir) = a.save_cmp {
+        // Before the scan: a wrong folder must not cost a whole scan.
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        scan.save_cmp = Some(md_core::batch::CmpTarget::Dir(dir));
+    }
     if let Some(name) = &a.shift_reference {
         if scan.calibration.is_none() {
             return Err("--shift-reference needs a calibration (-c)".into());
@@ -385,26 +395,11 @@ mod tests {
 
     #[test]
     fn a_saved_cmp_is_a_run_too() {
-        use md_core::deconv::deconvolute;
-        use md_core::peaks::IonTraces;
-
         let dir = std::env::temp_dir().join(format!("md-cli-cmp-{}", std::process::id()));
         let line = study(&dir);
-        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let save = format!("{line} --save-cmp {}", dir.display());
+        assert!(run(args(&save).unwrap().unwrap()).unwrap());
         let from_run = std::fs::read_to_string(dir.join("out.csv")).unwrap();
-
-        let c = md_core::read_run(&dir.join("ctrl_1.cdf")).unwrap();
-        let g = GcmsSettings::default();
-        let mut traces = IonTraces::new(&c).unwrap();
-        let peaks = traces.detect_all_peaks(&g.peak());
-        let comps = deconvolute(&traces, &peaks, &g.deconv());
-        let masses: Vec<u32> = peaks
-            .iter()
-            .map(|p| traces.masses[p.row as usize])
-            .collect();
-        let saved =
-            md_core::cmp::compounds_of_components(&comps, &masses, &peaks, &c.scan_times_s, &[]);
-        md_core::cmp::write_cmp(dir.join("ctrl_1.cmp"), &saved).unwrap();
 
         let line = line.replace("ctrl_1.cdf", "ctrl_1.cmp");
         assert!(run(args(&format!("{line} --rescan")).unwrap().unwrap()).unwrap());

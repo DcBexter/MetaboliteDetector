@@ -405,6 +405,7 @@ impl GcmsSettings {
             calibration,
             shift: None,
             untargeted: false,
+            save_cmp: None,
         }
     }
 

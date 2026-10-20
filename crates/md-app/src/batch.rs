@@ -188,6 +188,8 @@ impl Default for Norm {
 struct ScanOptions {
     untargeted: bool,
     rescan: bool,
+    /// Save the components of each run as `.cmp` (old Compound Detection Wizard).
+    save_cmp: Option<md_core::batch::CmpTarget>,
 }
 
 pub struct Batch {
@@ -220,6 +222,40 @@ pub struct Batch {
     frag_job: Option<mpsc::Receiver<String>>,
 }
 
+/// "Save components as .cmp": off, next to each run, or into a chosen folder.
+fn save_cmp_row(ui: &mut egui::Ui, target: &mut Option<md_core::batch::CmpTarget>) {
+    use md_core::batch::CmpTarget;
+    let hint = "Also save the components of each run as run.cmp, with the RI of the search, \
+                like the old Compound Detection Wizard. Saved runs load in \"Results of the \
+                active run\" and scan faster as batch input. Applies to the next scan.";
+    let name = ui.label("Save components as .cmp").on_hover_text(hint);
+    ui.horizontal(|ui| {
+        let mut on = target.is_some();
+        if ui
+            .add(egui::Checkbox::without_text(&mut on))
+            .labelled_by(name.id)
+            .on_hover_text(hint)
+            .changed()
+        {
+            *target = on.then_some(CmpTarget::BesideRun);
+        }
+        let Some(t) = target else { return };
+        ui.label(match t {
+            CmpTarget::BesideRun => "next to each run".into(),
+            CmpTarget::Dir(d) => d.display().to_string(),
+        });
+        if ui.button("Folder…").clicked()
+            && let Some(d) = rfd::FileDialog::new().pick_folder()
+        {
+            *t = CmpTarget::Dir(d);
+        }
+        if matches!(t, CmpTarget::Dir(_)) && ui.button("Next to runs").clicked() {
+            *t = CmpTarget::BesideRun;
+        }
+    });
+    ui.end_row();
+}
+
 impl Default for Batch {
     fn default() -> Self {
         Self {
@@ -230,6 +266,7 @@ impl Default for Batch {
             options: ScanOptions {
                 untargeted: false,
                 rescan: false,
+                save_cmp: None,
             },
             settings: TableSettings::default(),
             applied: GcmsSettings::default(),
@@ -353,6 +390,7 @@ impl Batch {
                 .and(reference)
                 .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
             untargeted: self.options.untargeted,
+            save_cmp: self.options.save_cmp.clone(),
             ..self.applied.scan(cal.cloned())
         };
         let rescan = self.options.rescan;
@@ -481,6 +519,7 @@ impl Batch {
                  positions. Applies to the next scan, with the quant ions chosen now.",
                 egui::Checkbox::without_text(&mut self.options.rescan),
             );
+            save_cmp_row(ui, &mut self.options.save_cmp);
         });
         crate::settings::ranges(
             ui,

@@ -446,6 +446,17 @@ A `.cmp` is also a batch input (`batch::scan_runs`, file picker and `md-cli`): i
 as saved, with RI and shift correction from the apex times; there is no raw data, so `rescan_runs` skips it.
 A saved component keeps one peak per mass, so where a run has two peaks of a quant mass and only the second
 passes `--min-sn`, the table of the `.cmp` lacks that value.
+The batch also saves each run it deconvolutes as `.cmp` (`ScanSettings::save_cmp`; batch window "Save
+components as .cmp", `md-cli --save-cmp DIR`), in place of the old Compound Detection Wizard
+(`RICalibrationWizard` → `CompoundDetector::detect`, 0x3f4420: per run `detectAllPeaks`, deconvolution,
+`calculateRI` with the run's calibration, then `<base>.cmp` next to the run; a failed run gives "Error
+detecting compounds of file:" and the others go on). The file is written in the scan worker from the
+components and RIs the search used, so it costs no second pass; a failed write, or a name two runs of the
+batch map to (two `x.cdf` into one folder, neither is saved; names compared without case on Windows and
+macOS), or a name that is itself an input of the batch, is an error of that run and keeps its result.
+`.cmp` inputs are not saved again. In a folder a FastFlight run (`r1/MsData.FFT`) is saved as `r1.cmp`.
+`write_cmp` writes a new `<name>.<pid>.part` and renames it, so a failed write leaves no broken `.cmp`; an existing
+file is replaced, as by the old wizard.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 

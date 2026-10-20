@@ -45,6 +45,36 @@ pub struct ScanSettings {
     pub shift: Option<ShiftReference>,
     /// Keep the components without a library hit (`Scanned::unknown`) for `add_unknowns`.
     pub untargeted: bool,
+    /// Also save the components of every deconvoluted run as `.cmp` (old Compound Detection Wizard).
+    pub save_cmp: Option<CmpTarget>,
+}
+
+/// Where `scan_runs` saves the components of a run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CmpTarget {
+    /// `run.cdf` → `run.cmp` in the run's folder, like the old wizard (`name.bin` → `name.cmp`).
+    BesideRun,
+    /// `run.cdf` → `DIR/run.cmp`.
+    Dir(PathBuf),
+}
+
+impl CmpTarget {
+    pub fn path(&self, run: &Path) -> PathBuf {
+        let name = run.with_extension("cmp");
+        match self {
+            Self::BesideRun => name,
+            // Every FastFlight run is a `MsData.FFT`: in a folder of its own it is named after its run.
+            Self::Dir(dir) if crate::fastflight::is_fastflight(run) => {
+                let run = std::path::absolute(run).unwrap_or_else(|_| run.to_path_buf());
+                let mut folder = (run.parent().and_then(Path::file_name))
+                    .unwrap_or_default()
+                    .to_owned();
+                folder.push(".cmp");
+                dir.join(folder)
+            }
+            Self::Dir(dir) => dir.join(name.file_name().unwrap_or_default()),
+        }
+    }
 }
 
 /// RT shift reference: library index and the minimum overall score it must reach in a run.
@@ -158,6 +188,17 @@ pub fn scan_chromatogram(
     lib: &PreparedLibrary,
     s: &ScanSettings,
 ) -> Result<Scanned, TooLarge> {
+    scan_and_save(c, lib, s, None).map(|r| r.0)
+}
+
+/// [`scan_chromatogram`] that also writes the components to `cmp`, with the RI of the search (as
+/// "Save components…" does); a failed write is the second value and leaves the scan as it is.
+fn scan_and_save(
+    c: Chromatogram,
+    lib: &PreparedLibrary,
+    s: &ScanSettings,
+    cmp: Option<&Path>,
+) -> Result<(Scanned, Option<String>), TooLarge> {
     let mut traces = IonTraces::new(&c)?;
     // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
     // peak memory per run.
@@ -165,9 +206,21 @@ pub fn scan_chromatogram(
     drop(c);
     let peaks = traces.detect_all_peaks(&s.peaks);
     let comps = deconvolute(&traces, &peaks, &s.deconv);
-    Ok(scan_components(&times, &comps, &peaks, lib, s, |i| {
-        traces.masses[peaks[i].row as usize]
-    }))
+    let masses: Vec<u32> = (peaks.iter())
+        .map(|p| traces.masses[p.row as usize])
+        .collect();
+    drop(traces);
+    let scanned = scan_components(&times, &comps, &peaks, lib, s, |i| masses[i]);
+    let failed = cmp.and_then(|path| {
+        let ris = (scanned.calibration.as_ref()).map_or_else(
+            || vec![-1.0; comps.len()],
+            |c| c.component_ris(&times, &comps),
+        );
+        let compounds = crate::cmp::compounds_of_components(&comps, &masses, &peaks, &times, &ris);
+        (crate::cmp::write_cmp(path, &compounds).err())
+            .map(|e| format!("could not save {}: {e}", path.display()))
+    });
+    Ok((scanned, failed))
 }
 
 /// The run behind a `.cmp` input: its saved components instead of a deconvolution. The scan times
@@ -237,7 +290,9 @@ fn scan_components(
 /// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
 /// (rayon) as well. A `.cmp` file stands for a run already analysed: its saved components are searched
 /// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
-/// the result is `None`. Unreadable files are listed as errors and do not stop the batch.
+/// the result is `None`. Unreadable files are listed as errors and do not stop the batch. With
+/// `s.save_cmp` each deconvoluted run is also saved as `.cmp`; a file that cannot be written, or whose
+/// name another run of the batch also maps to, is an error, and the run's result is kept.
 pub fn scan_runs(
     paths: &[PathBuf],
     lib: &PreparedLibrary,
@@ -247,53 +302,104 @@ pub fn scan_runs(
     cancel: &AtomicBool,
 ) -> Option<(Vec<RunResult>, Vec<String>)> {
     let next = AtomicUsize::new(0);
-    let mut out: Vec<(usize, Result<RunResult, String>)> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut mine = Vec::new();
-                    while !cancel.load(Relaxed) {
-                        let i = next.fetch_add(1, Relaxed);
-                        let Some(path) = paths.get(i) else { break };
-                        // A panic in one file becomes its error, so the other files are kept.
-                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            match crate::cmp::is_cmp(path) {
-                                true => scan_saved(path, lib, s),
-                                false => crate::read_run(path).and_then(|c| {
-                                    scan_chromatogram(c, lib, s).map_err(|e| e.to_string())
-                                }),
-                            }
-                        }))
-                        .unwrap_or_else(|_| Err("analysis crashed".into()))
-                        .map(|r| RunResult {
-                            path: path.clone(),
-                            found: r.found,
-                            unknown: r.unknown,
-                            calibration: r.calibration,
-                        })
-                        .map_err(|e| format!("{}: {e}", path.display()));
-                        mine.push((i, r));
-                        done.fetch_add(1, Relaxed);
-                    }
-                    mine
+    let targets: Vec<Option<PathBuf>> = (paths.iter())
+        .map(|p| {
+            (s.save_cmp.as_ref())
+                .filter(|_| !crate::cmp::is_cmp(p))
+                .map(|t| t.path(p))
+        })
+        .collect();
+    // `out/x.cmp` and `./out\x.cmp` are one file; on Windows and macOS so are `X.cmp` and `x.cmp`.
+    let key = |p: &Path| {
+        let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        // Symlinks: the folder as the file system sees it (the file itself may not exist yet).
+        let p = match (p.parent().map(std::fs::canonicalize), p.file_name()) {
+            (Some(Ok(dir)), Some(name)) => dir.join(name),
+            _ => p,
+        };
+        match cfg!(any(windows, target_os = "macos")) {
+            true => p.to_string_lossy().to_lowercase(),
+            false => p.to_string_lossy().into_owned(),
+        }
+    };
+    let inputs: std::collections::HashSet<String> = paths.iter().map(|p| key(p)).collect();
+    let mut uses = std::collections::HashMap::new();
+    for t in targets.iter().flatten() {
+        *uses.entry(key(t)).or_insert(0) += 1;
+    }
+    // Two runs saved to one name would overwrite each other, and a target that is an input of this
+    // batch would change under its reader: neither is saved.
+    let clashes: Vec<Option<String>> = (targets.iter())
+        .map(|t| {
+            let t = t.as_deref()?;
+            match (inputs.contains(&key(t)), uses[&key(t)] > 1) {
+                (true, _) => Some(format!(
+                    "not saved: {} is an input of this batch",
+                    t.display()
+                )),
+                (_, true) => Some(format!(
+                    "not saved: another run is also saved as {}",
+                    t.display()
+                )),
+                _ => None,
+            }
+        })
+        .collect();
+    let mut out: Vec<(usize, Result<RunResult, String>, Option<String>)> =
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut mine = Vec::new();
+                        while !cancel.load(Relaxed) {
+                            let i = next.fetch_add(1, Relaxed);
+                            let Some(path) = paths.get(i) else { break };
+                            let mut failed = clashes[i].clone();
+                            let target = targets[i].as_deref().filter(|_| failed.is_none());
+                            // A panic in one file becomes its error, so the other files are kept.
+                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                match crate::cmp::is_cmp(path) {
+                                    true => scan_saved(path, lib, s),
+                                    false => crate::read_run(path).and_then(|c| {
+                                        let (r, e) = scan_and_save(c, lib, s, target)
+                                            .map_err(|e| e.to_string())?;
+                                        failed = failed.take().or(e);
+                                        Ok(r)
+                                    }),
+                                }
+                            }))
+                            .unwrap_or_else(|_| Err("analysis crashed".into()))
+                            .map(|r| RunResult {
+                                path: path.clone(),
+                                found: r.found,
+                                unknown: r.unknown,
+                                calibration: r.calibration,
+                            })
+                            .map_err(|e| format!("{}: {e}", path.display()));
+                            let failed = failed.map(|e| format!("{}: {e}", path.display()));
+                            mine.push((i, r, failed));
+                            done.fetch_add(1, Relaxed);
+                        }
+                        mine
+                    })
                 })
-            })
-            .collect();
-        workers
-            .into_iter()
-            .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-            .collect()
-    });
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+                .collect()
+        });
     if cancel.load(Relaxed) {
         return None;
     }
     out.sort_by_key(|r| r.0);
     let (mut runs, mut errors) = (Vec::new(), Vec::new());
-    for (_, r) in out {
+    for (_, r, failed) in out {
         match r {
             Ok(run) => runs.push(run),
             Err(e) => errors.push(e),
         }
+        errors.extend(failed);
     }
     Some((runs, errors))
 }
@@ -1192,6 +1298,135 @@ NUM PEAKS: 1
         )
         .unwrap();
         assert_eq!((added, errors.len()), (0, 0));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_scan_saves_each_run_as_cmp_and_scans_them_back_alike() {
+        let dir = std::env::temp_dir().join(format!("md-save-cmp-{}", std::process::id()));
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let run = two_substances();
+        let runs = [a.join("x.cdf"), a.join("y.cdf"), b.join("x.cdf")];
+        for p in &runs {
+            crate::andi::write(p, &run).unwrap();
+        }
+        let lib = two_substances_library();
+        let calibration = RiCalibration::new([(0.0, 1000.0), (100.0, 2000.0)]).unwrap();
+        let s = ScanSettings {
+            calibration: Some(calibration),
+            save_cmp: Some(CmpTarget::BesideRun),
+            ..Default::default()
+        };
+        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        let (raw, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(raw.iter().all(|r| r.found.len() == 2));
+        let saved: Vec<PathBuf> = runs.iter().map(|p| p.with_extension("cmp")).collect();
+
+        // The saved components are those of the deconvolution, with the RI of the search.
+        let mut traces = IonTraces::new(&run).unwrap();
+        let peaks = traces.detect_all_peaks(&s.peaks);
+        let comps = deconvolute(&traces, &peaks, &s.deconv);
+        let (loaded, _, _) =
+            crate::cmp::components_from_file(&saved[0], &run.scan_times_s).unwrap();
+        let key = |c: &crate::deconv::Component| (c.apex_scan, c.spectrum.clone());
+        assert_eq!(
+            loaded.iter().map(key).collect::<Vec<_>>(),
+            comps.iter().map(key).collect::<Vec<_>>()
+        );
+        let ris = crate::cmp::read_cmp(&saved[0]).unwrap();
+        assert!(ris.iter().all(|c| c.spectrum.ri > 1000.0), "{ris:?}");
+
+        // Scanning the .cmp files gives the same hits; a .cmp input is not saved again.
+        let (again, errors) = scan_runs(&saved, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        let hits = |r: &[RunResult]| -> Vec<_> {
+            (r.iter().flat_map(|r| &r.found))
+                .map(|f| (f.compound, f.score, f.ions.clone(), (f.rt_s * 1e6).round()))
+                .collect()
+        };
+        assert_eq!(hits(&again), hits(&raw));
+        let t = TableSettings::default();
+        let table_of = |r: &[RunResult]| table(r, &lib, &[], &t).unwrap().rows;
+        assert_eq!(table_of(&again), table_of(&raw));
+        assert_eq!(table_of(&raw).len(), 2);
+
+        // Into one folder the two x.cdf would overwrite each other: both are errors, y is saved.
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::Dir(out.clone())),
+            ..s
+        };
+        let (scanned, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert_eq!(scanned.len(), 3);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(out.join("y.cmp").exists() && !out.join("x.cmp").exists());
+        // A folder that does not exist: the runs are still scanned, each save is an error.
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::Dir(dir.join("missing"))),
+            ..s
+        };
+        let (scanned, errors) = scan_runs(&runs[..2], &prepared, &s, 1, &done, &cancel).unwrap();
+        assert_eq!((scanned.len(), errors.len()), (2, 2));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_cmp_never_overwrites_an_input_or_another_run() {
+        let dir = std::env::temp_dir().join(format!("md-cmp-clash-{}", std::process::id()));
+        let (a, b, out) = (dir.join("a"), dir.join("b"), dir.join("out"));
+        for d in [&a, &b, &out] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let run = two_substances();
+        crate::andi::write(a.join("x.cdf"), &run).unwrap();
+        crate::andi::write(b.join("X.cdf"), &run).unwrap();
+        crate::cmp::write_cmp(a.join("x.cmp"), &[]).unwrap();
+        let lib = two_substances_library();
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::BesideRun),
+            ..Default::default()
+        };
+        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        // The run's .cmp is also an input: it is left as it is.
+        let runs = [a.join("x.cdf"), a.join("x.cmp")];
+        let (scanned, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert_eq!((scanned.len(), errors.len()), (2, 1), "{errors:?}");
+        assert!(crate::cmp::read_cmp(a.join("x.cmp")).unwrap().is_empty());
+        // X.cmp and x.cmp are one file where names ignore case.
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::Dir(out.clone())),
+            ..s
+        };
+        let runs = [a.join("x.cdf"), b.join("X.cdf")];
+        let (_, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        let ignores_case = cfg!(any(windows, target_os = "macos"));
+        assert_eq!(errors.len(), if ignores_case { 2 } else { 0 }, "{errors:?}");
+        // FastFlight runs are all MsData.FFT: in a folder each is named after its run.
+        let target = CmpTarget::Dir(out.clone());
+        assert_eq!(target.path(&a.join("MsData.FFT")), out.join("a.cmp"));
+        assert_eq!(
+            CmpTarget::BesideRun.path(&a.join("MsData.FFT")),
+            a.join("MsData.cmp")
+        );
+        let name = |p: &str| target.path(&a.join(p).join("MsData.FFT"));
+        assert_eq!(
+            (name("S1.1"), name("S1.2")),
+            (out.join("S1.1.cmp"), out.join("S1.2.cmp"))
+        );
+        // The same file written another way is still an input.
+        let runs = [a.join("x.cdf"), dir.join("a").join(".").join("x.cmp")];
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::BesideRun),
+            ..s
+        };
+        let (_, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -293,12 +293,27 @@ fn compound_check(c: &LibraryCompound) -> u32 {
     (c.quant_ions.len() + c.features.len() + c.name.len() + c.peaks.len()) as u32
 }
 
-/// Writes a `.cmp` file (gzip) the old program can open.
+/// Writes a `.cmp` file (gzip) the old program can open. It is written beside `path` first and then
+/// renamed, so a failed write never leaves a broken file in its place.
 pub fn write_cmp(path: impl AsRef<Path>, compounds: &[LibraryCompound]) -> std::io::Result<()> {
-    let mut gz =
-        flate2::write::GzEncoder::new(std::fs::File::create(path)?, flate2::Compression::default());
-    gz.write_all(&cmp_payload(compounds))?;
-    gz.finish()?.sync_all()
+    let path = path.as_ref();
+    // Per process and never over an existing file: a leftover or foreign `.part` stays untouched.
+    let mut part = path.as_os_str().to_owned();
+    part.push(format!(".{}.part", std::process::id()));
+    let created = std::cell::Cell::new(false);
+    let write = || {
+        let file = (std::fs::OpenOptions::new().write(true).create_new(true)).open(&part)?;
+        created.set(true);
+        let mut gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        gz.write_all(&cmp_payload(compounds))?;
+        gz.finish()?.sync_all()?;
+        std::fs::rename(&part, path)
+    };
+    write().inspect_err(|_| {
+        if created.get() {
+            std::fs::remove_file(&part).ok();
+        }
+    })
 }
 
 /// The uncompressed `.cmp` payload: the compound records only (library-only fields are not part of
