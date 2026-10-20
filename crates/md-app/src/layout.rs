@@ -104,6 +104,8 @@ mod tests {
         for i in 0..80 {
             let mut more = results::tests::run();
             more.name = format!("run_{i:02}");
+            // Analysed with the settings in use, so no background re-analysis runs (#200).
+            more.analysis = settings::Analysis::new(app.settings.key());
             app.runs.push(more);
         }
         // Enough substances that the statistics table scrolls too.
@@ -164,6 +166,13 @@ mod tests {
         ctx.enable_accesskit();
         let mut frame = eframe::Frame::_new_kittest();
         app.open_editor_dialogs(&ctx);
+        // A stale run starts a background analysis; one finishing between frames changes the
+        // status line and other text late, so the frames would depend on timing (#200).
+        let key = Some(app.settings.key());
+        assert!(
+            app.runs.iter().all(|r| r.analysis.key == key),
+            "a run would be re-analysed in the background"
+        );
         let mut nodes = Nodes::default();
         for _ in 0..8 {
             let input = egui::RawInput {
