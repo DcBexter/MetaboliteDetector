@@ -74,17 +74,20 @@ impl App {
     /// Setup first, then the active run, then all runs, then the stand-alone calculator.
     fn analysis_menu(&mut self, ui: &mut egui::Ui) {
         type Toggle = fn(&mut App) -> &mut bool;
-        let groups: [&[(&str, &str, Toggle)]; 4] = [
+        // The flag marks entries that need an open run.
+        let groups: [&[(&str, &str, Toggle, bool)]; 4] = [
             &[
                 (
                     "Settings…",
                     "Peak detection, deconvolution and library search parameters",
                     |a| &mut a.settings.open,
+                    false,
                 ),
                 (
                     "RI calibration…",
                     "Retention index calibration from alkanes, a calibration mix or a .calib file",
                     |a| &mut a.ri.open,
+                    false,
                 ),
             ],
             &[
@@ -92,11 +95,13 @@ impl App {
                     "Run info…",
                     "File, instrument and scan details of the active run",
                     |a| &mut a.view.info_open,
+                    true,
                 ),
                 (
                     "Results of the active run…",
                     "Table of every component with its library hit; sortable, exportable as CSV",
                     |a| &mut a.results.open,
+                    false,
                 ),
             ],
             &[
@@ -104,33 +109,39 @@ impl App {
                     "Batch quantification…",
                     "Quantify the library's substances across many runs",
                     |a| &mut a.batch.open,
+                    false,
                 ),
                 (
                     "Mass isotopomer distributions…",
                     "Labelling experiments: isotopomer distributions of the library's fragments across runs",
                     |a| &mut a.mid.open,
+                    false,
                 ),
                 (
                     "Biomarker statistics…",
                     "Group comparison, box plots and PCA of the batch table",
                     |a| &mut a.statistics.open,
+                    false,
                 ),
             ],
             &[(
                 "Natural isotopes…",
                 "Isotope distribution (M+0, M+1, …) of a molecular formula",
                 |a| &mut a.isotopes.open,
+                false,
             )],
         ];
         for (i, group) in groups.into_iter().enumerate() {
             if i > 0 {
                 ui.separator();
             }
-            for (name, hint, open) in group {
+            for (name, hint, open, needs_run) in group {
                 // Run info shows nothing without a run; the others explain their empty state.
-                let enabled = *name != "Run info…" || !self.runs.is_empty();
                 if ui
-                    .add_enabled(enabled, egui::Button::new(*name))
+                    .add_enabled(
+                        !needs_run || !self.runs.is_empty(),
+                        egui::Button::new(*name),
+                    )
                     .on_hover_text(*hint)
                     .on_disabled_hover_text("Open a run first")
                     .clicked()

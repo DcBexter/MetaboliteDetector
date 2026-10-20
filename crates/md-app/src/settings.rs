@@ -128,7 +128,7 @@ impl Settings {
 
     fn buttons(&mut self, ui: &mut egui::Ui) {
         let valid = self.draft.validate();
-        let fix = "Fix the value named in red first";
+        let fix = "Fix the value shown in red first (it names the old key)";
         ui.horizontal(|ui| {
             let changed = self.draft != self.applied;
             if ui
@@ -229,7 +229,7 @@ impl Settings {
                     ui,
                     "Peak width",
                     "",
-                    "Scans; the filter density is 4 × width. The slopes below are not used.",
+                    "Scans; the filter density is 4 × width. The slopes and Minimum S/N below are not used.",
                     egui::DragValue::new(width).range(1..=1000),
                 );
                 row(
@@ -491,12 +491,14 @@ fn num<N: egui::emath::Numeric>(v: &mut N, range: RangeInclusive<N>) -> egui::Dr
 /// Editable list of inclusive m/z ranges.
 pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(name).on_hover_text(hint);
+    let list_name = ui.horizontal(|ui| {
+        let list_name = ui.label(name).on_hover_text(hint);
         if ui.small_button("+").on_hover_text("Add a range").clicked() {
             list.push((0.0, 0.0));
         }
+        list_name.id
     });
+    let list_name = list_name.inner;
     let mut remove = None;
     for (i, (lo, hi)) in list.iter_mut().enumerate() {
         ui.horizontal(|ui| {
@@ -506,14 +508,18 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
                     .range(0.0..=100_000.0)
                     .max_decimals(2),
             )
-            .labelled_by(from.id);
+            .labelled_by(list_name)
+            .labelled_by(from.id)
+            .on_hover_text(hint);
             let to = ui.label("to");
             ui.add(
                 egui::DragValue::new(hi)
                     .range(0.0..=100_000.0)
                     .max_decimals(2),
             )
-            .labelled_by(to.id);
+            .labelled_by(list_name)
+            .labelled_by(to.id)
+            .on_hover_text(hint);
             if ui
                 .small_button("×")
                 .on_hover_text("Remove this range")
