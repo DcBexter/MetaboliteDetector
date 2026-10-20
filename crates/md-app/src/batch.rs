@@ -326,30 +326,14 @@ impl Batch {
         );
     }
 
-    fn contents(
+    /// Progress and Cancel while a scan runs, else Start and what it will use.
+    fn job_row(
         &mut self,
         ui: &mut egui::Ui,
         lib: Option<&Arc<Library>>,
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
-        ui.horizontal(|ui| {
-            if ui.button("Add runs…").clicked()
-                && let Some(p) = rfd::FileDialog::new()
-                    .add_filter("NetCDF", &["cdf", "CDF", "nc"])
-                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-                    .pick_files()
-            {
-                self.paths.extend(p);
-                self.paths.sort();
-                self.paths.dedup();
-            }
-            if ui.button("Clear").clicked() {
-                self.paths.clear();
-            }
-            ui.label(format!("{} runs", self.paths.len()));
-        });
-        self.settings_grid(ui);
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
                 let d = job.done.load(Relaxed);
@@ -393,6 +377,33 @@ impl Batch {
                 ui.label(&self.note);
             }
         });
+    }
+
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        lib: Option<&Arc<Library>>,
+        cal: Option<&RiCalibration>,
+        reference: Option<(&str, f64)>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui.button("Add runs…").clicked()
+                && let Some(p) = rfd::FileDialog::new()
+                    .add_filter("NetCDF", &["cdf", "CDF", "nc"])
+                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                    .pick_files()
+            {
+                self.paths.extend(p);
+                self.paths.sort();
+                self.paths.dedup();
+            }
+            if ui.button("Clear").clicked() {
+                self.paths.clear();
+            }
+            ui.label(format!("{} runs", self.paths.len()));
+        });
+        self.settings_grid(ui);
+        self.job_row(ui, lib, cal, reference);
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
             let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)
