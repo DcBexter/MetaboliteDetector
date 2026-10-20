@@ -193,7 +193,14 @@ pub fn replace_from_tar_gz(archive: &[u8], exe: &Path) -> io::Result<()> {
             for (_, rest, _) in &targets[i..] {
                 std::fs::remove_file(side(rest, ".new")).ok();
             }
-            return Err(e);
+            // Earlier binaries are already new; say so instead of rolling back.
+            return Err(if i > 0 {
+                io::Error::other(format!(
+                    "only partly updated, reinstall from the release page: {e}"
+                ))
+            } else {
+                e
+            });
         }
     }
     Ok(())

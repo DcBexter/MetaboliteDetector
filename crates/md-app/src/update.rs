@@ -119,8 +119,9 @@ impl Updater {
 
     /// Saves only the check time, re-read from the file so another window's switch survives.
     fn save_last_check(&mut self) {
-        if let Some(p) = &self.path {
-            self.config = Config::read(p);
+        // An unreadable file keeps the in-memory switch rather than the default.
+        if let Some(Ok(text)) = self.path.as_ref().map(std::fs::read_to_string) {
+            self.config = Config::parse(&text);
         }
         self.config.last_check = now();
         self.save();
