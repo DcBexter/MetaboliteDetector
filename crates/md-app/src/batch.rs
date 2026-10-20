@@ -12,8 +12,8 @@ use crate::settings::row;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    Completed, Found, RunResult, ScanSettings, ShiftReference, Table, TableSettings, complete_scan,
-    scan_runs, table,
+    Completed, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference, Table,
+    TableSettings, complete_scan, run_key, scan_runs, table,
 };
 use md_core::batch::{
     cell_ions, group_label, group_names, group_stats_path, hit_list, ions_path, settings_path,
@@ -145,6 +145,8 @@ struct View {
     ion_rows: bool,
     /// Also write the integral of every quant ion when exporting.
     export_ions: bool,
+    /// Write the export for a spreadsheet with German locale (`;`, decimal comma).
+    excel_de: bool,
     /// Replicate group of the blank runs (the old program's fixed name).
     blanks: String,
 }
@@ -156,6 +158,7 @@ impl Default for View {
             totals: false,
             ion_rows: false,
             export_ions: false,
+            excel_de: false,
             blanks: "BLANK".into(),
         }
     }
@@ -199,6 +202,8 @@ pub struct Batch {
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     pub settings: TableSettings,
+    /// The sample table behind `settings.sample_groups`.
+    samples: Option<Samples>,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
     /// Whether the search is by retention time only (Analysis → RI calibration).
@@ -220,6 +225,111 @@ pub struct Batch {
     note: String,
     /// FRAG export being written; its note replaces `note` when done.
     frag_job: Option<mpsc::Receiver<String>>,
+}
+
+/// A loaded sample table and the two columns that give run and group.
+struct Samples {
+    table: SampleTable,
+    file: usize,
+    group: usize,
+    error: Option<String>,
+}
+
+impl Samples {
+    /// Reads the chosen columns into `groups`; a bad table leaves no groups.
+    fn apply(&mut self, groups: &mut SampleGroups) {
+        match self.table.groups(self.file, self.group) {
+            Ok(g) => (*groups, self.error) = (g, None),
+            Err(e) => (*groups, self.error) = (SampleGroups::new(), Some(e)),
+        }
+    }
+}
+
+/// "Groups from table": replicate groups from a CSV/TSV table of file name → group, for runs whose
+/// names do not tell them. Runs the table lacks keep the pattern's group.
+fn samples_row(
+    ui: &mut egui::Ui,
+    samples: &mut Option<Samples>,
+    groups: &mut SampleGroups,
+    paths: &[PathBuf],
+    note: &mut String,
+) {
+    let hint = "Load a CSV, TSV or semicolon table with a column of run file names and a column \
+                with the replicate group (e.g. samples.txt: CDF_FILE, TIME_POINT). It wins over \
+                the pattern for the runs it names; other runs keep the pattern's group.";
+    ui.label("Replicate groups from table").on_hover_text(hint);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Table…").on_hover_text(hint).clicked()
+            && let Some(p) = rfd::FileDialog::new()
+                .add_filter("Sample table", &["txt", "tsv", "csv"])
+                .pick_file()
+        {
+            match std::fs::read_to_string(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|t| SampleTable::parse(&t))
+            {
+                Ok(table) => {
+                    let (file, group) = table.default_columns();
+                    let mut s = Samples {
+                        table,
+                        file,
+                        group,
+                        error: None,
+                    };
+                    s.apply(groups);
+                    *samples = Some(s);
+                }
+                Err(e) => *note = format!("{}: {e}", p.display()),
+            }
+        }
+        let Some(s) = samples else { return };
+        let mut changed = false;
+        let cols = [
+            (
+                "File column",
+                "Column with the run file names.",
+                &mut s.file,
+            ),
+            (
+                "Group column",
+                "Column with the replicate group.",
+                &mut s.group,
+            ),
+        ];
+        for (label, hover, col) in cols {
+            egui::ComboBox::from_label(label)
+                .selected_text(&s.table.columns[*col])
+                .show_ui(ui, |ui| {
+                    for (i, c) in s.table.columns.iter().enumerate() {
+                        changed |= ui.selectable_value(col, i, c).changed();
+                    }
+                })
+                .response
+                .on_hover_text(hover);
+        }
+        if changed {
+            s.apply(groups);
+        }
+        match &s.error {
+            Some(e) => {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            None => {
+                let found = (paths.iter())
+                    .filter(|p| groups.contains_key(&run_key(&p.to_string_lossy())))
+                    .count();
+                ui.label(format!("{found} of {} runs in the table", paths.len()));
+            }
+        }
+        if ui
+            .button("Remove")
+            .on_hover_text("Forget the table; the groups come from the pattern again.")
+            .clicked()
+        {
+            (*samples, *groups) = (None, SampleGroups::new());
+        }
+    });
+    ui.end_row();
 }
 
 /// "Save components as .cmp": off, next to each run, or into a chosen folder.
@@ -269,6 +379,7 @@ impl Default for Batch {
                 save_cmp: None,
             },
             settings: TableSettings::default(),
+            samples: None,
             applied: GcmsSettings::default(),
             rt_only: false,
             job: None,
@@ -461,6 +572,13 @@ impl Batch {
                 "Group = first capture group, else the whole match. A file without a match is a \
                  group of its own, so it passes any reproducibility filter. Empty: one group.",
                 egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
+            );
+            samples_row(
+                ui,
+                &mut self.samples,
+                &mut s.sample_groups,
+                &self.paths,
+                &mut self.note,
             );
             row(
                 ui,
@@ -661,6 +779,7 @@ impl Batch {
                             ]
                             .concat(),
                             ions: self.view.export_ions,
+                            excel_de: self.view.excel_de,
                             blank: &self.view.blanks,
                             group_stats: !self.norm.z_score,
                         };
@@ -769,6 +888,8 @@ struct Export<'a> {
     extra: Vec<(&'static str, String)>,
     /// Also write the integral of every quant ion.
     ions: bool,
+    /// Convert the files for a spreadsheet with German locale (`md_core::csv::to_excel_de`).
+    excel_de: bool,
     /// The replicate group the group statistics test against (if the table has it).
     blank: &'a str,
     /// Write the group statistics; not for z-scores, which the view does not show them for either.
@@ -841,11 +962,20 @@ fn remove_stale(path: &Path) -> std::io::Result<Option<PathBuf>> {
     }
 }
 
+/// Files are written in the standard format first; the German spreadsheet variant is a rewrite.
+fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
+    if ex.excel_de {
+        md_core::csv::excel_de_file(path, text_cols)?;
+    }
+    Ok(())
+}
+
 /// Writes the results CSV `p` and the files next to it; the note names what was saved and what
 /// could not be.
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
+    german(p, 3, ex)?;
     let sp = settings_path(p);
     let group_stats = if ex.group_stats {
         t.write_group_stats_file(p, Some(ex.blank))
@@ -877,6 +1007,11 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     let mut saved = vec![p.display().to_string()];
     let mut failed = Vec::new();
     for (what, r) in results {
+        let r = r.map(|r| {
+            r.and_then(|f| {
+                german(&f, if what == "group statistics" { 3 } else { 2 }, ex).map(|()| f)
+            })
+        });
         match r {
             Some(Ok(path)) => saved.push(path.display().to_string()),
             Some(Err(e)) => failed.push(format!("{what}: {e}")),
@@ -996,6 +1131,9 @@ fn view_controls(
         .on_disabled_hover_text("Only in the Values view.");
         ui.checkbox(&mut v.export_ions, "Export quant ions")
             .on_hover_text("Also writes results.ions.csv with the raw integral of every quant ion.");
+        ui.checkbox(&mut v.excel_de, "Excel (German)").on_hover_text(
+            "Exports with semicolons and decimal commas, for a spreadsheet with German locale. Off: commas and decimal points; open those with locale English (USA) in the import dialog.",
+        );
         if v.mode == Mode::Groups {
             let blank = ui.label("Blank group");
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
@@ -1807,6 +1945,7 @@ mod tests {
             settings: &settings,
             extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
+            excel_de: false,
             blank: "BLANK",
             group_stats: true,
         };
@@ -1825,6 +1964,23 @@ mod tests {
             ions,
             "\u{feff}Substance,Quant_ion,a.cdf\nGlucose,73,500\nGlucose,147,100\n"
         );
+
+        // The German spreadsheet variant converts every file of the export.
+        ex.excel_de = true;
+        save_results(&csv, &t, &ex).unwrap();
+        let ions = std::fs::read_to_string(dir.join("results.ions.csv")).unwrap();
+        assert_eq!(
+            ions,
+            "\u{feff}Substance;Quant_ion;a.cdf\nGlucose;73;500\nGlucose;147;100\n"
+        );
+        let main = std::fs::read_to_string(&csv).unwrap();
+        assert!(
+            main.starts_with("\u{feff}Substance;RT_s;Quant_ions;"),
+            "{main}"
+        );
+        let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
+        assert!(text.contains("\nNORMALISATION;none\n"), "{text}");
+        ex.excel_de = false;
 
         // Group statistics only for a table that has groups, and not for z-scores (the view has none).
         let grouped = Table {
