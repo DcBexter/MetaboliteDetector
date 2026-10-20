@@ -36,8 +36,8 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
-  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, CSV) and the
-                        FRAG "Export MIDs" of the batch table
+  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
+                        statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
@@ -54,7 +54,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
-  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, CSV
+  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/layout.rs         list/details split, side panels, where tool windows first open; a test opens every
                         window and checks no control covers another or is cut off
@@ -631,7 +631,11 @@ and `determine` turns the integrals into MIDs. Uncorrected and reference correct
 fragment over the labelled (and unlabelled) runs; library spectrum and sum formula give one per run.
 Substances are solved in parallel (rayon); `examples/perf.rs` times 1 000 substances × 200 runs. The batch
 window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. `(174/8)(261/5)`, from the
-shown table (`mid::frag_export`). Methods 2 and 3 are tested against the old `MIDCompoundSeries`
+shown table (`mid::frag_export`). The worker also computes the mean and standard error of the labelled
+runs (`mid::group_stat`, per-run methods) and the old result window's text exports (`Mids::run_text`,
+`stats_text`, `group_text`, numbers in Qt's `%g` via `mid::qt_g`); the window shows them as table
+columns and bar plots and saves or copies the texts. Methods 2 and 3, the statistics and both per-run
+exports are tested against the old `MIDCompoundSeries`
 (`tests/mid_series.rs`, harness `docs/reverse-engineering/tools/isotopes/make-midseries.sh`), the solver
 against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0 ≈ 1).
 
