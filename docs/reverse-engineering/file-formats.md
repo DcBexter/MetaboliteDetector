@@ -308,7 +308,7 @@ Binary form, `RICalculator::toStream` 0x7d2fd2 (Verified):
 |---|---|---|
 | 0 | u32 | entry count (`rt2ri.size()`) |
 | 4 | f64 rt (ms), f64 ri | repeated count times, ascending rt (std::map order) |
-| 4 + 16n | f64 | drt (ms) |
+| 4 + 16n | f64 | drt (ms; Inferred: a difference of spectrum RTs, algorithms.md §6.5; every sample has 0) |
 | ... | u32 + bytes | source (no terminator); "not calibrated" in uncalibrated runs |
 
 The binary form is not a file of its own: it sits in the run's `.idx` (§2.3). The RI wizard and the

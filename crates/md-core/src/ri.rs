@@ -172,8 +172,9 @@ pub struct StoredCalibration {
     pub points_ms: Vec<(f64, f64)>,
     /// Retention time shift in ms.
     pub drt_ms: f64,
-    /// Where the calibration came from ("not calibrated" in uncalibrated runs).
-    pub source: String,
+    /// Where the calibration came from ("not calibrated" in uncalibrated runs), as stored: the old
+    /// program may write Latin-1, so the bytes are kept.
+    pub source: Vec<u8>,
 }
 
 impl StoredCalibration {
@@ -199,7 +200,7 @@ impl StoredCalibration {
             .collect();
         let drt_ms = f64(take(8)?);
         let len = u32(take(4)?);
-        let source = String::from_utf8_lossy(take(len)?).into_owned();
+        let source = take(len)?.to_vec();
         Ok((
             Self {
                 points_ms,
@@ -218,12 +219,17 @@ impl StoredCalibration {
         }
         w.extend(self.drt_ms.to_le_bytes());
         w.extend((self.source.len() as u32).to_le_bytes());
-        w.extend(self.source.as_bytes());
+        w.extend(&self.source);
         w
     }
 
     /// The calibration with its shift; an error for uncalibrated runs (fewer than two points).
     pub fn calibration(&self) -> Result<RiCalibration, CalibError> {
+        if !self.drt_ms.is_finite() {
+            return Err(CalibError::Invalid(
+                "retention time shift is not finite".into(),
+            ));
+        }
         let mut c = RiCalibration::new(self.points_ms.iter().map(|&(t, ri)| (t / 1000.0, ri)))?;
         c.shift_s = self.drt_ms / 1000.0;
         Ok(c)
@@ -447,7 +453,7 @@ mod tests {
                 (400_000.0, 1200.0),
             ],
             drt_ms: 0.0,
-            source: "alkanes".into(),
+            source: b"alkanes".to_vec(),
         };
         let mut bytes = s.to_bytes();
         assert_eq!(bytes.len(), 4 + 3 * 16 + 8 + 4 + 7);

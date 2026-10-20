@@ -333,8 +333,10 @@ read by `RiCalibration::read_calib`; the binary calibration the old RI wizard st
 `diskscan::read_calibration` (`ri::StoredCalibration`, values kept in ms so it writes back the same bytes).
 Opening a run in the app uses `cmp::saved_components` and `ri::saved_calibration`: components from
 `<run>.cmp` replace the analysis until the settings change, and `<run>.calib` (else the `.idx` calibration)
-becomes the run's own calibration. A file that does not fit the run is an error; versions 1 to 3 of `.cmp`
-are reported as unsupported (no sample to decode them from).
+becomes the run's own calibration. A `.calib` has no RT shift, so it drops a shift stored in the `.idx`;
+it wins because it is the file the user saved last (the app's "Save .calib" suggests that name). A `.cmp`
+whose apex times do not match the run's scan times, a broken file and versions 1 to 3 of `.cmp` (no sample
+to decode them from) only give a warning: the run opens with its own analysis.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 

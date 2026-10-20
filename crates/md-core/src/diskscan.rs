@@ -207,7 +207,7 @@ mod tests {
         StoredCalibration {
             points_ms: vec![(1500.0, 1000.0), (2000.0, 1100.0)],
             drt_ms: 100.0,
-            source: "C10-C11".into(),
+            source: b"C10-C11".to_vec(),
         }
     }
 

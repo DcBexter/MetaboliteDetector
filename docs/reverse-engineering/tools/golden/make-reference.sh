@@ -62,11 +62,11 @@ nm "$app" | awk '
 ' > "$work/syms.inc"
 
 g++ -std=c++17 -O1 -shared -fPIC -I"$work" -o "$work/old_md_dump.so" "$here/old_md_dump.cpp" -ldl
-if [ "${1:-}" = --reread ]; then
+if [[ "${1:-}" == --reread ]]; then
   LD_PRELOAD="$work/old_md_dump.so" "$app" "$@"
   exit
 fi
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
 python3 "$here/golden.py" < "$work/raw.tsv" > "$repo/crates/md-core/tests/data/old-md-3.3.tsv"
 # The raw dump has every peak field with 9 digits; the .cmp test compares against it.
-if [ -n "${MD_RESULTS:-}" ]; then cp "$work/raw.tsv" "$MD_RESULTS/raw.tsv"; fi
+if [[ -n "${MD_RESULTS:-}" ]]; then cp "$work/raw.tsv" "$MD_RESULTS/raw.tsv"; fi

@@ -60,7 +60,7 @@ struct App {
     runs: Vec<Run>,
     /// Index into `runs` whose scan cursor and spectrum are shown.
     active: usize,
-    loading: Vec<(PathBuf, mpsc::Receiver<Result<Run, String>>)>,
+    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, String>>)>,
     load_started: Option<Instant>,
     load_note: String,
     error: Option<String>,
@@ -109,6 +109,9 @@ impl Default for App {
 
 /// (m/z, tolerance) of a SIC.
 type SicKey = (f32, f32);
+
+/// A loaded run with warnings about its side files (`.cmp`, `.calib`).
+type Loaded = (Run, Vec<String>);
 
 struct Run {
     path: PathBuf,

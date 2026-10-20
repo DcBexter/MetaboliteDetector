@@ -81,16 +81,31 @@ impl CmpCompound {
 }
 
 /// Components saved next to a run (`<run>.cmp`), ordered by apex like `deconvolute`'s callers use
-/// them. None without a file; an error when a component lies outside the run's `scans` scans.
-pub fn saved_components(run: &Path, scans: usize) -> Result<Option<Vec<Component>>, LibraryError> {
+/// them. None without a file; an error when a component lies outside the run or its apex time does
+/// not match the run's `scan_times_s` (a `.cmp` of another run).
+pub fn saved_components(
+    run: &Path,
+    scan_times_s: &[f64],
+) -> Result<Option<Vec<Component>>, LibraryError> {
     let path = run.with_extension("cmp");
     if !path.is_file() {
         return Ok(None);
     }
-    let mut components: Vec<_> = read_cmp(&path)?
-        .iter()
-        .map(CmpCompound::component)
-        .collect();
+    let compounds = read_cmp(&path)?;
+    if let Some(c) = compounds.iter().find(|c| {
+        let s = &c.spectrum;
+        // Both come from the same raw data; 1 ms leaves room for rounding only.
+        (scan_times_s.get(s.scan as usize)).is_none_or(|t| (t * 1000.0 - s.rt_ms).abs() > 1.0)
+    }) {
+        return Err(LibraryError::Unsupported(format!(
+            "{}: component at scan {} ({} ms) is not from this run",
+            path.display(),
+            c.spectrum.scan,
+            c.spectrum.rt_ms
+        )));
+    }
+    let scans = scan_times_s.len();
+    let mut components: Vec<_> = compounds.iter().map(CmpCompound::component).collect();
     if let Some(k) = components.iter().find(|k| {
         k.last_scan as usize >= scans
             || k.first_scan > k.apex_scan
@@ -110,7 +125,7 @@ pub fn saved_components(run: &Path, scans: usize) -> Result<Option<Vec<Component
 const VERSION: u32 = 4;
 const PEAK_BYTES: usize = 68;
 /// Size of a compound whose lists and strings are all empty: a lower bound per compound.
-const MIN_COMPOUND_BYTES: usize = 36 + 4 + (66 + 8 + 4 + 4) + 56;
+const MIN_COMPOUND_BYTES: usize = 36 + 4 + (66 + 8 + 4 + 4) + 52;
 // shortcut: whole file in RAM, capped like `.lbr`; a run has a few thousand components at most.
 const MAX_CMP_BYTES: u64 = 1 << 30;
 
@@ -396,14 +411,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("md-core-saved-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let run = dir.join("run.cdf");
-        assert!(saved_components(&run, 20).unwrap().is_none());
+        // sample(): apex scan 12 at 247.16 s.
+        let times: Vec<f64> = (0..20).map(|i| 247.16 + (i - 12) as f64 * 0.2).collect();
+        assert!(saved_components(&run, &times).unwrap().is_none());
         write_cmp(dir.join("run.cmp"), &sample()).unwrap();
-        let k = saved_components(&run, 20).unwrap().unwrap();
+        let k = saved_components(&run, &times).unwrap().unwrap();
         assert_eq!(k.len(), 2);
         assert!(
-            saved_components(&run, 15).is_err(),
+            saved_components(&run, &times[..15]).is_err(),
             "last scan 15 needs 16 scans"
         );
+        let other: Vec<f64> = times.iter().map(|t| t + 0.1).collect();
+        assert!(saved_components(&run, &other).is_err(), "another run");
         std::fs::remove_dir_all(&dir).ok();
     }
 

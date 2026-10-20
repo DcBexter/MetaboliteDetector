@@ -19,16 +19,23 @@ impl App {
                     0 => Err("no scans".into()),
                     _ => {
                         // Results the old program saved next to the run replace the analysis
-                        // until the settings change.
-                        let saved = md_core::cmp::saved_components(&p, data.scan_count())
-                            .map_err(|e| e.to_string())?;
+                        // until the settings change. A broken side file only gives a warning.
+                        let mut warnings = Vec::new();
+                        let saved = md_core::cmp::saved_components(&p, &data.scan_times_s)
+                            .unwrap_or_else(|e| {
+                                warnings.push(e.to_string());
+                                None
+                            });
                         let components = match saved {
                             Some(c) => c,
                             None => settings::analyze(&data, &key)?,
                         };
                         let saved_calibration =
-                            md_core::ri::saved_calibration(&p).map_err(|e| e.to_string())?;
-                        Ok(Run {
+                            md_core::ri::saved_calibration(&p).unwrap_or_else(|e| {
+                                warnings.push(format!("calibration: {e}"));
+                                None
+                            });
+                        let run = Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
                             tic: data.tic(),
@@ -45,7 +52,8 @@ impl App {
                             visible: true,
                             ident: None,
                             ident_job: None,
-                        })
+                        };
+                        Ok((run, warnings))
                     }
                 })
                 .map_err(|e| format!("{}: {e}", p.display()))
@@ -61,9 +69,13 @@ impl App {
         );
         self.loading.retain(|(_, rx)| {
             match rx.try_recv() {
-                Ok(Ok(mut run)) => {
+                Ok(Ok((mut run, warnings))) => {
                     if let Some(cal) = run.saved_calibration.take() {
                         self.ri.set_own(run.path.clone(), cal);
+                    }
+                    if !warnings.is_empty() {
+                        self.error =
+                            Some(format!("{}: {}", run.path.display(), warnings.join("; ")));
                     }
                     self.runs.push(run);
                 }

@@ -119,6 +119,13 @@ fn reads_and_rewrites_old_cmp_files() {
             .read_to_end(&mut old)
             .unwrap();
         assert!(cmp_payload(&cmp) == old, "{name}: payload differs");
+        // The run's raw data, when it is here, accepts its own .cmp (scan times match).
+        let cdf = (d.join("../TargetSearchData/inst/gc-ms-data")).join(format!("{name}.cdf"));
+        if cdf.exists() {
+            let times = md_core::read_run(&cdf).unwrap().scan_times_s;
+            let k = md_core::cmp::saved_components(&d.join(format!("{name}.cdf")), &times);
+            assert_eq!(k.unwrap().unwrap().len(), cmp.len(), "{name}");
+        }
         let mine = ours(&d).join(format!("{name}.cmp"));
         write_cmp(&mine, &cmp).unwrap();
         assert_eq!(read_cmp(&mine).unwrap(), cmp);
@@ -142,7 +149,7 @@ fn reads_and_rewrites_old_calibration() {
     let (stored, len) = StoredCalibration::parse(&bin).unwrap();
     assert_eq!(len, bin.len());
     assert_eq!(stored.points_ms, pairs);
-    assert_eq!((stored.drt_ms, stored.source.as_str()), (0.0, "harness"));
+    assert_eq!((stored.drt_ms, &stored.source[..]), (0.0, &b"harness"[..]));
     assert_eq!(stored.to_bytes(), bin);
     std::fs::write(ours(&d).join("harness.calib.bin"), stored.to_bytes()).unwrap();
 
