@@ -278,6 +278,8 @@ impl Results {
                 Ok(n) => format!("Saved {n} components to {}", p.display()),
                 Err(e) => format!("Save failed: {e}"),
             };
+        } else {
+            self.note.clear();
         }
     }
 

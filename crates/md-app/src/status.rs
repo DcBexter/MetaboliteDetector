@@ -28,27 +28,24 @@ impl App {
                         .show_tooltip_when_elided(false);
                     ui.add(label).on_hover_text(e);
                 });
-            } else if let Some(n) = self.hidden_list_note().map(str::to_owned) {
-                ui.horizontal(|ui| {
-                    if ui.small_button("×").on_hover_text("Dismiss").clicked() {
-                        self.results.set_note(String::new());
-                    }
-                    ui.add(
-                        egui::Label::new(&n)
-                            .truncate()
-                            .show_tooltip_when_elided(false),
-                    )
-                    .on_hover_text(n);
-                });
             } else if let Some(r) = self.runs.get(self.active) {
                 // One line: a wrapped status changes the bar's height, which egui applies a frame
                 // late, so the second line would hang below the window for that frame (#200).
-                let status = self.run_status(r);
-                let label = egui::Label::new(&status)
-                    .truncate()
-                    .show_tooltip_when_elided(false);
-                ui.add(label)
-                    .on_hover_text(format!("{status}\n{}", r.path.display()));
+                let mut status = self.run_status(r);
+                let note = self.hidden_list_note().map(str::to_owned);
+                if let Some(n) = &note {
+                    status = format!("{n} — {status}");
+                }
+                ui.horizontal(|ui| {
+                    if note.is_some() && ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                        self.results.set_note(String::new());
+                    }
+                    let label = egui::Label::new(&status)
+                        .truncate()
+                        .show_tooltip_when_elided(false);
+                    ui.add(label)
+                        .on_hover_text(format!("{status}\n{}", r.path.display()));
+                });
             } else {
                 ui.label("No runs open.");
             }
