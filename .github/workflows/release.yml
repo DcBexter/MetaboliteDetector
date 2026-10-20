@@ -1,0 +1,99 @@
+name: Release
+# Builds the app and md-cli for Windows (portable exe and MSI installer) and Linux (tar.gz).
+# A version tag (v*) publishes them as a GitHub pre-release; the tagged commit must already contain this file.
+# PRs that change the release files only build, so the packaging is tested before a tag.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: [.github/workflows/release.yml, installer/**]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          # glibc floor of the Linux package; README states glibc 2.39 (Ubuntu 24.04).
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: windows-latest
+            target: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      # Windows: static C runtime, so the exe runs without the Visual C++ Redistributable.
+      - run: cargo build --release --locked -p metabolite-detector -p md-cli
+        env:
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
+      # MSI versions must be numeric: v0.1.0-rc1 installs as 0.1.0, PR builds as 0.0.0.
+      - name: Version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#v}; else v=0.0.0; fi
+          # The binaries report the Cargo version, so a tag must match it (CONTRIBUTING: bump, then tag).
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            cargo_v=$(cargo metadata --format-version 1 --no-deps --locked \
+              | jq -r '.packages[] | select(.name == "md-cli") | .version')
+            if [ "${v%%-*}" != "${cargo_v%%-*}" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match Cargo version $cargo_v"; exit 1
+            fi
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "MSI_VERSION=${v%%-*}" >> "$GITHUB_ENV"
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          name="MetaboliteDetector-$VERSION-linux-x64"
+          mkdir -p "$name" dist
+          cp target/release/metabolite-detector target/release/md-cli README.md LICENSE "$name/"
+          echo "$GITHUB_SHA" > "$name/COMMIT.txt"
+          tar czf "dist/$name.tar.gz" "$name"
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          name="MetaboliteDetector-$VERSION-windows-x64"
+          mkdir dist
+          cp target/release/metabolite-detector.exe "dist/$name-portable.exe"
+          dotnet tool install --global wix --version 6.0.2
+          wix build -arch x64 -d Version="$MSI_VERSION" -d BinDir=target/release \
+            installer/metabolite-detector.wxs -o "dist/$name.msi"
+          rm dist/*.wixpdb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+  # Only this job gets write access; it runs no project code.
+  publish:
+    name: Publish pre-release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum MetaboliteDetector-* > SHA256SUMS.txt
+          gh release create "$TAG" MetaboliteDetector-* SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --prerelease --title "MetaboliteDetector $TAG" --generate-notes
