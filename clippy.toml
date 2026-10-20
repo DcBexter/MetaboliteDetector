@@ -1,0 +1,2 @@
+# Same limit as Sonar rule rust:S3776, so that a too complex function shows up before the PR.
+cognitive-complexity-threshold = 15
