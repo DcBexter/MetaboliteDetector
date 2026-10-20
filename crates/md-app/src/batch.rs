@@ -1,6 +1,7 @@
 //! Batch quantification window: scans many runs on a worker thread against the open library and
 //! shows the substance × run table (`md_core::batch`). Filters and groups apply without a rescan.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
@@ -17,7 +18,7 @@ use md_core::batch::{
 use md_core::batch::{cell_ions, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
-use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
+use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
 use md_core::stats::{group_values, student, summary};
@@ -44,6 +45,22 @@ struct Scan {
     rescanned: usize,
     errors: Vec<String>,
     took: Duration,
+    /// Per run: library index of a substance -> position in `RunResult::found`, so the details
+    /// behind a cell are found without searching every frame.
+    index: Vec<HashMap<usize, usize>>,
+}
+
+/// See `Scan::index`.
+fn hit_index(runs: &[RunResult]) -> Vec<HashMap<usize, usize>> {
+    (runs.iter())
+        .map(|r| {
+            r.found
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.compound, i))
+                .collect()
+        })
+        .collect()
 }
 
 /// Which normalisation (F13) the table shows; the table is derived again when this changes.
@@ -254,6 +271,7 @@ impl Batch {
     pub fn finished(&mut self, lib: Arc<Library>, runs: Vec<RunResult>) {
         self.scan = Some(Scan {
             lib,
+            index: hit_index(&runs),
             runs: Arc::new(runs),
             extra: Arc::default(),
             rescanned: 0,
@@ -295,6 +313,7 @@ impl Batch {
                 errors.extend(done.errors);
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
+                    index: hit_index(&runs),
                     runs: Arc::new(runs),
                     extra: Arc::new(done.extra),
                     rescanned: done.rescanned,
@@ -585,16 +604,22 @@ impl Batch {
                     self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let ex = Export {
                             scan,
                             settings: &self.settings,
-                            extra: shown_settings(&self.norm, shown, t.runs.len()),
+                            extra: [
+                                shown_settings(&self.norm, shown, t.runs.len()),
+                                scan_settings(scan),
+                            ]
+                            .concat(),
                             ions: self.view.export_ions,
                         };
                         if let Some(note) = export_button(ui, shown, &ex) {
                             self.note = note;
                         }
+                        let times = self.times.as_ref().map(|t| t.0.as_slice());
+                        pool_mapping_button(ui, t, &self.norm, times, &mut self.note);
                         if self.frag_job.is_none()
                             && let Some(rx) = frag_button(ui, shown, scan)
                         {
@@ -725,6 +750,18 @@ fn shown_settings(n: &Norm, t: &Table, base_runs: usize) -> Vec<(&'static str, S
     ]
 }
 
+/// How the runs were scanned, for the settings file next to an export.
+fn scan_settings(scan: &Scan) -> Vec<(&'static str, String)> {
+    vec![
+        ("LIBRARY", scan.lib.name.clone()),
+        ("RT_ONLY", scan.lib.prepared.is_rt_only().to_string()),
+        ("SEARCH_CUTOFF", scan.lib.settings.cutoff.to_string()),
+        ("RUNS_SCANNED", scan.runs.len().to_string()),
+        ("UNKNOWN_SUBSTANCES", scan.extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", scan.rescanned.to_string()),
+    ]
+}
+
 /// The export has the values the table shows, plus the replicate groups and the settings used
 /// next to it, and with `ex.ions` the raw integral of every quant ion. Returns a note after a
 /// save attempt.
@@ -786,14 +823,17 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     Ok(text)
 }
 
-/// The table as the user's edits and the normalisation leave it: runs are removed and moved
-/// first, substances are removed last.
-fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
+/// The runs as the user left them (removed and moved), with their file dates.
+fn edited_runs<'a>(
+    t: &'a Table,
+    n: &Norm,
+    times: Option<&[i64]>,
+) -> (std::borrow::Cow<'a, Table>, Vec<i64>) {
+    use std::borrow::Cow;
     let cols = n.edits.cols.as_deref();
-    let edited = cols.map(|c| t.select_runs(c));
-    let base = edited.as_ref().unwrap_or(t);
+    let base = cols.map_or(Cow::Borrowed(t), |c| Cow::Owned(t.select_runs(c)));
     // The file dates follow the runs that are left.
-    let times: Vec<i64> = match (times, cols) {
+    let times = match (times, cols) {
         (Some(ts), Some(cols)) => cols
             .iter()
             .map(|c| ts.get(*c).copied().unwrap_or(0))
@@ -801,7 +841,46 @@ fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
         (Some(ts), None) => ts.to_vec(),
         (None, _) => Vec::new(),
     };
-    apply(base, &mode(n, base, &times), n.z_score).without_rows(&n.edits.rows)
+    (base, times)
+}
+
+/// The table as the user's edits and the normalisation leave it: runs are removed and moved
+/// first, substances are removed last.
+fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
+    let (base, times) = edited_runs(t, n, times);
+    apply(&base, &mode(n, &base, &times), n.z_score).without_rows(&n.edits.rows)
+}
+
+/// The old program's "Export pool mapping": which pool runs each run was divided by, for the runs
+/// the table shows. A save attempt leaves a note.
+fn pool_mapping_button(
+    ui: &mut egui::Ui,
+    t: &Table,
+    n: &Norm,
+    times: Option<&[i64]>,
+    note: &mut String,
+) {
+    if n.kind != Kind::Pool || !ui.button("Export pool mapping…").clicked() {
+        return;
+    }
+    let (base, times) = edited_runs(t, n, times);
+    let Normalization::Pool(p) = mode(n, &base, &times) else {
+        return;
+    };
+    let Some(mut path) = rfd::FileDialog::new()
+        .add_filter("Text", &["txt"])
+        .set_file_name("pool_mapping.txt")
+        .save_file()
+    else {
+        return;
+    };
+    if path.extension().is_none_or(|e| e != "txt") {
+        path.as_mut_os_string().push(".txt");
+    }
+    *note = match std::fs::write(&path, pool_mapping_text(&base, &p)) {
+        Ok(()) => format!("Saved {}", path.display()),
+        Err(e) => format!("Export failed: {e}"),
+    };
 }
 
 /// With `z_scored` there are no group statistics: the old program computes them on the normalised
@@ -1010,8 +1089,9 @@ struct Detail<'a> {
 impl Detail<'_> {
     /// The hit of `compound` in the run behind column `col` of `t`.
     fn found(&self, t: &Table, col: usize, compound: usize) -> Option<&Found> {
-        let run = self.scan.runs.get(*t.sources.get(col)?)?;
-        run.found.iter().find(|f| f.compound == compound)
+        let run = *t.sources.get(col)?;
+        let hit = *self.scan.index.get(run)?.get(&compound)?;
+        self.scan.runs.get(run)?.found.get(hit)
     }
 
     /// The library hits of the component behind a cell: the assigned one first (red), then the
@@ -1577,6 +1657,7 @@ mod tests {
         };
         let scan = Scan {
             lib: Arc::new(lib),
+            index: hit_index(std::slice::from_ref(&run)),
             runs: Arc::new(vec![run]),
             extra: Arc::default(),
             rescanned: 0,
@@ -1631,14 +1712,16 @@ mod tests {
         let mut ex = Export {
             scan: &scan,
             settings: &settings,
-            extra: vec![("NORMALISATION", "none".into())],
+            extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
         };
         let note = save_results(&csv, &t, &ex).unwrap();
         assert!(note.contains("results.settings.csv"), "{note}");
         assert!(!dir.join("results.ions.csv").exists());
         let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
-        assert!(text.ends_with("NORMALISATION,none\n"), "{text}");
+        assert!(text.contains("\nNORMALISATION,none\n"), "{text}");
+        assert!(text.contains("\nRUNS_SCANNED,1\n"), "{text}");
+        assert!(text.contains("\nIONS_ADDED_BY_RESCAN,0\n"), "{text}");
 
         ex.ions = true;
         save_results(&csv, &t, &ex).unwrap();

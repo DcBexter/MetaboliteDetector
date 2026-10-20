@@ -277,44 +277,49 @@ fn biomarker_table(
         "p-value",
     ];
     let mut clicked = None;
-    // Scrolls sideways in a narrow window instead of widening it.
-    egui::ScrollArea::horizontal().show(ui, |ui| {
-        TableBuilder::new(ui)
-            .id_salt("biomarker table")
-            .striped(true)
-            .sense(egui::Sense::click())
-            .column(Column::auto().at_least(160.0))
-            .columns(Column::auto().at_least(60.0), 9)
-            .header(20.0, |mut h| {
-                for title in TITLES {
-                    h.col(|ui| {
-                        ui.strong(title);
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(18.0, shown.len(), |mut row| {
-                    let r = shown[row.index()];
-                    row.set_selected(selected == Some(r.row));
-                    for (i, c) in cells_of(t, r).into_iter().enumerate() {
-                        row.col(|ui| {
-                            // Numbers right-aligned so the digits line up.
-                            let align = if i == 0 {
-                                egui::Layout::left_to_right(egui::Align::Center)
-                            } else {
-                                egui::Layout::right_to_left(egui::Align::Center)
-                            };
-                            ui.with_layout(align, |ui| {
-                                ui.add(egui::Label::new(c).selectable(false));
-                            });
+    // One scroll area for both directions, so both bars sit at the window's edges; a table that
+    // scrolls vertically inside one that scrolls sideways has its bar at the far end of the rows.
+    // The header scrolls away with the rows.
+    egui::ScrollArea::both()
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            TableBuilder::new(ui)
+                .id_salt("biomarker table")
+                .vscroll(false)
+                .striped(true)
+                .sense(egui::Sense::click())
+                .column(Column::auto().at_least(160.0))
+                .columns(Column::auto().at_least(60.0), 9)
+                .header(20.0, |mut h| {
+                    for title in TITLES {
+                        h.col(|ui| {
+                            ui.strong(title);
                         });
                     }
-                    if row.response().clicked() {
-                        clicked = Some(r.row);
-                    }
+                })
+                .body(|body| {
+                    body.rows(18.0, shown.len(), |mut row| {
+                        let r = shown[row.index()];
+                        row.set_selected(selected == Some(r.row));
+                        for (i, c) in cells_of(t, r).into_iter().enumerate() {
+                            row.col(|ui| {
+                                // Numbers right-aligned so the digits line up.
+                                let align = if i == 0 {
+                                    egui::Layout::left_to_right(egui::Align::Center)
+                                } else {
+                                    egui::Layout::right_to_left(egui::Align::Center)
+                                };
+                                ui.with_layout(align, |ui| {
+                                    ui.add(egui::Label::new(c).selectable(false));
+                                });
+                            });
+                        }
+                        if row.response().clicked() {
+                            clicked = Some(r.row);
+                        }
+                    });
                 });
-            });
-    });
+        });
     clicked
 }
 
