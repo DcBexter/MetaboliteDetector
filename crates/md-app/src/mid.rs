@@ -35,6 +35,8 @@ struct Done {
     lib: Vec<LibraryCompound>,
     /// One per fit: the labelled runs' names, or the group.
     columns: Vec<String>,
+    /// Full path of each per-run column, for its hover; empty for the group methods.
+    paths: Vec<String>,
     mids: Mids,
     /// Per-run methods: mean and standard error of the labelled runs per substance, fragment and
     /// isotopomer (old group `GL`); empty for the group methods.
@@ -167,6 +169,12 @@ impl MidWindow {
                 .collect(),
             false => vec!["labelled".into()],
         };
+        let column_paths: Vec<String> = match method.per_run() {
+            true => (self.labelled.iter())
+                .map(|p| p.display().to_string())
+                .collect(),
+            false => Vec::new(),
+        };
         let (nl, nu) = (self.labelled.len(), unlabelled.len());
         let rescan = self.rescan;
         let (done, cancel) = (
@@ -254,6 +262,7 @@ impl MidWindow {
             Ok(Done {
                 lib: mids_lib,
                 columns,
+                paths: column_paths,
                 mids,
                 stats,
                 text,
@@ -467,7 +476,7 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
                     for (j, f) in c.fragments.iter().enumerate() {
                         let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
                         ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
-                        fragment_grid(ui, f, &r.columns, stats, (c.compound, j));
+                        fragment_grid(ui, f, (&r.columns, &r.paths), stats, (c.compound, j));
                         fragment_plot(ui, f, &r.columns, stats, (c.compound, j));
                     }
                 });
@@ -507,14 +516,17 @@ fn cell(v: Option<f64>) -> String {
 fn fragment_grid(
     ui: &mut egui::Ui,
     f: &FragmentMid,
-    columns: &[String],
+    (columns, paths): (&[String], &[String]),
     stats: &[(f64, f64)],
     id: (usize, usize),
 ) {
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         ui.label("");
-        for c in columns {
-            ui.strong(c);
+        for (i, c) in columns.iter().enumerate() {
+            let head = ui.strong(c);
+            if let Some(path) = paths.get(i) {
+                head.on_hover_text(path);
+            }
         }
         if !stats.is_empty() {
             ui.strong("Mean").on_hover_text(
@@ -548,7 +560,9 @@ fn fragment_grid(
             ui.end_row();
         }
         ui.label("R²").on_hover_text(
-            "How well the isotopomers explain the measured spectrum; 1 is a perfect fit, and with no more masses than isotopomers it is always 1",
+            "How well the isotopomers explain the measured spectra; 1 is a perfect fit. It is always 1 \
+             when there are no more measured values than isotopomers, as with one library spectrum. \
+             – means no fit: uncorrected MIDs are not fitted.",
         );
         for fit in &f.fits {
             ui.label(cell(fit.as_ref().and_then(|x| x.r2)));

@@ -36,7 +36,7 @@ can draw.
 Second review (#168, 2026-10-20) of results, chromatogram, calibration, isotopes, statistics, library
 editor, MID and window placement. Fixed in #168: Run info wraps a long path in a readable column and
 names the peak settings like the Settings dialog; statistics explains why it needs two replicate groups;
-the status bar shows load times in whole ms. #183 fixed the MID findings (one rescan label, hovers for
+the status bar shows load times as "80 ms" or "1.2 s". #183 fixed the MID findings (one rescan label, hovers for
 R² and negative values). Calibration, isotopes, chromatogram and component detail had no findings, and
 every screen except batch has no unnamed input.
 
