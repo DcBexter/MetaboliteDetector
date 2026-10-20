@@ -112,6 +112,10 @@ fn matches_old_version_with_matched_filtering() {
     compare(include_str!("data/old-md-3.3-matched.tsv"), &peaks, known);
 }
 
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "a test of many cases: each assert counts, and Sonar skips tests"
+)]
 fn compare(text: &str, settings: &PeakSettings, known: Known) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../example-data/TargetSearchData/inst/gc-ms-data");

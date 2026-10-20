@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Exports a library with the old MetaboliteDetector 3.3 as AMDIS MSL (the three ExportType values).
 # Run on Linux/WSL with the old binary installed (or MD_APP pointing to metabolitedetector_app), g++ and nm:
-#   docs/reverse-engineering/tools/golden/make-msl-export.sh LIB.lbr OUT_PREFIX
+#   docs/reverse-engineering/tools/golden/make-msl-export.sh LIB.lbr|LIB.msl OUT_PREFIX
+# A .msl input goes through the old MSL import first (to export libraries with fractional masses).
 # Output: OUT_PREFIX.profile.msl, OUT_PREFIX.nominal.msl, OUT_PREFIX.fwhm.msl. Do not commit them.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -15,6 +16,7 @@ nm "$app" | awk '
   BEGIN {
     want["main"] = "MAIN"
     want["_ZN4gcms13LibrarySearchIifE8fromDiskEPKc"] = "LIBRARY_SEARCH_FROM_DISK"
+    want["_ZN4gcms13LibrarySearchIifE9importMSLEPKc"] = "LIBRARY_SEARCH_IMPORT_MSL"
     want["_ZNK4gcms13LibrarySearchIifE9exportMSLEPKcNS1_10ExportTypeE"] = "LIBRARY_SEARCH_EXPORT_MSL"
   }
   ($3 in want) && !seen[$3]++ { print "SYM(" want[$3] ", 0x" $1 ")"; n++ }

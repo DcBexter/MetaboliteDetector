@@ -73,9 +73,12 @@ fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
 }
 
 impl App {
-    pub fn library_menu(&mut self, ui: &mut egui::Ui) {
+    pub fn open_library_button(&mut self, ui: &mut egui::Ui) {
         if ui
             .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf)…")
+            .on_hover_text(
+                "Load a mass spectral library; components are then identified against it",
+            )
             .clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter(
@@ -85,9 +88,6 @@ impl App {
                 .pick_file()
         {
             self.open_library(ui.ctx(), path);
-        }
-        if ui.button("Library editor…").clicked() {
-            self.editor.open = true;
         }
     }
 
