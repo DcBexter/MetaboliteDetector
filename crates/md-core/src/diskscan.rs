@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::Chromatogram;
 use crate::andi::{self, AndiError};
 use crate::ri::StoredCalibration;
+use crate::tof::TofCalibration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiskScanError {
@@ -43,7 +44,7 @@ pub fn read(path: impl AsRef<Path>) -> Result<Chromatogram, DiskScanError> {
 }
 
 fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
-    let mut entries = read_index(idx)?.1;
+    let (_, tof, mut entries) = read_index(idx)?;
     entries.sort_by_key(|e| e.scan);
     if let Some(w) = entries.windows(2).find(|w| w[0].scan == w[1].scan) {
         return corrupt(format!("scan {} listed twice", w[0].scan));
@@ -81,7 +82,12 @@ fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
         let masses = Reader::at(bin, e.masses_ptr)?.take(4 * n)?;
         let (values, masses) = (values.as_chunks::<4>().0, masses.as_chunks::<4>().0);
         intensity.extend(values.iter().map(|b| i32::from_le_bytes(*b) as f32));
-        mz.extend(masses.iter().map(|b| f32::from_le_bytes(*b)));
+        // A cache of FastFlight data stores TOF bins; the old reader maps them through the polynomial.
+        let masses = masses.iter().map(|b| f32::from_le_bytes(*b));
+        match &tof {
+            Some(tof) => mz.extend(masses.map(|bin| tof.mz(bin))),
+            None => mz.extend(masses),
+        }
     }
     let times = entries.iter().map(|e| e.rt_ms / 1000.0).collect();
     andi::build(times, &index, &count, mz, intensity).map_err(|e| match e {
@@ -99,7 +105,9 @@ pub fn read_calibration(path: impl AsRef<Path>) -> Result<StoredCalibration, Dis
 }
 
 /// `DataProvider::readIndexFile` (0x75bf30), in its read order.
-fn read_index(idx: &[u8]) -> Result<(StoredCalibration, Vec<Entry>), DiskScanError> {
+fn read_index(
+    idx: &[u8],
+) -> Result<(StoredCalibration, Option<TofCalibration>, Vec<Entry>), DiskScanError> {
     let mut r = Reader { buf: idx, pos: 0 };
     let magic = r.u64()? as i64;
     if magic != MAGIC {
@@ -119,10 +127,15 @@ fn read_index(idx: &[u8]) -> Result<(StoredCalibration, Vec<Entry>), DiskScanErr
         r.take(len)?;
     }
     // TOF calibration polynomial (f64 coefficients); CdfImporter writes none.
-    // shortcut: rejected instead of applied to the masses; implement if such caches turn up.
-    if r.u32()? != 0 {
-        return corrupt("TOF-calibrated caches are not supported".into());
-    }
+    let terms = r.u32()? as usize;
+    let tof = match terms {
+        0 => None,
+        n if n <= 64 => {
+            let coefficients = (0..n).map(|_| r.f64()).collect::<Result<_, _>>()?;
+            Some(TofCalibration { coefficients })
+        }
+        n => return corrupt(format!("TOF polynomial with {n} terms")),
+    };
     r.take(5 * 8)?; // global BaselineStatistics: 4 x f64 + i64
     let (calibration, len) = StoredCalibration::parse(&r.buf[r.pos..])
         .map_err(|e| DiskScanError::Corrupt(e.to_string()))?;
@@ -149,7 +162,7 @@ fn read_index(idx: &[u8]) -> Result<(StoredCalibration, Vec<Entry>), DiskScanErr
             Ok(e)
         })
         .collect::<Result<_, _>>()
-        .map(|entries| (calibration, entries))
+        .map(|entries| (calibration, tof, entries))
 }
 
 fn corrupt<T>(msg: String) -> Result<T, DiskScanError> {
@@ -213,6 +226,11 @@ mod tests {
 
     /// Index and data file as `GCMSDiskScanWriter` lays them out, scans given as (rt_ms, m/z, values).
     fn files(scans: &[(f64, &[f32], &[i32])]) -> (Vec<u8>, Vec<u8>) {
+        files_with(scans, &[])
+    }
+
+    /// Same, with the TOF polynomial of a FastFlight cache.
+    fn files_with(scans: &[(f64, &[f32], &[i32])], tof: &[f64]) -> (Vec<u8>, Vec<u8>) {
         let (mut idx, mut bin) = (Vec::new(), Vec::new());
         let u32s = |v: &mut Vec<u8>, xs: &[u32]| xs.iter().for_each(|x| v.extend(x.to_le_bytes()));
         idx.extend(MAGIC.to_le_bytes());
@@ -221,7 +239,8 @@ mod tests {
         idx.push(b'k');
         u32s(&mut idx, &[1]);
         idx.push(b'v');
-        u32s(&mut idx, &[0]); // no TOF polynomial
+        u32s(&mut idx, &[tof.len() as u32]);
+        tof.iter().for_each(|c| idx.extend(c.to_le_bytes()));
         idx.extend([0; 40]); // global baseline statistics
         idx.extend(wizard_calibration().to_bytes());
         u32s(&mut idx, &[1]); // all ions
@@ -258,6 +277,18 @@ mod tests {
         let stored = read_index(&idx).unwrap().0;
         assert_eq!(stored, wizard_calibration());
         assert_eq!(stored.calibration().unwrap().ri(1.85), 1050.0);
+    }
+
+    #[test]
+    fn tof_caches_map_bins_to_masses() {
+        let (idx, bin) = files_with(&[(1500.0, &[100.0, 200.0], &[10, 5])], &[1.0, 0.5]);
+        let c = parse(&idx, &bin).unwrap();
+        assert_eq!(c.spectrum(0), (&[51.0, 101.0][..], &[10.0, 5.0][..]));
+        // An absurd term count must not allocate or read past the index.
+        let mut bad = idx.clone();
+        let at = 28 + 2 * 4 + 2; // after the type sizes, scan count, mass/value size and the feature
+        bad[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(parse(&bad, &bin).is_err());
     }
 
     #[test]
