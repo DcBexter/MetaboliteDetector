@@ -24,7 +24,8 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
   src/diskscan.rs       old raw-data cache (.bin + .idx) reader
-  src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export
+  src/library.rs        compound libraries: old .lbr (version 2) reader, AMDIS MSL import/export,
+                        library text format (.mdlib) read/write
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
@@ -38,6 +39,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
+  src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/batch.rs          batch quantification window and result table
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
@@ -330,6 +332,66 @@ with peak records are rejected as not supported until a sample file shows their 
 as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kept verbatim.
 `tests/lbr_sample.rs` checks the sample library `lib_aa.lbr` from the old package when
 `MD_LBR_SAMPLE` points to it; the file is never committed.
+
+### Library text format (.mdlib)
+
+Edited libraries are saved in a new text format, not as `.lbr`: the old writer's current version 5 is not
+decoded (#41), and a text file can be read, diffed and repaired by hand. It needs no new dependency (no
+serde in `md-core`), and unlike JSON it keeps NaN and infinity. `write_mdlib` and `parse_mdlib` keep
+every field of `LibraryCompound` bit for bit, so `.lbr` → `.mdlib` → reading back loses nothing.
+
+```
+MetaboliteDetector library 1
+compound
+name Serine 3TMS
+scan 0
+rt_ms 436080
+ri 1369.05
+bin_width 1
+peaks 73:1000 204.1433:250
+fwhm null
+integrals null
+quant_ions 204.1433
+auto_quant_ions
+feature FRAG	(204/3)(218/2)
+feature COMMENT	from AMDIS
+drt 0
+time_stamp 1227546843
+id 2197790076
+comb_spec 73:1000
+ion_freq 73:1
+spec_count 1
+ris 1369
+block 0707…07
+source Initial import from/home/kh/Desktop/test.msl
+end
+```
+
+- UTF-8 text, one `key value` per line (value = everything after the first space). Blank lines and lines
+  starting with `#` are ignored. The first other line is the header; its number is the format version.
+  A reader rejects a newer version and every unknown key, so a new field means a new version.
+- `compound` … `end` is one compound. Inside, `name` is required; every other key is optional and
+  defaults to a new compound's value (as after MSL import). Each key appears at most once, except
+  `feature`, `block` and `source`, which repeat in order.
+- Numbers are written as Rust prints them: the shortest text that reads back to the same `f32`/`f64`
+  (`NaN`, `inf`, `-0` included). Lists are space-separated; `m/z:value` pairs are joined by `:`.
+  `peaks` holds the spectrum (`masses`, `values`); `fwhm` and `integrals` are `null` or a list (the old
+  null pointer differs from an empty list). `quant_ions` is sorted and deduplicated on reading.
+- Text (`name`, feature key and value, `source`) escapes `\`, `\n`, `\r` and `\t`; any other escape is an
+  error. A feature is `KEY<tab>value` with a non-empty, unique key. MID fragments are the feature `FRAG`
+  (syntax `(174/8)(261/5)`, F16) and comments the feature `COMMENT`; both keys occur in the old binary.
+- `block` is one 40-byte record of `.lbr` §1.3 as 80 hex digits.
+- Reading is a trust boundary like `.lbr`: files over 1 GiB are rejected, every error names its line.
+  `save_mdlib` writes `<file>.tmp` and renames it over the target, so a failed save never leaves half a
+  library.
+
+The library editor (Library → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
+the open library or a new one: create, delete and rename compounds, add the selected component of the
+active run (its spectrum, RT and RI), view the spectrum, and edit RT, RI, quant ions, MID fragments,
+comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
+saved before; every other target goes through the native save dialog, which asks before replacing a file,
+and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. After a
+save the app opens the saved library, so the next search uses the edits.
 
 ## Old raw-data cache (.bin + .idx)
 
