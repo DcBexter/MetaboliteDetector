@@ -22,6 +22,7 @@ mod results;
 mod run_list;
 mod settings;
 mod status;
+mod view;
 
 use jobs::{poll_job, spawn};
 
@@ -78,6 +79,7 @@ struct App {
     batch: batch::Batch,
     results: results::Results,
     export: export::Export,
+    view: view::View,
 }
 
 impl Default for App {
@@ -103,6 +105,7 @@ impl Default for App {
             batch: batch::Batch::default(),
             results: results::Results::default(),
             export: export::Export::default(),
+            view: view::View::default(),
         }
     }
 }
@@ -178,6 +181,7 @@ impl App {
         self.batch.window(ctx, self.library.as_ref(), cal);
         self.isotopes.window(ctx);
         self.results.window(ctx, &mut self.runs, self.active);
+        self.info_window(ctx);
         self.library_editor(ctx);
     }
 }

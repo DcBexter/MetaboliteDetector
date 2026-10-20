@@ -54,6 +54,9 @@ impl App {
         if ui.button("Batch quantification…").clicked() {
             self.batch.open = true;
         }
+        if ui.button("Run info…").clicked() {
+            self.view.info_open = true;
+        }
         if ui.button("Natural isotopes…").clicked() {
             self.isotopes.open = true;
         }
