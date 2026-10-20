@@ -377,7 +377,7 @@ end
   (`NaN`, `inf`, `-0` included). Lists are space-separated; `m/z:value` pairs are joined by `:`.
   `peaks` holds the spectrum (`masses`, `values`); `fwhm` and `integrals` are `null` or a list (the old
   null pointer differs from an empty list). `quant_ions` is sorted and deduplicated on reading.
-- Text (`name`, feature key and value, `source`) escapes `\`, `\n`, `\r` and `\t`; any other escape is an
+- Text (`name`, feature key and value, `source`) escapes `\\`, `\n`, `\r` and `\t`; any other escape is an
   error. A feature is `KEY<tab>value` with a non-empty, unique key. MID fragments are the feature `FRAG`
   (syntax `(174/8)(261/5)`, F16) and comments the feature `COMMENT`; both keys occur in the old binary.
 - `block` is one 40-byte record of `.lbr` §1.3 as 80 hex digits.
