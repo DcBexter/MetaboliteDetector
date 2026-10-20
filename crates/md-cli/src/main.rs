@@ -20,7 +20,7 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc, old
+Finds the substances of a library (.mdlib, .lbr, .msl, TargetSearch .txt, NIST .msp or .sdf) in many runs (.cdf, .nc, old
 .bin or saved components .cmp, which are not deconvoluted again and cannot be rescanned) and writes the
 substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read
 (or saved).

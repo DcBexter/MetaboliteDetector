@@ -55,7 +55,7 @@ pub fn is_library(path: &Path) -> bool {
         ["lbr", "msl", "msp", "sdf", "mdlib"]
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
-    })
+    }) || md_core::library::is_targetsearch(path)
 }
 
 fn load(path: &Path, s: SearchSettings, nist: bool) -> Result<Library, String> {
@@ -144,7 +144,7 @@ impl Nist {
 impl App {
     pub fn open_library_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf)…")
+            .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf, TargetSearch .txt)…")
             .on_hover_text(
                 "Load a mass spectral library; components are then identified against it",
             )
@@ -152,7 +152,9 @@ impl App {
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     "Library",
-                    &["mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF"],
+                    &[
+                        "mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF", "txt",
+                    ],
                 )
                 .pick_file()
         {
