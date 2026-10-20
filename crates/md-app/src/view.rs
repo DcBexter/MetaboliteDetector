@@ -160,8 +160,9 @@ impl App {
             ),
             (
                 "Peak detection",
+                // The names of the Settings dialog.
                 format!(
-                    "slope begin {} / end {}, min height {} noise units, {} bins",
+                    "start slope {}, end slope {}, minimum S/N {}, {} apex steps per scan",
                     peak.threshold_begin,
                     peak.threshold_end,
                     peak.min_peak_height,
@@ -172,7 +173,12 @@ impl App {
         egui::Grid::new("run info").striped(true).show(ui, |ui| {
             for (k, v) in rows {
                 ui.strong(k);
-                ui.add(egui::Label::new(v).wrap());
+                // A grid column starts as narrow as its first frame; without a floor a long path
+                // wraps into a one-word-wide column.
+                ui.scope(|ui| {
+                    ui.set_min_width(240.0);
+                    ui.add(egui::Label::new(v).wrap());
+                });
                 ui.end_row();
             }
         });
