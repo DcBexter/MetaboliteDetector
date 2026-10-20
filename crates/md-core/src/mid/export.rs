@@ -6,7 +6,8 @@ use std::fmt::Write;
 use super::{FragmentMid, Method, Mids};
 use crate::library::LibraryCompound;
 
-/// A number as Qt's `QTextStream` writes it: `%g` with 6 significant digits, `nan`, `inf`.
+/// A number as Qt's `QTextStream` writes it: `%g` with 6 significant digits, `nan`, `inf`, and `0` for
+/// -0 (printf: `-0`).
 pub fn qt_g(v: f64) -> String {
     if v.is_nan() {
         return "nan".into();
@@ -182,6 +183,7 @@ mod tests {
             (-1.0, "-1"),
             (0.75, "0.75"),
             (0.0, "0"),
+            (-0.0, "0"),
             (f64::NAN, "nan"),
             (f64::NEG_INFINITY, "-inf"),
         ];

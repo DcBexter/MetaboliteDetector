@@ -461,8 +461,8 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
                     for (j, f) in c.fragments.iter().enumerate() {
                         let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
                         ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
-                        fragment_grid(ui, f, &r.columns, stats, (c.compound, f.lo));
-                        fragment_plot(ui, f, &r.columns, stats, (c.compound, f.lo));
+                        fragment_grid(ui, f, &r.columns, stats, (c.compound, j));
+                        fragment_plot(ui, f, &r.columns, stats, (c.compound, j));
                     }
                 });
         }
@@ -503,7 +503,7 @@ fn fragment_grid(
     f: &FragmentMid,
     columns: &[String],
     stats: &[(f64, f64)],
-    id: (usize, u32),
+    id: (usize, usize),
 ) {
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         ui.label("");
@@ -550,7 +550,7 @@ fn fragment_plot(
     f: &FragmentMid,
     columns: &[String],
     stats: &[(f64, f64)],
-    id: (usize, u32),
+    id: (usize, usize),
 ) {
     let n = f.isotopomers;
     let fits = columns.iter().zip(&f.fits);
