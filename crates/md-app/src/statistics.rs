@@ -371,7 +371,7 @@ impl Statistics {
             // Without a regex every run sits in one group, and the picker could never be satisfied.
             _ if all.len() < 2 => {
                 ui.label(
-                    "Two groups and Box plot compare replicate groups, but this batch has only one. \
+                    "Two groups and Box plot compare replicate groups, but this batch has fewer than two. \
                      Set \"Replicate groups (regex on file name)\" in the batch window; it applies \
                      without a rescan.",
                 );

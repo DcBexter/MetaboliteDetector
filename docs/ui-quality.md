@@ -44,5 +44,5 @@ had no findings, and every screen except batch has no unnamed input.
 | Results list | #169 | Columns are not cut off; headers in sentence case |
 | Library editor | #170 | No "RT 0.00" or "RI known 0" for compounds without RT/RI (needs a decision on how "unknown" is stored) |
 | Screenshot test | #171 | Run info, Results and Statistics have shots (the editor shot selects a compound since #165) |
-| MID | #141 | "Rescan missing ions" is named once; column headers without `.cdf`; R² and negative values explained on hover |
+| MID | #183 | "Rescan missing ions" is named once; column headers without `.cdf`; R² and negative values explained on hover |
 | Batch | #175 | Every input has a name and a hover text (8 unnamed) |
