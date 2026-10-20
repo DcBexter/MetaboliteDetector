@@ -200,7 +200,7 @@ impl App {
 
 /// Normalisation picker above the spectrum plot.
 pub fn norm_picker(ui: &mut egui::Ui, norm: &mut Normalization) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Normalise spectrum:");
         for n in Normalization::ALL {
             ui.selectable_value(norm, n, n.label());

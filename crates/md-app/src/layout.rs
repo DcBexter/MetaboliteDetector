@@ -37,8 +37,8 @@ mod tests {
     /// Containers hold other widgets on purpose; only the controls inside them must not overlap.
     const CONTAINERS: [&str; 5] = ["GenericContainer", "Pane", "Window", "Unknown", "Menu"];
 
-    /// Draws the app with every window open and returns each visible control that another one in
-    /// the same layer covers.
+    /// Draws the app with its windows open and returns each control that another one in the same
+    /// layer covers or that is cut off at the side.
     fn overlaps(size: [f32; 2]) -> Vec<String> {
         let mut app = App::default();
         (
@@ -48,6 +48,7 @@ mod tests {
             app.isotopes.open,
         ) = (true, true, true, true);
         app.editor.open = true;
+        app.view.info_open = true;
         let mut c = md_core::library::LibraryCompound::new("Phenylalanine 2TMS");
         (c.spectrum.masses, c.spectrum.values) = (vec![73.0, 218.0], vec![1000, 800]);
         app.editor.compounds = vec![c];
@@ -100,6 +101,17 @@ mod tests {
         ctx.viewport(|v| {
             let mut found = Vec::new();
             for (_, widgets) in v.prev_pass.widgets.layers() {
+                // Clipped by a scroll area vertically is fine; cut off at the side is not.
+                for w in widgets {
+                    let r = (w.rect, w.interact_rect);
+                    if let Some(name) = names.get(&w.id.accesskit_id())
+                        && !CONTAINERS.contains(&name.0.as_str())
+                        && w.rect.width() > 0.0
+                        && (r.1.min.x > r.0.min.x + 0.5 || r.1.max.x < r.0.max.x - 0.5)
+                    {
+                        found.push(format!("{name:?} {:?} is cut off at {:?}", r.0, r.1));
+                    }
+                }
                 let controls: Vec<_> = widgets
                     .iter()
                     .filter_map(|w| Some((names.get(&w.id.accesskit_id())?, w.interact_rect)))
