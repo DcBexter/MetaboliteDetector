@@ -102,8 +102,14 @@ fn reprepare(lib: &Library, s: SearchSettings, rt_only: bool, filter: bool) -> L
     }
 }
 
-/// Run path, component, its spectrum, hits.
-pub type NistHits = (PathBuf, usize, Vec<(u32, u32)>, Vec<LibraryHit>);
+/// Run path, component, its spectrum, the RI searched with, hits.
+pub type NistHits = (
+    PathBuf,
+    usize,
+    Vec<(u32, u32)>,
+    Option<f64>,
+    Vec<LibraryHit>,
+);
 
 /// Old "NIST search...": a second library next to the normal one (old setting `rc_lib_nist_file`),
 /// searched only for the selected component and only on request. Always with the old fragment
@@ -114,7 +120,7 @@ pub struct Nist {
     job: Option<LibraryJob>,
     /// Search settings whose preparation crashed; not retried until they change.
     failed: Option<SearchSettings>,
-    /// The last search: run path, component, its spectrum, hits.
+    /// The last search: run path, component, its spectrum, the RI searched with, hits.
     pub hits: Option<NistHits>,
 }
 
@@ -126,7 +132,7 @@ impl Nist {
     /// Hits of the last search if it was for this component of this run as it is now (a new
     /// analysis replaces the components).
     pub fn hits_for(&self, run: &Run, k: usize) -> Option<&[LibraryHit]> {
-        let (path, c, spectrum, hits) = self.hits.as_ref()?;
+        let (path, c, spectrum, _, hits) = self.hits.as_ref()?;
         let same = run
             .components
             .get(k)
@@ -183,7 +189,10 @@ impl App {
             && let Some(result) = poll_job(rx, "NIST library")
         {
             match result {
-                Ok(Ok(lib)) => self.nist.lib = Some(lib),
+                Ok(Ok(lib)) => {
+                    self.nist.lib = Some(lib);
+                    self.nist.failed = None;
+                }
                 Ok(Err(e)) => self.error = Some(e),
                 Err(e) => {
                     self.error = Some(e);
@@ -203,6 +212,18 @@ impl App {
                 Ok(Arc::new(reprepare(&lib, wanted, false, true)))
             }));
         }
+        // A new RI calibration of that run makes the hits stale.
+        if let Some((path, k, _, ri, _)) = &self.nist.hits
+            && let Some(run) = self.runs.iter().find(|r| &r.path == path)
+            && (run.components.get(*k)).is_some_and(|c| self.component_ri(run, c) != *ri)
+        {
+            self.nist.hits = None;
+        }
+    }
+
+    /// RI of the component's apex once the run is calibrated.
+    fn component_ri(&self, run: &Run, c: &md_core::deconv::Component) -> Option<f64> {
+        (self.ri.for_run(run)).map(|cal| cal.ri(run.data.scan_times_s[c.apex_scan as usize]))
     }
 
     /// Old `nistSearch`: the selected component of the active run against the NIST library, with RI
@@ -215,11 +236,24 @@ impl App {
             return;
         };
         let c = &run.components[k];
-        let ri =
-            (self.ri.for_run(run)).map(|cal| cal.ri(run.data.scan_times_s[c.apex_scan as usize]));
-        // shortcut: on the UI thread; with the pre-filter a 300 000 entry library takes ~10 ms.
+        let ri = self.component_ri(run, c);
+        // shortcut: on the UI thread; with the default pre-filter a 300 000 entry library takes ~10 ms,
+        // a low "Minimum number of identical frag." scores almost all of it; then move it to `spawn`.
         let hits = library_hits(&c.spectrum, ri, &lib.prepared, &lib.settings);
-        self.nist.hits = Some((run.path.clone(), k, c.spectrum.clone(), hits));
+        self.nist.hits = Some((run.path.clone(), k, c.spectrum.clone(), ri, hits));
+    }
+
+    /// The settings the library is prepared with. The fragment values steer only the NIST
+    /// pre-filter, so changing them does not search a library without it again.
+    fn wanted_search(&self) -> SearchSettings {
+        let mut s = self.settings.applied.search();
+        if let Some(lib) = &self.library
+            && !md_core::library::is_nist(&lib.path)
+        {
+            s.max_fragments = lib.settings.max_fragments;
+            s.min_equal_fragments = lib.settings.min_equal_fragments;
+        }
+        s
     }
 
     /// Takes a loaded library and (re)identifies every run that was not searched with the current
@@ -233,7 +267,7 @@ impl App {
                 Ok(Err(e)) => self.error = Some(e),
                 Err(e) => {
                     self.error = Some(e);
-                    self.library_failed = Some(self.settings.applied.search());
+                    self.library_failed = Some(self.wanted_search());
                 }
             }
             self.library_job = None;
@@ -242,7 +276,7 @@ impl App {
             return;
         };
         // New search settings: prepare the library again, then every run is searched again.
-        let wanted = self.settings.applied.search();
+        let wanted = self.wanted_search();
         let rt_only = self.ri.rt_only;
         if lib.settings != wanted || lib.prepared.is_rt_only() != rt_only {
             if self.library_job.is_none() && self.library_failed.as_ref() != Some(&wanted) {
@@ -427,11 +461,8 @@ mod tests {
     fn nist_search_keeps_the_library_hits() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
-        let s = SearchSettings {
-            cutoff: 0.0,
-            ..Default::default()
-        };
-        let nist = load(&path, s, true).unwrap();
+        let mut app = App::default();
+        let nist = load(&path, app.settings.applied.search(), true).unwrap();
         let alpha = &nist.compounds[0].spectrum;
         let mut run = crate::results::tests::run();
         run.component = Some(0);
@@ -439,7 +470,6 @@ mod tests {
             .map(|(m, v)| (*m as u32, *v as u32))
             .collect();
         let before = run.ident.as_ref().map(|i| i.1.hits.clone());
-        let mut app = App::default();
         app.runs.push(run);
         app.nist.lib = Some(Arc::new(nist));
         app.nist_search();
@@ -451,6 +481,28 @@ mod tests {
         assert!(app.nist.hits_for(&app.runs[0], 1).is_none());
         app.runs[0].components[0].spectrum.pop();
         assert!(app.nist.hits_for(&app.runs[0], 0).is_none());
+
+        // A new RI calibration drops hits searched without it.
+        app.runs[0].components[0]
+            .spectrum
+            .clone_from(&app.nist.hits.as_ref().unwrap().2);
+        let ctx = egui::Context::default();
+        app.update_nist(&ctx);
+        assert!(app.nist.hits_for(&app.runs[0], 0).is_some());
+        app.ri.cal = Some(Arc::new(RiCalibration::identity()));
+        app.update_nist(&ctx);
+        assert!(app.nist.hits.is_none());
+
+        // The fragment values matter only for a library with the pre-filter.
+        let lib = app.nist.lib.clone().unwrap();
+        app.settings.applied.sql_minimal_number_equal_fragments = 1;
+        app.library = Some(Arc::new(Library {
+            path: "other.msl".into(),
+            ..reprepare(&lib, lib.settings.clone(), false, false)
+        }));
+        assert_eq!(app.wanted_search(), lib.settings);
+        app.library = Some(lib.clone());
+        assert_eq!(app.wanted_search().min_equal_fragments, 1);
     }
 
     #[test]

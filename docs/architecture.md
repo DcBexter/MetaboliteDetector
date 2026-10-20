@@ -283,7 +283,8 @@ frag."; old `SQL_*`).
 
 File → Open NIST library loads a second library next to the normal one, always with the pre-filter (old
 `SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on the
-UI thread (about 10 ms for 300 000 entries) and its NIST hits are listed below the library hits, which stay
+UI thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
+entries) and its NIST hits are listed below the library hits, which stay
 as they are (old "NIST search..."). The NIST hits belong to that component and spectrum; a re-analysis hides
 them.
 
