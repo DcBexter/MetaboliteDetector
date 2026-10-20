@@ -58,11 +58,15 @@ impl App {
         if ui
             .add_enabled(enabled, button)
             .on_hover_text(hint)
-            .on_disabled_hover_text("Open a run first")
+            .on_disabled_hover_text(if self.runs.is_empty() {
+                "Open a run first"
+            } else {
+                "Select a component first"
+            })
             .clicked()
         {
+            // A click closes the menu by itself; outside a menu there is nothing to close.
             self.run_action(&ui.ctx().clone(), action);
-            ui.close();
         }
     }
 
@@ -91,8 +95,13 @@ impl App {
         {
             // Opening fails quietly if the folder does not exist yet; make it first.
             let _ = std::fs::create_dir_all(&dir);
-            ui.ctx()
-                .open_url(egui::OpenUrl::new_tab(dir.to_string_lossy()));
+            // open_url would start the web browser on a file: address on Windows.
+            if cfg!(windows) {
+                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+            } else {
+                ui.ctx()
+                    .open_url(egui::OpenUrl::new_tab(dir.to_string_lossy()));
+            }
         }
         self.updater.menu(ui);
         ui.separator();
