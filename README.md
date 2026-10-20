@@ -1,127 +1,138 @@
 # MetaboliteDetector
 
-Rust rewrite of MetaboliteDetector, a tool for deconvolution, identification and quantification
-of GC/MS metabolomics data. Runs natively on Windows, Linux and macOS without R or Qt installs.
+Deconvolution, identification and quantification of GC/MS metabolomics data. A Rust rewrite of
+MetaboliteDetector 3.3 that reads its old files and runs natively on Windows and Linux (macOS from source),
+without R or Qt installs.
+
+![Main window: three runs overlaid, a deconvoluted component and its library hits](docs/images/main-window.png)
+
+## Install
+
+Download from the [Releases page](https://github.com/DcBexter/MetaboliteDetector/releases):
+
+| File | For |
+|------|-----|
+| `.msi` | Windows installer: installs for the current user without admin rights, adds Start menu and desktop shortcuts |
+| `.exe` | Portable Windows app, runs without installing |
+| `.tar.gz` | Linux: the app and `md-cli` (built on Ubuntu 24.04, needs glibc 2.39 or newer) |
+
+The app updates itself: **Help → Check for updates…**, and once a day at start it checks by itself
+(switch it off under Help). An update installs only after you click, is verified against the release's
+SHA-256 checksums and restarts the app.
+
+From source (any OS with Rust): `cargo run --release -p metabolite-detector`.
+
+## Example data
+
+15 public GC-MS runs (~90 MB, not in git):
+
+```powershell
+.\example-data\fetch.ps1
+```
+
+On Linux/macOS: `example-data/fetch.sh`. The runs land in `example-data/TargetSearchData/inst/gc-ms-data/`.
+
+## Load runs
+
+**File → Open chromatograms…** (or the button on the start screen), or pass files on the command line.
+Supported: ANDI-MS NetCDF (`.cdf`, `.nc`), old MetaboliteDetector caches (`.bin` + `.idx`) and FastFlight
+raw data (`MsData.FFT`). Pick several files to overlay them; each is analysed in the background.
+
+- **Run list** (left): tick a run to show it, click its name to make it the active run, × closes it.
+- **Chromatogram** (top): **TIC**, **SIC** (m/z ± tolerance) or **TIC + SIC**. Red dots are the detected
+  components; click near one to select it, ←/→ steps through scans. Scroll and drag move the view, Ctrl +
+  scroll zooms, double-click resets.
+- **Spectrum** (bottom): the selected component, deconvoluted. **Normalise spectrum** switches between raw,
+  base peak, unit and relative scale; with a library hit, **Split** and **Difference** compare both spectra.
+  Click an ion to show its SIC.
+- **Component panel** (right): S/N, sharpness and scores of the component, its ion peaks (click an ion to
+  show its SIC) and the library hits.
+
+![TIC and SIC of m/z 147 for 15 runs](docs/images/tic-sic.png)
+
+Old `.cmp` (saved components) and `.calib` files next to a run are picked up automatically.
+
+## Load a library
+
+**File → Open library…** loads `.mdlib`, old `.lbr`, AMDIS `.msl` and NIST `.msp`/`.sdf`. Every component
+is then searched against it; hits show in the component panel and as names in the chromatogram
+(**Show names with score** filters them). **File → Open NIST library…** loads a second, large NIST library
+for a "NIST search" of the selected component only; the normal library stays.
+
+**File → Library editor…** creates or changes a library: **New library** or **Edit open library**, then
+**Add component…** takes the selected component from the run. Per compound: name, RT, RI, quant ions,
+MID fragments and a comment. **Save** writes the text format `.mdlib`; **Export MSL** writes AMDIS MSL.
+
+![Library editor with a selected compound](docs/images/library-editor.png)
+
+## Settings and RI calibration
+
+**Analysis → Settings…** holds peak detection, deconvolution and library search parameters. Change values,
+then **Apply**. **Load…** / **Save…** read and write the old 3.3 settings file; **Old defaults** fills in
+the 3.3 defaults. Hover over a setting for what it does and its old key (e.g. `AN_PEAK_THRESHOLD_BEGIN`).
+
+![Settings window](docs/images/settings.png)
+
+**Analysis → RI calibration…** gives components a retention index, so the library search scores RI as well
+as the spectrum: **Find alkanes in** the active run (marker ion, carbon range), use a calibration mix from
+the library, or **Load .calib…**. **Save .calib…** stores it next to the run.
+
+![RI calibration window](docs/images/ri-calibration.png)
+
+## Results of one run
+
+**Analysis → Results of the active run…** lists every component with RT, RI, peak area, scores and quant
+ions; type in **Find substance** to filter. **Export CSV…** saves the table, **Save components…** writes an
+old-style `.cmp`. **Analysis → Run info…** shows file, instrument and scan details.
+
+![Results table of one run](docs/images/results.png)
+
+## Quantify many runs
+
+**Analysis → Batch quantification…** finds the library's substances in many runs:
+
+1. Open a library (and an RI calibration, if you use RI).
+2. **Add runs…**, set quant ions and filters. **Replicate groups** is a regex on the file name, e.g.
+   `^(.+)_\d+\.cdf$`, so runs of one group are compared.
+3. **Start**. The result is a substance × run table; **Export CSV…** writes it (UTF-8, opens in Excel;
+   R: `scripts/r/load_results.R`).
+
+![Batch quantification window](docs/images/batch.png)
+
+**Analysis → Biomarker statistics…** works on the batch table: group comparison, box plots and PCA.
+
+**Analysis → Mass isotopomer distributions…** is for labelling experiments: **Add…** runs, and it computes
+the isotopomer distributions of the library's MID fragments (set in the library editor) across them.
+
+Further tools under **Analysis**: **Natural isotopes…** (M+0, M+1, … of a sum formula) and **TOF
+calibration…** (m/z calibration of FastFlight raw data, saved as `.mzcalib`).
+
+## Export
+
+- **File → Export chromatogram / Export spectrum**: the plotted values as CSV or copied, the plot as PNG,
+  SVG or PDF.
+- **File → Export as NetCDF**: the active run as profile, centroided or nominal-mass ANDI-MS file.
+- Every table window has its own **Export CSV…**.
+
+## Big studies without a window: `md-cli`
+
+`md-cli` (in the Linux package, or `cargo run --release -p md-cli --`) runs the batch quantification
+headless and writes the substance × run table as CSV:
+
+```sh
+md-cli --library library.msl --settings algorithms.settings --calibration run.calib \
+    --replicates '^(.+)_\d+\.cdf$' -j 8 -o table.csv study/*.cdf
+```
+
+`md-cli --help` lists all options; details in [docs/architecture.md](docs/architecture.md#command-line-md-cli).
+
+## Development
 
 - Architecture, performance rules, build and test commands: [docs/architecture.md](docs/architecture.md)
 - Milestones: [docs/roadmap.md](docs/roadmap.md)
+- UI review and how these screenshots are made: [docs/ui-quality.md](docs/ui-quality.md)
 - What the old 3.3 version did (reverse-engineered): [docs/reverse-engineering/](docs/reverse-engineering/)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md); workflow kit setup:
+  [docs/workflow-kit.md](docs/workflow-kit.md)
 
-Ready-made builds are on the [Releases page](https://github.com/DcBexter/MetaboliteDetector/releases):
-a Windows installer (`.msi`, installs for the current user without admin rights and adds Start menu and
-desktop shortcuts), a portable Windows `.exe` that runs without installing, and a Linux `.tar.gz` with the app
-and `md-cli` (built on Ubuntu 24.04, needs glibc 2.39 or newer).
-
-The app updates itself from these releases: Help → Check for updates… looks for a newer one, and once a
-day at start it checks by itself (switch off under Help). An update installs only after you click, is
-verified against the release's SHA-256 checksums and restarts the app.
-
-Example data (15 public GC-MS runs, ~90 MB, not in git): run `example-data/fetch.sh`, or
-`.\example-data\fetch.ps1` on Windows. Then:
-
-```sh
-cargo run --release -p metabolite-detector -- example-data/TargetSearchData/inst/gc-ms-data/7235eg04.cdf
-```
-
-Pass several files (or pick several in File → Open) to overlay them; TIC, SIC (m/z ± tolerance) or both.
-
-Big studies without a window: `md-cli` finds the library substances in many runs and writes the substance × run
-table as CSV (options in [docs/architecture.md](docs/architecture.md#command-line-md-cli), `md-cli --help`):
-
-```sh
-cargo run --release -p md-cli -- --library library.msl -o table.csv example-data/TargetSearchData/inst/gc-ms-data/*.cdf
-```
-
----
-
-## Project template (workflow kit)
-
-Use **Use this template** on GitHub to start a project with the shared
-[Workflow Kit](https://github.com/snagg-app/workflow-kit). The kit and its Ponytail /
-Impeccable sources stay pinned Git submodules; improvements arrive as update PRs.
-Add your own application and project-specific contracts without copying kit code.
-
-For agent-guided setup, give your agent the [setup entry](https://github.com/snagg-app/workflow-kit/blob/main/SETUP.md).
-It asks for repository, board and integration choices, then performs and verifies setup.
-
-## Setup
-
-Use Git, Node 26 and authenticated GitHub CLI:
-
-```sh
-git clone --recurse-submodules https://github.com/OWNER/REPO.git
-cd REPO
-node .vendor/workflow-kit/scripts/init-project.mjs --existing
-node .vendor/workflow-kit/scripts/setup-skills.mjs
-node .vendor/workflow-kit/scripts/setup-github.mjs OWNER/REPO
-```
-
-All shared harness commands run from this project's root and act on its checkout.
-This template contains no forwarding
-scripts; keep only actual product-specific scripts when adding an application.
-
-The final command copies the public board template, links this repository and
-creates missing labels. Commit `.github/workflow-project.json`. Configure native
-statuses in order: Backlog → Ready → In progress → Automated review → Human review → Done.
-Ready for Review starts Automated review; Human review requires completed automatic
-reviews, dispositioned findings and passed checks (disclose confirmed unavailable
-reviewers under the shared workflow exception). Further edits restart the review cycle.
-Done still requires human acceptance and merge. Configure native
-Project Auto-add for your repo and verify status automations in the GitHub UI;
-cancelled work must not become Done. No private Vaultdex items are copied.
-
-After reviewing the checkout, install hooks explicitly:
-
-```sh
-node .vendor/workflow-kit/scripts/install-ponytail-hooks.mjs
-node .vendor/workflow-kit/scripts/install-impeccable-hooks.mjs
-```
-
-Review/enable hook definitions in each agent. Personal settings and plugin installs
-are preserved. CodeRabbit requires GitHub App access; Codex requires a connected
-repository and automatic reviews enabled in Codex settings. Organization-wide App
-access can already cover the new repo. Configuration alone does not prove activation.
-Read the pinned kit's setup/security notes first; the known Ponytail PATH finding
-vaultdex/workflow-kit#3 is not fixed by moving scripts into the kit.
-
-## Working and updating
-
-Follow [CONTRIBUTING](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Fill in your
-architecture, build/test commands and product acceptance. Product CI and Sonar
-project keys are specific to your project; this template does not invent them.
-
-Dependabot proposes kit/Actions updates weekly. Renovate is explicitly disabled to
-avoid duplicate proposals in organizations where its App covers all repos. If you
-prefer Renovate, replace the Dependabot config with the kit's documented configuration.
-
-For an update PR, inspect the new source revision, then run:
-
-```sh
-git -C .vendor/workflow-kit fetch origin
-git -C .vendor/workflow-kit checkout <reviewed-kit-commit>
-git add .vendor/workflow-kit
-git submodule update --init --recursive
-node .vendor/workflow-kit/scripts/init-project.mjs . --existing
-node .vendor/workflow-kit/scripts/setup-skills.mjs .
-```
-
-Commit generated provider skills, companions and managed configuration in the same
-PR. Setup moves replaced skill copies into ignored `.workflow-kit/replaced/`;
-init preserves foreign hook handlers. Personal hook installation and trust remain
-separate steps, including renewed review of changed hook definitions.
-CI regenerates managed configuration and discovery, stages new paths with
-`git add --intent-to-add --all`, then checks `git diff --exit-code HEAD` so missing
-or stale committed output fails. Stage the new gitlink before the submodule
-update; otherwise Git checks out the old pin again.
-
-For upgrades from a wrapper-based template, update any external workspace bootstrap
-and hook-install caller before removing its old entrypoint. `init-project` removes
-only unchanged owned wrappers and migrates recorded hook metadata; it preserves
-foreign handlers. For Snagg Symphony, deploy vaultdex/snagg-symphony#10 first.
-The kit's separate review-policy PR #24 is not included in this pin; apply it only
-after its required human acceptance and merge.
-
-The included PR check verifies kit integration, not application correctness.
-Budget: one standard Linux job, no schedule/cache/artifacts, maximum five minutes
-per run. Public standard-runner usage is free; review private-repo and reviewer
-budgets before enabling new projects. No paid plans are enabled by setup.
+License: [MIT](LICENSE).
