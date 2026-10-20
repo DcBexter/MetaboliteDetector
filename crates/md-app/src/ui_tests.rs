@@ -220,4 +220,26 @@ fn screenshots() {
         *open(h.state_mut()) = false;
         h.run_steps(2);
     }
+
+    // MIDs of one substance with a made-up fragment: its four largest-mass neighbours from the top ion.
+    let mut lib = library(h.state());
+    let c = &mut lib.compounds[1];
+    let top = (c.spectrum.masses.iter().zip(&c.spectrum.values))
+        .max_by_key(|p| *p.1)
+        .map_or(73, |p| *p.0 as u32);
+    c.formulas.push((top, top + 3, "C7H20NSi2".into()));
+    h.state_mut().library = Some(Arc::new(lib));
+    h.state_mut().mid.demo(paths[..4].to_vec());
+    h.state_mut().mid.open = true;
+    h.run_steps(3);
+    shots.save(&mut h, "12-mid-settings");
+    h.get_by_label("Start").click();
+    h.run_steps(2);
+    wait(&mut h, |a| !a.mid.busy());
+    h.get_all(by().label_contains("Compound at"))
+        .next()
+        .unwrap()
+        .click();
+    h.run_steps(3);
+    shots.save(&mut h, "13-mid-results");
 }

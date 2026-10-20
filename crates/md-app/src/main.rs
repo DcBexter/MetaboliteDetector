@@ -21,6 +21,7 @@ mod layout;
 mod library_editor;
 mod loading;
 mod menu;
+mod mid;
 mod results;
 mod run_list;
 mod settings;
@@ -86,6 +87,7 @@ struct App {
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     statistics: statistics::Statistics,
+    mid: mid::MidWindow,
     results: results::Results,
     export: export::Export,
     view: view::View,
@@ -114,6 +116,7 @@ impl Default for App {
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             statistics: statistics::Statistics::default(),
+            mid: mid::MidWindow::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
@@ -194,7 +197,7 @@ impl App {
         self.ri
             .window(ctx, &self.runs, self.active, self.library.as_deref());
         self.settings.window(ctx);
-        self.batch.analysis = self.settings.key();
+        self.batch.use_settings(&self.settings.applied);
         // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
@@ -202,6 +205,8 @@ impl App {
         let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
+        self.mid.applied.clone_from(&self.settings.applied);
+        self.mid.window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);

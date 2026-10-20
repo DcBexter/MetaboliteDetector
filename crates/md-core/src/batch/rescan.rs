@@ -1,7 +1,7 @@
 //! Rescan of missing quant ions in the ion traces (old `ResultSeries::scanIons` called from
 //! `preciseSeriesCompletion`): where a substance seen in other runs lacks a quant ion, look for that
-//! ion's peak near the expected retention time and integrate it. Pinned behaviour and what is not
-//! decoded: docs/reverse-engineering/batch-quantification.md.
+//! ion's peak near the expected retention time and integrate it. The window is the search's ΔRI wide
+//! (old `LS_RI_DIFF`); pinned behaviour: docs/reverse-engineering/batch-quantification.md.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
@@ -14,26 +14,7 @@ use crate::Chromatogram;
 use crate::deconv::{DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
 use crate::peaks::{IonTraces, TooLarge};
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RescanSettings {
-    /// Width of the search window in seconds, added around the expected retention times (the old
-    /// window is the expected times ± half of it).
-    pub window_s: f64,
-    /// Only substances found in at least this share of the runs are completed (the old code skips a
-    /// series when too few samples have an integral).
-    pub min_share: f64,
-}
-
-impl Default for RescanSettings {
-    fn default() -> Self {
-        Self {
-            // shortcut: the old width argument is not traced to its source (batch-quantification.md).
-            window_s: 6.0,
-            min_share: 0.5,
-        }
-    }
-}
+use crate::ri::RiCalibration;
 
 /// One substance of one run with quant ions to look for, and where.
 struct Todo {
@@ -49,22 +30,20 @@ type Rescued = (usize, Vec<IonPeak>, f64);
 
 /// Looks for the quant ions each substance lacks in a run (see the module doc) and adds them to the
 /// run's `found`. Substances absent from a run get a `Found` with `rescanned` set. Runs are read
-/// again, at most `parallel` at a time, and only if they have gaps; `.cmp` inputs are skipped. Returns the number of ions added
-/// and the files that could not be read (their runs stay as they were), or `None` once `cancel` is set.
+/// again, at most `parallel` at a time, and only if they have gaps; `.cmp` inputs are skipped. Returns the number of ions
+/// added and the files that could not be read (their runs stay as they were), or `None` once `cancel` is set.
 /// The quant ions come from `q`, as `table` would choose them with the same settings.
-#[allow(clippy::too_many_arguments)]
 pub fn rescan_runs(
     runs: &mut [RunResult],
     lib: &[LibraryCompound],
     extra: &[LibraryCompound],
     s: &ScanSettings,
     q: &QuantSettings,
-    r: &RescanSettings,
     parallel: usize,
     cancel: &AtomicBool,
 ) -> Option<(usize, Vec<String>)> {
     // A `.cmp` input has no raw data to look into.
-    let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, r).into_iter())
+    let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, s.search.ri_diff).into_iter())
         .filter(|(i, _)| !crate::cmp::is_cmp(&runs[*i].path))
         .collect();
     let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
@@ -118,12 +97,16 @@ pub fn rescan_runs(
                                 rt_s,
                                 ions: Vec::new(),
                                 rescanned: true,
+                                rescued: Vec::new(),
                             });
                             found.len() - 1
                         });
                     let f = &mut found[k];
                     // A zero-integral peak of the same ion is replaced.
                     f.ions.retain(|p| ions.iter().all(|n| n.mass != p.mass));
+                    if !f.rescanned {
+                        f.rescued.extend(ions.iter().map(|p| p.mass));
+                    }
                     f.ions.append(&mut ions);
                     f.ions.sort_by(|a, b| b.integral.total_cmp(&a.integral));
                 }
@@ -140,13 +123,16 @@ fn plan(
     lib: &[LibraryCompound],
     extra: &[LibraryCompound],
     q: &QuantSettings,
-    r: &RescanSettings,
+    ri_diff: f64,
 ) -> BTreeMap<usize, Vec<Todo>> {
     let refs: Vec<&RunResult> = runs.iter().collect();
     let mut todo: BTreeMap<usize, Vec<Todo>> = BTreeMap::new();
     for (compound, found) in hits_by_compound(&refs) {
-        let seen = found.iter().flatten().count();
-        if (seen as f64) < r.min_share * runs.len() as f64 {
+        // Old `preciseSeriesCompletion`: skipped when fewer than n/4 (rounded) samples have an integral.
+        let seen = (found.iter().flatten())
+            .filter(|f| f.ions.iter().any(|p| p.integral > 0.0))
+            .count();
+        if seen < (runs.len() as f64 / 4.0 + 0.5) as usize {
             continue;
         }
         let Some(ions) = compound_ions(compound_of(lib, extra, compound), &found, q) else {
@@ -160,24 +146,47 @@ fn plan(
             if missing.is_empty() {
                 continue;
             }
-            // Expected times in this run: the others' times, through the RI when both are calibrated.
-            let times = found.iter().zip(runs).filter_map(|(f, other)| {
-                let f = (*f)?;
-                Some(match (&run.calibration, &other.calibration) {
-                    (Some(mine), Some(theirs)) => mine.rt(theirs.ri(f.rt_s)),
-                    _ => f.rt_s,
-                })
-            });
-            let (lo, hi) = times.fold((f64::MAX, f64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)));
+            let (from_s, to_s) = window(&run.calibration, &found, runs, ri_diff);
             todo.entry(i).or_default().push(Todo {
                 compound,
                 ions: missing,
-                from_s: lo - r.window_s / 2.0,
-                to_s: hi + r.window_s / 2.0,
+                from_s,
+                to_s,
             });
         }
     }
     todo
+}
+
+/// Old window of `scanIons`: the series' positions ± ΔRI/2. In RI when the run is calibrated and the
+/// series has RIs (those of the runs with a calibration), else in retention time, ΔRI s wide.
+fn window(
+    mine: &Option<RiCalibration>,
+    found: &[Option<&Found>],
+    runs: &[RunResult],
+    ri_diff: f64,
+) -> (f64, f64) {
+    let others = found.iter().zip(runs).filter_map(|(f, r)| Some(((*f)?, r)));
+    let ris: Vec<f64> = (others.clone())
+        .filter_map(|(f, r)| Some(r.calibration.as_ref()?.ri(f.rt_s)))
+        .filter(|ri| *ri >= 0.0)
+        .collect();
+    match mine {
+        Some(cal) if !ris.is_empty() => {
+            let (lo, hi) = span(&ris);
+            (cal.rt(lo - ri_diff / 2.0), cal.rt(hi + ri_diff / 2.0))
+        }
+        _ => {
+            let rts: Vec<f64> = others.map(|(f, _)| f.rt_s).filter(|t| *t >= 0.0).collect();
+            let (lo, hi) = span(&rts);
+            (lo - ri_diff / 2.0, hi + ri_diff / 2.0)
+        }
+    }
+}
+
+fn span(v: &[f64]) -> (f64, f64) {
+    v.iter()
+        .fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)))
 }
 
 fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
@@ -266,8 +275,14 @@ mod tests {
             compound: 0,
             score: 1.0,
             rt_s: 100.0,
-            ions: Vec::new(),
+            ions: vec![IonPeak {
+                mass: 50,
+                integral: 1.0,
+                quality: 0.0,
+                signal_to_noise: 1.0,
+            }],
             rescanned: false,
+            rescued: Vec::new(),
         };
         let shifted = RiCalibration::identity().shifted_to(120.0, 100.0);
         let run = |found: Vec<Found>, calibration| RunResult {
@@ -275,24 +290,24 @@ mod tests {
             calibration,
             ..Default::default()
         };
-        let r = RescanSettings::default();
         let q = QuantSettings::default();
         let window = |runs: &[RunResult]| {
-            let t = &plan(runs, std::slice::from_ref(&lib), &[], &q, &r)[&1][0];
+            let t = &plan(runs, std::slice::from_ref(&lib), &[], &q, 20.0)[&1][0];
             (t.from_s, t.to_s)
         };
         let id = Some(RiCalibration::identity());
         let a = run(vec![found.clone()], id.clone());
-        // The same substance elutes 20 s later in a run calibrated 20 s later.
+        // The window is ΔRI (20) wide in RI; the same substance elutes 20 s later in a run calibrated
+        // 20 s later.
         assert_eq!(
             window(&[a.clone(), run(vec![], Some(shifted))]),
-            (117.0, 123.0)
+            (110.0, 130.0)
         );
-        assert_eq!(window(&[a, run(vec![], id)]), (97.0, 103.0));
-        // Without calibrations the retention times are taken as they are.
+        assert_eq!(window(&[a, run(vec![], id)]), (90.0, 110.0));
+        // Without calibrations the retention times are taken as they are, ΔRI seconds wide.
         assert_eq!(
             window(&[run(vec![found], None), run(vec![], None)]),
-            (97.0, 103.0)
+            (90.0, 110.0)
         );
     }
 }

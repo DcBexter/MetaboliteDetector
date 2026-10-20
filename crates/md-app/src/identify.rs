@@ -50,7 +50,7 @@ fn score_color(score: f64) -> egui::Color32 {
 /// Libraries are recognised by extension; everything else opens as a run.
 pub fn is_library(path: &Path) -> bool {
     path.extension().is_some_and(|e| {
-        ["lbr", "msl", "mdlib"]
+        ["lbr", "msl", "msp", "sdf", "mdlib"]
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     })
@@ -65,23 +65,29 @@ fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
             .unwrap_or_default()
             .to_string_lossy()
             .into(),
-        prepared: PreparedLibrary::new(&compounds, &s),
+        prepared: PreparedLibrary::new(&compounds, &s)
+            .with_fragment_filter(md_core::library::is_nist(path)),
         settings: s,
         compounds,
     })
 }
 
 impl App {
-    pub fn library_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Open library (.mdlib, .lbr, .msl)…").clicked()
+    pub fn open_library_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf)…")
+            .on_hover_text(
+                "Load a mass spectral library; components are then identified against it",
+            )
+            .clicked()
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("Library", &["mdlib", "lbr", "msl", "MSL"])
+                .add_filter(
+                    "Library",
+                    &["mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF"],
+                )
                 .pick_file()
         {
             self.open_library(ui.ctx(), path);
-        }
-        if ui.button("Library editor…").clicked() {
-            self.editor.open = true;
         }
     }
 
@@ -122,7 +128,8 @@ impl App {
                         prepared: match rt_only {
                             true => PreparedLibrary::new_rt_only(&lib.compounds, &wanted),
                             false => PreparedLibrary::new(&lib.compounds, &wanted),
-                        },
+                        }
+                        .with_fragment_filter(md_core::library::is_nist(&lib.path)),
                         compounds: lib.compounds.clone(),
                         settings: wanted,
                     }))

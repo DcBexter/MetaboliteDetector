@@ -10,7 +10,7 @@
 mod rescan;
 mod untargeted;
 
-pub use rescan::{RescanSettings, rescan_runs};
+pub use rescan::rescan_runs;
 pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
@@ -83,6 +83,8 @@ pub struct Found {
     pub ions: Vec<IonPeak>,
     /// Made by `rescan_runs` from ion traces only: the substance was not deconvoluted in this run.
     pub rescanned: bool,
+    /// Masses of the ions `rescan_runs` added to an identified component.
+    pub rescued: Vec<u32>,
 }
 
 /// A component without library hit, kept by an untargeted scan until `add_unknowns` pools it.
@@ -203,6 +205,7 @@ fn scan_components(
                 rt_s,
                 ions,
                 rescanned: false,
+                rescued: Vec::new(),
             }),
             None => unknown.push(Unknown {
                 rt_s,
@@ -295,15 +298,15 @@ pub struct Completed {
 }
 
 /// The passes after `scan_runs`, shared by the app and the command line: pools the unknown
-/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is
-/// given. `None` once `cancel` is set.
+/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is set.
+/// `None` once `cancel` is set.
 #[allow(clippy::too_many_arguments)]
 pub fn complete_scan(
     runs: &mut [RunResult],
     lib: &[LibraryCompound],
     s: &ScanSettings,
     q: &QuantSettings,
-    rescan: Option<&RescanSettings>,
+    rescan: bool,
     parallel: usize,
     cancel: &AtomicBool,
 ) -> Option<Completed> {
@@ -312,9 +315,10 @@ pub fn complete_scan(
     } else {
         Vec::new()
     };
-    let (rescanned, errors) = match rescan {
-        Some(r) => rescan_runs(runs, lib, &extra, s, q, r, parallel, cancel)?,
-        None => (0, Vec::new()),
+    let (rescanned, errors) = if rescan {
+        rescan_runs(runs, lib, &extra, s, q, parallel, cancel)?
+    } else {
+        (0, Vec::new())
     };
     Some(Completed {
         extra,
@@ -560,8 +564,18 @@ pub fn table(
                 .map(|f| cell(f.as_ref()?, &ions, need, s))
                 .collect();
             let mut per_group: BTreeMap<&str, usize> = BTreeMap::new();
-            for (v, col) in values.iter().zip(&cols) {
-                if v.is_some() {
+            // The old reproducibility filter runs before the rescan: what the rescan added does not count.
+            let counts = |v: &Option<f64>, f: &Option<&Found>| match f {
+                Some(f) if !f.rescanned && f.rescued.is_empty() => v.is_some(),
+                Some(f) if !f.rescanned => {
+                    let mut plain = (*f).clone();
+                    plain.ions.retain(|p| !f.rescued.contains(&p.mass));
+                    cell(&plain, &ions, need, s).is_some()
+                }
+                _ => false,
+            };
+            for ((v, col), f) in values.iter().zip(&cols).zip(&found) {
+                if counts(v, f) {
                     *per_group.entry(&col.0).or_default() += 1;
                 }
             }
@@ -686,6 +700,7 @@ mod tests {
             rt_s,
             ions: ions.iter().map(|(m, i)| ion(*m, *i, 0.0)).collect(),
             rescanned: false,
+            rescued: Vec::new(),
         }
     }
 
@@ -895,9 +910,9 @@ NUM PEAKS: 1
         assert!(t.rows.iter().all(|r| r.values.iter().all(Option::is_some)));
     }
 
-    #[test]
-    fn rescan_fills_the_ions_a_run_lacks() {
-        let dir = std::env::temp_dir().join(format!("md-rescan-{}", std::process::id()));
+    /// Two runs of the same file in a temporary folder: the first identified, the second only scanned.
+    fn rescan_fixture(tag: &str) -> (PathBuf, Vec<RunResult>, Vec<LibraryCompound>) {
+        let dir = std::env::temp_dir().join(format!("md-rescan-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (a, b) = (dir.join("a.cdf"), dir.join("b.cdf"));
         crate::andi::write(&a, &two_substances()).unwrap();
@@ -907,22 +922,20 @@ NUM PEAKS: 1
         let found = scan_chromatogram(two_substances(), &PreparedLibrary::new(&lib, &s.search), &s)
             .unwrap()
             .found;
-        let mut runs = vec![
-            RunResult {
-                path: a,
-                found,
-                ..Default::default()
-            },
-            // The second run was scanned, but nothing was identified in it.
-            RunResult {
-                path: b,
-                ..Default::default()
-            },
-        ];
-        let q = QuantSettings::default();
+        let run = |path, found| RunResult {
+            path,
+            found,
+            ..Default::default()
+        };
+        (dir, vec![run(a, found), run(b, Vec::new())], lib)
+    }
+
+    #[test]
+    fn rescan_fills_the_ions_a_run_lacks() {
+        let (dir, mut runs, lib) = rescan_fixture("fill");
+        let (s, q) = (ScanSettings::default(), QuantSettings::default());
         let cancel = AtomicBool::new(false);
-        let r = RescanSettings::default();
-        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 2, &cancel).unwrap();
+        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
         let t = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
@@ -933,17 +946,49 @@ NUM PEAKS: 1
         }
         // Rescanned entries do not move the retention time of the substance.
         assert!(runs[1].found.iter().all(|f| f.rescanned && f.score == 0.0));
-        // A substance seen in too few runs is left alone.
-        let strict = RescanSettings {
-            min_share: 1.0,
-            ..r
+        // ... and do not count for reproducibility, which the old program checks before the rescan.
+        let all = TableSettings {
+            min_reproducibility: 1.0,
+            ..Default::default()
         };
-        let mut again = vec![runs[0].clone(), RunResult::default()];
-        again[1].path = runs[1].path.clone();
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, &strict, 1, &cancel).unwrap();
-        assert_eq!(added, 0);
+        assert!(table(&runs, &lib, &[], &all).unwrap().rows.is_empty());
         cancel.store(true, Relaxed);
-        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 1, &cancel).is_none());
+        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rescan_needs_a_quarter_of_the_runs_and_does_not_count_for_reproducibility() {
+        let (dir, runs, lib) = rescan_fixture("limit");
+        let (s, q) = (ScanSettings::default(), QuantSettings::default());
+        let cancel = AtomicBool::new(false);
+        // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
+        let mut again = vec![runs[0].clone()];
+        again.extend((0..5).map(|_| runs[1].clone()));
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        assert_eq!(added, 0);
+        // At the limit (2 of 6) it is rescanned.
+        again[1] = runs[0].clone();
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        assert!(added > 0);
+        // Ions added to an identified component do not count for reproducibility either.
+        let mut partial = vec![runs[0].clone(), runs[0].clone()];
+        partial[1].path = runs[1].path.clone();
+        // The quant ions come from the better run, which is the first.
+        for f in &mut partial[1].found {
+            f.ions.clear();
+            f.score = 0.5;
+        }
+        let all = TableSettings {
+            min_reproducibility: 1.0,
+            ..Default::default()
+        };
+        let rows = |runs: &[RunResult], s: &TableSettings| table(runs, &lib, &[], s).unwrap().rows;
+        assert!(rows(&partial, &all).is_empty());
+        rescan_runs(&mut partial, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        assert!(partial[1].found.iter().all(|f| !f.ions.is_empty()));
+        assert!(rows(&partial, &all).is_empty());
+        assert!(!rows(&partial, &TableSettings::default()).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1001,7 +1046,6 @@ NUM PEAKS: 1
             &[],
             &s,
             &QuantSettings::default(),
-            &RescanSettings::default(),
             1,
             &cancel,
         )
