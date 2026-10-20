@@ -52,7 +52,8 @@ pub fn side_panel(
 pub trait ToolWindow {
     /// Opens window `n` over the plots, right of the run list (a side panel, so at most 30 % of the
     /// width), each a step down and right so none opens on another. The starting `size` is capped to
-    /// the room there, so egui does not push the window back over the list to keep it on screen.
+    /// the room right of and below that spot (above the status bar), so egui does not push the window
+    /// back over the list or the menu bar to keep it on screen.
     /// shortcut: a window whose content needs more than that room still grows over the list, as most
     /// do at 520 px; narrower content would fix it if small windows matter.
     /// A window without its own size passes egui's default `[340.0, 420.0]`: unset, egui guesses 600
@@ -64,8 +65,11 @@ impl ToolWindow for egui::Window<'_> {
     fn tool_window(self, ctx: &egui::Context, n: u8, [w, h]: [f32; 2]) -> Self {
         let (screen, step) = (ctx.content_rect(), 20.0 * f32::from(n));
         let x = screen.min.x + screen.width() * 0.3 + 16.0 + step;
-        self.default_pos([x, screen.min.y + 40.0 + step])
-            .default_size([w.min(screen.max.x - x - 40.0), h])
+        let y = screen.min.y + 40.0 + step;
+        self.default_pos([x, y]).default_size([
+            w.min(screen.max.x - x - 40.0),
+            h.min(screen.max.y - y - 28.0),
+        ])
     }
 }
 
