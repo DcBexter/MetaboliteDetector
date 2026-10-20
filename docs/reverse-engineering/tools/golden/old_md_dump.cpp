@@ -41,7 +41,7 @@ double sn(Self p) { return fn<double (*)(Self)>(PE_SN)(p); }
 double model(Self p) { return fn<double (*)(Self)>(PE_MODEL)(p); }
 
 void peak_fields(FILE* out, Self p) {
-    std::fprintf(out, "%g\t%u\t%u\t%u\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g", ion(p), first(p), apex(p),
+    std::fprintf(out, "%.9g\t%u\t%u\t%u\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g\t%.9g", ion(p), first(p), apex(p),
                  last(p), interp(p), sn(p), quality(p), sharpness(p), integral(p), model(p));
 }
 
@@ -98,7 +98,7 @@ void run(FILE* out, const char* cdf, const char* work) {
         std::fprintf(out, "component\t%u\t%.9g\t%zu\n", fn<unsigned (*)(Self)>(SPEC_SCAN)(c),
                      fn<double (*)(Self)>(SPEC_RT)(c), masses->size());
         for (size_t i = 0; i < masses->size(); i++)
-            std::fprintf(out, "ion\t%g\t%d\n", (*masses)[i], (*values)[i]);
+            std::fprintf(out, "ion\t%.9g\t%d\n", (*masses)[i], (*values)[i]);
         alignas(8) char buf[sizeof(std::vector<Self>)];
         fn<void (*)(void*, Self)>(COMPOUND_PEAKS)(buf, c);
         auto* peaks = reinterpret_cast<std::vector<Self>*>(buf);
