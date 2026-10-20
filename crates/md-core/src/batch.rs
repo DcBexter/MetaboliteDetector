@@ -63,8 +63,12 @@ impl CmpTarget {
             Self::BesideRun => name,
             // Every FastFlight run is a `MsData.FFT`: in a folder of its own it is named after its run.
             Self::Dir(dir) if crate::fastflight::is_fastflight(run) => {
-                let folder = run.parent().and_then(Path::file_name).unwrap_or_default();
-                dir.join(folder).with_extension("cmp")
+                let run = std::path::absolute(run).unwrap_or_else(|_| run.to_path_buf());
+                let mut folder = (run.parent().and_then(Path::file_name))
+                    .unwrap_or_default()
+                    .to_owned();
+                folder.push(".cmp");
+                dir.join(folder)
             }
             Self::Dir(dir) => dir.join(name.file_name().unwrap_or_default()),
         }
@@ -303,10 +307,13 @@ pub fn scan_runs(
                 .map(|t| t.path(p))
         })
         .collect();
-    // Windows and macOS file names ignore case: `X.cmp` and `x.cmp` are one file there.
-    let key = |p: &Path| match cfg!(any(windows, target_os = "macos")) {
-        true => p.to_string_lossy().to_lowercase(),
-        false => p.to_string_lossy().into_owned(),
+    // `out/x.cmp` and `./out\x.cmp` are one file; on Windows and macOS so are `X.cmp` and `x.cmp`.
+    let key = |p: &Path| {
+        let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        match cfg!(any(windows, target_os = "macos")) {
+            true => p.to_string_lossy().to_lowercase(),
+            false => p.to_string_lossy().into_owned(),
+        }
     };
     let inputs: std::collections::HashSet<String> = paths.iter().map(|p| key(p)).collect();
     let mut uses = std::collections::HashMap::new();
@@ -1400,7 +1407,19 @@ NUM PEAKS: 1
             CmpTarget::BesideRun.path(&a.join("MsData.FFT")),
             a.join("MsData.cmp")
         );
-        assert!(!out.join("x.cmp.part").exists());
+        let name = |p: &str| target.path(&a.join(p).join("MsData.FFT"));
+        assert_eq!(
+            (name("S1.1"), name("S1.2")),
+            (out.join("S1.1.cmp"), out.join("S1.2.cmp"))
+        );
+        // The same file written another way is still an input.
+        let runs = [a.join("x.cdf"), dir.join("a").join(".").join("x.cmp")];
+        let s = ScanSettings {
+            save_cmp: Some(CmpTarget::BesideRun),
+            ..s
+        };
+        let (_, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
+        assert_eq!(errors.len(), 1, "{errors:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
