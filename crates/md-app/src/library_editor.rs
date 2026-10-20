@@ -236,7 +236,8 @@ impl LibraryEditor {
                     .add(
                         egui::DragValue::new(&mut minutes)
                             .speed(0.01)
-                            .range(0.0..=f64::MAX),
+                            .range(0.0..=f64::MAX)
+                            .clamp_existing_to_range(false),
                     )
                     .changed()
                 {
@@ -255,7 +256,11 @@ impl LibraryEditor {
                     }
                     if known {
                         changed |= ui
-                            .add(egui::DragValue::new(&mut c.spectrum.ri).range(0.0..=f64::MAX))
+                            .add(
+                                egui::DragValue::new(&mut c.spectrum.ri)
+                                    .range(0.0..=f64::MAX)
+                                    .clamp_existing_to_range(false),
+                            )
                             .changed();
                     }
                 });
@@ -277,50 +282,28 @@ impl LibraryEditor {
                 });
                 ui.end_row();
 
-                ui.label("MID fragments");
-                changed |=
-                    feature_field(ui, c, "FRAG", false, "(m/z/carbons)…, e.g. (174/2)(248/2)");
-                ui.end_row();
-
-                ui.label("Comment");
-                changed |= feature_field(ui, c, "COMMENT", true, "");
-                ui.end_row();
-            });
-        // Cleared fields drop their feature, so the file holds no empty FRAG or COMMENT.
-        c.features
-            .retain(|k, v| !(v.is_empty() && matches!(k.as_str(), "FRAG" | "COMMENT")));
-
-        ui.collapsing("Other features", |ui| {
-            let other: Vec<String> = (c.features.keys())
-                .filter(|k| !matches!(k.as_str(), "FRAG" | "COMMENT"))
-                .cloned()
-                .collect();
-            egui::Grid::new("features").striped(true).show(ui, |ui| {
-                for k in other {
-                    ui.label(&k);
-                    changed |= feature_field(ui, c, &k, false, "");
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
-                        c.features.remove(&k);
+                let fields = [
+                    (
+                        "MID fragments",
+                        "FRAG",
+                        false,
+                        "(m/z/carbons)…, e.g. (174/2)(248/2)",
+                    ),
+                    ("Comment", "COMMENT", true, ""),
+                ];
+                for (label, key, multiline, hint) in fields {
+                    ui.label(label);
+                    if feature_field(ui, c, key, multiline, hint) {
                         changed = true;
+                        // Clearing the field drops the feature instead of saving an empty one.
+                        c.features.retain(|k, v| k != key || !v.is_empty());
                     }
                     ui.end_row();
                 }
             });
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.new_key).hint_text("Key"));
-                let key = self.new_key.trim().to_uppercase();
-                if ui
-                    .add_enabled(
-                        !key.is_empty() && !c.features.contains_key(&key),
-                        egui::Button::new("Add feature"),
-                    )
-                    .clicked()
-                {
-                    c.features.insert(key, String::new());
-                    self.new_key.clear();
-                    changed = true;
-                }
-            });
+
+        ui.collapsing("Other features", |ui| {
+            changed |= other_features(ui, c, &mut self.new_key);
         });
 
         let s = &c.spectrum;
@@ -335,6 +318,43 @@ impl LibraryEditor {
             .show(ui, |p| p.bar_chart(BarChart::new("library spectrum", bars)));
         self.dirty |= changed;
     }
+}
+
+/// Features other than FRAG and COMMENT: edit, remove, add by key.
+fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut String) -> bool {
+    let mut changed = false;
+    let other: Vec<String> = (c.features.keys())
+        .filter(|k| !matches!(k.as_str(), "FRAG" | "COMMENT"))
+        .cloned()
+        .collect();
+    egui::Grid::new("features").striped(true).show(ui, |ui| {
+        for k in other {
+            ui.label(&k);
+            changed |= feature_field(ui, c, &k, false, "");
+            if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                c.features.remove(&k);
+                changed = true;
+            }
+            ui.end_row();
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(new_key).hint_text("Key"));
+        let key = new_key.trim().to_uppercase();
+        if ui
+            .add_enabled(
+                // FRAG and COMMENT have their own fields above.
+                !matches!(key.as_str(), "" | "FRAG" | "COMMENT") && !c.features.contains_key(&key),
+                egui::Button::new("Add feature"),
+            )
+            .clicked()
+        {
+            c.features.insert(key, String::new());
+            new_key.clear();
+            changed = true;
+        }
+    });
+    changed
 }
 
 /// Edits one feature's value, adding the feature on the first edit.
@@ -478,9 +498,14 @@ mod tests {
     }
 
     #[test]
-    fn editor_window_draws_a_selected_compound() {
+    fn viewing_a_compound_changes_nothing() {
         let mut app = App::default();
         app.editor.replace(Replace::Open, Some(&library("old.lbr")));
+        // Values the fields could clamp or drop just by being drawn.
+        let c = &mut app.editor.compounds[0];
+        c.spectrum.rt_ms = -1.0;
+        c.features.insert("COMMENT".into(), String::new());
+        let before = app.editor.compounds.clone();
         app.editor.open = true;
         app.editor.select(Some(0));
         let ctx = egui::Context::default();
@@ -489,5 +514,6 @@ mod tests {
             out.textures_delta.clear();
         }
         assert!(app.editor.open && !app.editor.dirty);
+        assert_eq!(app.editor.compounds, before);
     }
 }

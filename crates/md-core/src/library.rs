@@ -480,15 +480,21 @@ pub fn save_mdlib(
     let path = path.as_ref();
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    let result =
-        std::fs::write(&tmp, write_mdlib(compounds)).and_then(|()| std::fs::rename(&tmp, path));
+    // Synced before the rename, so a crash cannot leave an empty file under the real name.
+    let result = std::fs::File::create(&tmp)
+        .and_then(|mut f| {
+            std::io::Write::write_all(&mut f, write_mdlib(compounds).as_bytes())?;
+            f.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     Ok(result?)
 }
 
-/// Writes compounds as `.mdlib` text; [`parse_mdlib`] reads every field back bit for bit.
+/// Writes compounds as `.mdlib` text; [`parse_mdlib`] reads every field back bit for bit, except
+/// that a NaN loses its sign and payload.
 pub fn write_mdlib(compounds: &[LibraryCompound]) -> String {
     fn join<T: std::fmt::Display>(items: impl IntoIterator<Item = T>) -> String {
         let items: Vec<_> = items.into_iter().map(|x| x.to_string()).collect();
@@ -548,6 +554,8 @@ pub fn write_mdlib(compounds: &[LibraryCompound]) -> String {
 
 /// Parses `.mdlib` text. Strict: unknown keys, repeated keys and a newer version are errors.
 pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
+    // Editors on Windows may put a byte order mark in front.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = (text.lines().enumerate())
         .map(|(i, l)| (i + 1, l))
         .filter(|(_, l)| !l.trim().is_empty() && !l.starts_with('#'));
@@ -636,10 +644,8 @@ fn set_mdlib_field(c: &mut LibraryCompound, key: &str, v: &str) -> Result<(), St
         "auto_quant_ions" => c.auto_quant_ions = list(v)?,
         "feature" => {
             let (k, value) = v.split_once('\t').ok_or("expected `KEY<tab>value`")?;
+            // An empty key is valid: MSL import makes one from a line like `: x`.
             let k = unescape(k)?;
-            if k.is_empty() {
-                return Err("empty feature key".into());
-            }
             if c.features.contains_key(&k) {
                 return Err(format!("feature `{k}` given twice"));
             }
@@ -879,6 +885,8 @@ mod tests {
         let mut odd = lib[0].clone();
         odd.name = "a\\b\nc\td\r e ".into();
         odd.features.insert("K\tE\\Y".into(), "v\nw".into());
+        odd.features
+            .insert(String::new(), "from `: x` in MSL".into());
         (odd.fwhm, odd.integrals) = (Some(vec![]), Some(vec![1.5, -0.0, f64::INFINITY]));
         (odd.spectrum.ri, odd.drt, odd.spectrum.bin_width) = (-1.0, f64::NAN, 0.1);
         odd.sources.clear();
@@ -942,7 +950,6 @@ mod tests {
         assert_eq!(line("compound\nname a\nri x\nend\n"), 4);
         assert_eq!(line("compound\nname a\npeaks 73:1 74\nend\n"), 4);
         assert_eq!(line("compound\nname a\nfeature K\nend\n"), 4);
-        assert_eq!(line("compound\nname a\nfeature \tv\nend\n"), 4);
         assert_eq!(
             line("compound\nname a\nfeature K\tv\nfeature K\tw\nend\n"),
             5
@@ -966,7 +973,7 @@ mod tests {
         ));
         // Comments, blank lines and CRLF are fine; missing keys take a new compound's values.
         let lib = parse_mdlib(&format!(
-            "# x\r\n{h}\r\ncompound\r\nname a\r\nquant_ions 9 7 9\r\nend\r\n"
+            "\u{feff}# x\r\n{h}\r\ncompound\r\nname a\r\nquant_ions 9 7 9\r\nend\r\n"
         ))
         .unwrap();
         let mut want = LibraryCompound::new("a");

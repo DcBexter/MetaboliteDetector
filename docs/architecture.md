@@ -338,7 +338,8 @@ as UTF-8, falling back to Latin-1. The unknown 40-byte block list (§1.3) is kep
 Edited libraries are saved in a new text format, not as `.lbr`: the old writer's current version 5 is not
 decoded (#41), and a text file can be read, diffed and repaired by hand. It needs no new dependency (no
 serde in `md-core`), and unlike JSON it keeps NaN and infinity. `write_mdlib` and `parse_mdlib` keep
-every field of `LibraryCompound` bit for bit, so `.lbr` → `.mdlib` → reading back loses nothing.
+every field of `LibraryCompound` bit for bit (only a NaN loses its sign and payload), so `.lbr` →
+`.mdlib` → reading back loses nothing.
 
 ```
 MetaboliteDetector library 1
@@ -367,7 +368,7 @@ source Initial import from/home/kh/Desktop/test.msl
 end
 ```
 
-- UTF-8 text, one `key value` per line (value = everything after the first space). Blank lines and lines
+- UTF-8 text (a leading byte order mark is skipped), one `key value` per line (value = everything after the first space). Blank lines and lines
   starting with `#` are ignored. The first other line is the header; its number is the format version.
   A reader rejects a newer version and every unknown key, so a new field means a new version.
 - `compound` … `end` is one compound. Inside, `name` is required; every other key is optional and
@@ -378,12 +379,12 @@ end
   `peaks` holds the spectrum (`masses`, `values`); `fwhm` and `integrals` are `null` or a list (the old
   null pointer differs from an empty list). `quant_ions` is sorted and deduplicated on reading.
 - Text (`name`, feature key and value, `source`) escapes `\\`, `\n`, `\r` and `\t`; any other escape is an
-  error. A feature is `KEY<tab>value` with a non-empty, unique key. MID fragments are the feature `FRAG`
+  error. A feature is `KEY<tab>value` with a unique key (MSL import makes an empty one from `: x`). MID fragments are the feature `FRAG`
   (syntax `(174/8)(261/5)`, F16) and comments the feature `COMMENT`; both keys occur in the old binary.
 - `block` is one 40-byte record of `.lbr` §1.3 as 80 hex digits.
 - Reading is a trust boundary like `.lbr`: files over 1 GiB are rejected, every error names its line.
-  `save_mdlib` writes `<file>.tmp` and renames it over the target, so a failed save never leaves half a
-  library.
+  `save_mdlib` writes `<file>.tmp`, syncs it to disk and renames it over the target, so a failed save
+  never leaves half a library.
 
 The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
