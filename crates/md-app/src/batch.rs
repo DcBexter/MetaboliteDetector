@@ -1835,7 +1835,8 @@ mod tests {
         ex.group_stats = false;
         save_results(&csv, &grouped, &ex).unwrap();
         assert!(!dir.join("results.groupstats.csv").exists());
-        // Without groups there is no file either.
+        // Without groups there is no file either, and an old one goes.
+        std::fs::write(dir.join("results.groupstats.csv"), "old").unwrap();
         ex.group_stats = true;
         save_results(&csv, &t, &ex).unwrap();
         assert!(!dir.join("results.groupstats.csv").exists());
@@ -1845,6 +1846,10 @@ mod tests {
         ex.group_stats = false;
         let note = save_results(&csv, &grouped, &ex).unwrap();
         assert!(note.contains("not saved: group statistics"), "{note}");
+        // The same for an old ions file.
+        std::fs::create_dir_all(dir.join("results.ions.csv").join("x")).unwrap();
+        let note = save_results(&csv, &grouped, &ex).unwrap();
+        assert!(note.contains("quant ions:"), "{note}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
