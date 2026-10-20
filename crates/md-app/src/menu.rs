@@ -120,7 +120,7 @@ impl App {
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.label("MIT licence");
                 ui.separator();
-                ui.label("Rewrite by Milan Burgmann. Original program (3.3, 2009): Karsten Hiller et al.");
+                ui.label("Rewrite (2026): vaultdex. Original program, version 3.3 (2009): the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.");
                 ui.label("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.");
                 ui.hyperlink_to("Source code", REPO);
             });
