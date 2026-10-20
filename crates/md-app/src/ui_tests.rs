@@ -17,15 +17,24 @@ use crate::{App, Trace, identify};
 
 /// Text the app shows: string literals outside `//` comments in this crate's sources.
 fn ui_strings() -> Vec<(String, String)> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(src).unwrap() {
-        let path = entry.unwrap().path();
-        let text = std::fs::read_to_string(&path).unwrap();
-        for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
-            // Literals are the odd parts between quotes; good enough for this crate's code.
-            for lit in line.split('"').skip(1).step_by(2) {
-                found.push((path.display().to_string(), lit.to_owned()));
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                // Literals are the odd parts between quotes; good enough for this crate's code.
+                for lit in line.split('"').skip(1).step_by(2) {
+                    found.push((path.display().to_string(), lit.to_owned()));
+                }
             }
         }
     }
