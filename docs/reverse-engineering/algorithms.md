@@ -23,7 +23,8 @@ Conventions
   6. LS_USE_RI (bool), LS_USE_SCALED_LIB (bool), LS_USE_SPEC (bool)
   7. QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF
   8. QUANT_EXCL_IONS (std::set<pair<float,float>>; written as size then pairs)
-- Keys also seen in code but not in toStream: AN_MIN_HEIGHT_BP, AN_MODELED_VALUES_FOR_INTEGRATION, SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS, SQL_MAX_NUMBER_FRAGMENTS, LS_CUTOFF, LS_MASS_FILTER, LS_IDENTIFICATION_ALGORITHM. Their persistence is Unknown.
+- Keys also seen in code but not in toStream: AN_MIN_HEIGHT_BP, AN_MODELED_VALUES_FOR_INTEGRATION, SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS, SQL_MAX_NUMBER_FRAGMENTS, LS_CUTOFF, LS_MASS_FILTER, LS_IDENTIFICATION_ALGORITHM. The SQL_* keys are QSettings values and
+LS_IDENTIFICATION_ALGORITHM is never written (file-formats.md §5); the others' persistence is Unknown.
 - Default values (Observed): the static members are initialised in `.data`. The values are AN_PEAK_THRESHOLD_BEGIN 10, AN_PEAK_THRESHOLD_END -5, AN_MAX_BASE_DEV 20, AN_MIN_PEAK_HEIGHT 20, AN_NUMBER_BINS 10, AN_DECONVOLUTION_WIDTH 1.0, AN_MIN_PEAK_NUMBER 10 and AN_MODELED_VALUES_FOR_INTEGRATION true. AN_MIN_HEIGHT_BP is in `.bss` (0). A fresh `~/.config/TU-Braunschweig/MetaboliteDetector.conf` holds the same values. The GCMSSettings ctor (syms 0x3dfb98) is empty.
 
 Settings used by the analysis (name, storage address, where read):
@@ -642,7 +643,7 @@ Ties are broken by pointer order (first strictly greater wins), so tie results a
 - Defaults of all LS_* settings.
 - The exact `Spectrum::getBinnedSpectrum` / `getCentroidCompound` algorithms (0x6019d6, 0x60e212). These were not decompiled.
 - The Wave score variants (vtbl 4/5) and `calculateScore_frag` (vtbl 6): when they are used.
-- `LS_IDENTIFICATION_ALGORITHM` and `LS_USE_SCALED_LIB` semantics.
+- `LS_USE_SCALED_LIB` semantics. (`LS_IDENTIFICATION_ALGORITHM` is always 0: file-formats.md §5.)
 - SQLLibrary::getLibraryHits (0x6e306c) reads LS_CUTOFF directly. Not read.
 - Whether spectra are guaranteed sorted by ion before 5.3/5.4. They are built from std::map in 4.6, so deconvoluted spectra are sorted (Observed); library spectra are Unknown.
 

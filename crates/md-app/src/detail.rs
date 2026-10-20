@@ -118,14 +118,27 @@ pub fn controls(
     error
 }
 
-/// Right panel: values of the selected component, its peaks and the library hits.
-pub fn panel(ui: &mut egui::Ui, run: &Run, mz: &mut f32, trace: &mut Trace) {
+/// Right panel: values of the selected component, its peaks, the library hits and the NIST search.
+/// True when the NIST search was asked for.
+pub fn panel(
+    ui: &mut egui::Ui,
+    run: &Run,
+    nist: &identify::Nist,
+    mz: &mut f32,
+    trace: &mut Trace,
+) -> bool {
     let Some(k) = run.component else {
-        return;
+        return false;
     };
+    let mut search = false;
     crate::layout::side_panel(ui, egui::Panel::right, "hits", |ui| {
         body(ui, run, k, mz, trace);
+        if nist.lib.is_some() {
+            ui.separator();
+            search = identify::nist_list(ui, run, k, nist);
+        }
     });
+    search
 }
 
 fn body(ui: &mut egui::Ui, run: &Run, k: usize, mz: &mut f32, trace: &mut Trace) {
@@ -273,7 +286,7 @@ mod tests {
         let (mut mz, mut trace) = (147.0, Trace::Tic);
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            panel(ui, &run, &mut mz, &mut trace);
+            panel(ui, &run, &Default::default(), &mut mz, &mut trace);
         });
         out.textures_delta.clear();
         pick_ion(&mut mz, &mut trace, 73.0);
