@@ -36,11 +36,15 @@ impl App {
         if ui
             .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
             .on_hover_text("Close every open run")
+            .on_disabled_hover_text("No runs are open")
             .clicked()
         {
             (self.runs, self.active) = (Vec::new(), 0);
         }
-        ui.separator();
+        // Export needs a run; without one the section is empty and gets no second separator.
+        if !self.runs.is_empty() {
+            ui.separator();
+        }
         if let Some(r) = self.runs.get(self.active)
             && ui
                 .button("Export as NetCDF…")

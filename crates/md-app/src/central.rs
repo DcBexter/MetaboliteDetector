@@ -168,6 +168,7 @@ impl App {
                         .max_decimals(2),
                 )
                 .on_hover_text("Mass of the selected ion chromatogram")
+                .on_disabled_hover_text("Switch to SIC or TIC + SIC to set the ion")
                 .labelled_by(mz.id);
                 let tol = ui.label("±");
                 ui.add(
@@ -177,6 +178,7 @@ impl App {
                         .max_decimals(2),
                 )
                 .on_hover_text("Mass window around m/z that is summed")
+                .on_disabled_hover_text("Switch to SIC or TIC + SIC to set the ion")
                 .labelled_by(tol.id);
             });
         });
