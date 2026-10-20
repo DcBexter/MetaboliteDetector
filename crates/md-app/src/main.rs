@@ -21,6 +21,7 @@ mod menu;
 mod run_list;
 mod settings;
 mod status;
+mod view;
 
 use jobs::{poll_job, spawn};
 
@@ -76,6 +77,7 @@ struct App {
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     export: export::Export,
+    view: view::View,
 }
 
 impl Default for App {
@@ -100,6 +102,7 @@ impl Default for App {
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             export: export::Export::default(),
+            view: view::View::default(),
         }
     }
 }
@@ -174,6 +177,7 @@ impl App {
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
         self.isotopes.window(ctx);
+        self.info_window(ctx);
         self.library_editor(ctx);
     }
 }

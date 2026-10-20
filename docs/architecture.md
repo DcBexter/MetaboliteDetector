@@ -52,6 +52,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
+  src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
   src/main.rs           options, settings/library/calibration loading, CSV output
@@ -458,11 +459,22 @@ end
 
 The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
-active run (its spectrum, RT and RI), view the spectrum, and edit RT, RI, quant ions, MID fragments,
+active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
 comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
 and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. After a
 save the app opens the saved library, so the next search uses the edits.
+
+**Growing a library from runs** (`md_core::library_add`, old `DialogAddLib` and `copyRT`, algorithms.md §7e).
+"Add component…" turns the selected component into a compound (deconvoluted spectrum, RT at the apex, RI
+from the run's calibration or -1, automatic quant ions by §7.2) and puts it into the edited library as a
+new entry, or, for a name already in the library and after a yes/no question, replaces the entry, replaces
+only spectrum, RT and RI (quant ions and comments stay), or sets only the automatic quant ions. The quant
+ions need the ion peaks, which the app does not keep, so a worker thread repeats peak detection and
+deconvolution of the run (about as long as opening it). "Copy RTs…" searches the components of the active
+run against the edited library, lists the assigned ones with their old and new RT and RI and, on "Copy",
+writes RT and RI into those entries. Both change only the copy in the editor until Save; "Modify entry"
+(spectrum merge) is not ported.
 
 ## Old raw-data cache (.bin + .idx)
 
