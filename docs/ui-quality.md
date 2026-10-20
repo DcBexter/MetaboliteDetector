@@ -38,5 +38,5 @@ on 2026-10-20 and are done; #127 (windows beside the run list, `×`) is done too
 
 | Area | Issue | What to check |
 |---|---|---|
-| Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI. `11-library-editor` shows no compound yet: the test clicks the last "Compound at" match, which lies outside the editor |
+| Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI. `11-library-editor` now selects the first compound of the editor list |
 | Batch | #88 | A disabled Start button looks like a button and says why; inputs have names (8 unnamed) |

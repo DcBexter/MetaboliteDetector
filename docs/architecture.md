@@ -340,6 +340,16 @@ rescan:
 
 What the old binary does and what is own choice: `docs/reverse-engineering/batch-quantification.md`.
 
+**Result view** (#83): the window can remove runs and substances, move runs, show the retention time of
+each hit (`Row::rts_s`), the total intensity per run (`Table::total_intensities`) and per replicate group
+the old statistics columns (`stats::summary`, `stats::student`). `Table::select_runs` and
+`Table::without_rows` do the edits; runs are removed before the normalisation, substances after it, so
+the CSV export and the statistics window see the edited table. Old formulas (from the 3.3 binary):
+"Mean" and "Rel. Std. Err." (sample SD / sqrt(n) / mean, a fraction) use only values that are not 0, NaN or
+infinite; "#" counts values above 0; "P (blank)" is Student's t-test with pooled variance, two-sided, with
+missing values as 0, against the group named `BLANK`. Not ported yet: the ANOVA p-value column, the
+alternative library hits per cell, all quant ions in the CSV and the used settings in the file.
+
 All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
 (90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
