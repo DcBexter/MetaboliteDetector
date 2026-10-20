@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, Plot};
 use md_core::batch::{QuantSettings, ShiftReference, complete_scan, scan_runs};
@@ -105,8 +106,8 @@ impl MidWindow {
         self.poll(ctx);
         let mut open = self.open;
         egui::Window::new("Mass isotopomer distributions")
+            .tool_window(ctx, 3, [800.0, 600.0])
             .open(&mut open)
-            .default_size([800.0, 600.0])
             .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
     }

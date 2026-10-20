@@ -4,6 +4,7 @@
 
 use std::sync::{Arc, mpsc};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::batch::{IonPeak, QuantSettings};
@@ -236,6 +237,7 @@ impl LibraryEditor {
         let existing = find(&self.compounds, &d.name);
         let (mut open, mut apply, mut cancel) = (true, false, false);
         egui::Window::new("Add component to library")
+            .tool_window(ctx, 9, [340.0, 420.0])
             .open(&mut open)
             .collapsible(false)
             .show(ctx, |ui| {
@@ -284,6 +286,7 @@ impl LibraryEditor {
         }
         let (mut open, mut apply) = (true, false);
         egui::Window::new("Copy retention times")
+            .tool_window(ctx, 10, [340.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label(format!(

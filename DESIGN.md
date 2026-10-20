@@ -80,6 +80,10 @@ system; they do not introduce their own colours, fonts or corner radii.
 **Key Characteristics:**
 - Plots fill the centre; side panels (runs left, hits right) and a one-line status bar frame them.
 - Tools open as floating, resizable windows over the plots (settings, calibration, batch, editor).
+  The first time, each opens right of the run list and a step below and right of the one before,
+  with its starting size capped to the room there (`layout::ToolWindow`). This holds down to 800 px
+  width; in a narrower window, content wider than the room still covers the list. egui keeps where
+  the user moves it.
 - Every control carries a short hover explanation; settings show plain names with the 3.3 key.
 - Light and dark themes follow the OS.
 
