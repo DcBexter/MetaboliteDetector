@@ -111,10 +111,11 @@ impl TofCalibration {
             col /= *s;
         }
         let y = DVector::from_iterator(pairs.len(), pairs.iter().map(|p| p.1));
-        let solution = x
-            .svd(true, true)
-            .solve(&y, 1e-12)
-            .map_err(|_| TofError::Singular)?;
+        let svd = x.svd(true, true);
+        if svd.rank(1e-12) < degree + 1 {
+            return Err(TofError::Singular);
+        }
+        let solution = svd.solve(&y, 1e-12).map_err(|_| TofError::Singular)?;
         let coefficients: Vec<f64> = solution.iter().zip(&scale).map(|(c, s)| c / s).collect();
         match coefficients.iter().all(|c| c.is_finite()) {
             true => Ok(Self { coefficients }),
@@ -212,6 +213,11 @@ mod tests {
         for (bin, mz) in &pairs {
             assert!((f64::from(fit.mz(*bin)) - mz).abs() < 1e-3, "bin {bin}");
         }
+        let same = [(1000.0, 5.0), (1000.0, 6.0), (1000.0, 7.0)];
+        assert!(matches!(
+            TofCalibration::fit(&same, 2),
+            Err(TofError::Singular)
+        ));
         assert!(matches!(
             TofCalibration::fit(&pairs[..2], 2),
             Err(TofError::NotEnoughPairs)

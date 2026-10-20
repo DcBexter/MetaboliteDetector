@@ -424,6 +424,8 @@ passes 1) removes the first point. With `b` false the scan goes through peak det
 true only scans with more than 50 000 points are written, as they are. The cache gets the raw TOF bins as
 "masses" and the polynomial in the `.idx` (section 2.3); the reader maps `m/z = (f32) poly(bin as f64)`.
 Ported in `md_core::fastflight`; the compressing path is not.
+- Unknown: whether a time block also resets the minimum intensity; the port keeps it (a time block comes first in real spectra).
+- The Rust reader also keeps small scans uncompressed; neither old path does that. It refuses an index whose scans share FFT data (more points than FFT words).
 - The old writer's `b = true` cache repeats points (runs of 1 to 5) and loses about 0.5 % of them (found with the
   synthetic run); the Rust test compares as a sequence, not point by point.
 

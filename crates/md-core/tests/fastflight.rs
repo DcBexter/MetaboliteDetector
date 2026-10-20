@@ -234,6 +234,19 @@ fn damaged_runs_are_errors() {
     let e = fastflight::read(&dir, &cal).unwrap_err().to_string();
     assert!(e.contains("TIC mismatch"), "{e}");
     assert!(fastflight::read(&dir.join("missing"), &cal).is_err());
+    // Entries that all point at the first spectrum would multiply its points.
+    let mut shared = ffc.clone();
+    for entry in shared[4..].chunks_mut(36) {
+        entry[20..28].fill(0);
+    }
+    std::fs::write(dir.join("MsData.FFC"), shared).unwrap();
+    let e = fastflight::read(&dir, &cal).unwrap_err().to_string();
+    assert!(e.contains("same data") || e.contains("TIC"), "{e}");
+    // A negative scan number is refused.
+    let mut negative = ffc.clone();
+    negative[8..12].copy_from_slice(&(-5i32).to_le_bytes());
+    std::fs::write(dir.join("MsData.FFC"), negative).unwrap();
+    assert!(fastflight::read(&dir, &cal).is_err());
     std::fs::remove_dir_all(dir).ok();
 }
 

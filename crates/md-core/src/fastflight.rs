@@ -33,6 +33,21 @@ const POSITION_MASK: u32 = 0xFF_0000;
 /// FFC bytes per scan: 4 skipped, `n` i32, 4 skipped, TIC u64, FFT offset u64, time factor f64.
 const FFC_ENTRY: usize = 36;
 
+/// `dir/name` in the letter case the directory has, else as given.
+fn named(dir: &Path, name: &str) -> PathBuf {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+        .unwrap_or_else(|| dir.join(name))
+}
+
 /// True for the two files of a FastFlight run (any letter case).
 pub fn is_fastflight(path: &Path) -> bool {
     path.file_name()
@@ -68,11 +83,14 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
         path.parent().unwrap_or(Path::new("."))
     };
     let open = |name: &str| {
-        let p = dir.join(name);
+        let p = named(dir, name);
         File::open(&p).map_err(|e| FastFlightError::Io(p, e))
     };
     let index = read_index(&mut BufReader::new(open(FFC)?))?;
-    let mut fft = BufReader::new(open(FFT)?);
+    let fft_file = open(FFT)?;
+    // Every point takes a 3-byte word, so more points than that mean index entries share data.
+    let max_points = fft_file.metadata().map_or(0, |m| m.len() as usize / 3);
+    let mut fft = BufReader::new(fft_file);
     let (mut times, mut starts, mut counts) = (Vec::new(), Vec::new(), Vec::new());
     let (mut mz, mut intensity) = (Vec::new(), Vec::new());
     for scan in index {
@@ -97,6 +115,11 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
         if !bins.is_empty() {
             bins.remove(0);
             values.remove(0);
+        }
+        if mz.len() + bins.len() > max_points {
+            return Err(FastFlightError::Corrupt(
+                "the index points several scans at the same data".into(),
+            ));
         }
         times.push(scan.time_ms / 1000.0);
         starts.push(mz.len() as f64);
@@ -135,7 +158,7 @@ fn read_index(ffc: &mut impl Read) -> Result<Vec<Scan>, FastFlightError> {
             factor
         };
         let time_ms = factor * f64::from(n);
-        if !time_ms.is_finite() {
+        if n < 0 || !time_ms.is_finite() {
             return Err(FastFlightError::Corrupt(format!(
                 "{FFC}: invalid time factor"
             )));
