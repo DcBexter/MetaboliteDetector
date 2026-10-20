@@ -219,12 +219,14 @@ fn run(a: Args) -> Result<bool, String> {
     }
     let rescan = a.rescan;
     // How the table was made, for the settings file next to the output.
-    let named = |p: &Option<PathBuf>| {
-        p.as_ref()
-            .map_or("none".into(), |p| p.display().to_string())
+    // File names only: the file may be shared and an absolute path would carry the user's directories.
+    let file = |p: &Path| {
+        p.file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into())
     };
-    let how = vec![
-        ("LIBRARY", a.library.display().to_string()),
+    let named = |p: &Option<PathBuf>| p.as_deref().map_or("none".into(), file);
+    let mut how = vec![
+        ("LIBRARY", file(&a.library)),
         ("SETTINGS_FILE", named(&a.settings)),
         ("CALIBRATION", named(&a.calibration)),
         (
@@ -255,6 +257,12 @@ fn run(a: Args) -> Result<bool, String> {
     let table =
         table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
+    how.extend([
+        ("RT_ONLY", prepared.is_rt_only().to_string()),
+        ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
+        ("UNKNOWN_SUBSTANCES", more.extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", more.rescanned.to_string()),
+    ]);
     let io = |e: std::io::Error| format!("output: {e}");
     table.write_csv(&mut out).map_err(io)?;
     out.flush().map_err(io)?;
@@ -411,6 +419,11 @@ mod tests {
         assert!(settings.contains("\nQUANT_ION_NUMBER,2\n"), "{settings}");
         assert!(settings.contains("\nUNTARGETED,false\n"), "{settings}");
         assert!(settings.contains("\nCALIBRATION,none\n"), "{settings}");
+        assert!(settings.contains("\nLIBRARY,lib.msl\n"), "{settings}");
+        assert!(
+            settings.contains("\nIONS_ADDED_BY_RESCAN,0\n"),
+            "{settings}"
+        );
         assert!(!dir.join("out.ions.csv").exists());
 
         // The ion integrals are written on request: a line per substance and quant ion.
