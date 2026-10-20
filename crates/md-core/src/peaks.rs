@@ -145,53 +145,57 @@ fn nominal_masses(c: &Chromatogram) -> Vec<u32> {
 /// Gap above which the old centroiding starts a new mass peak.
 const CENTROID_GAP: f64 = 0.1;
 
+/// Last point of the centroid part starting at `start`: before an m/z gap above 0.1, or the bottom of
+/// a valley after two falls in a row (two rises follow). Past the end the last value read repeats.
+fn centroid_part_end(m: &[f32], v: &[f32], start: usize) -> usize {
+    let n = m.len();
+    let at = |i: usize, missing: f32| if i < n { v[i] } else { missing };
+    let mut falling = false;
+    let mut i = start;
+    while i < n {
+        let (v0, m1) = (v[i], if i + 1 < n { m[i + 1] } else { m[i] });
+        let v1 = at(i + 1, v0);
+        let v2 = at(i + 2, v1);
+        if (m1 - m[i]) as f64 > CENTROID_GAP {
+            break;
+        }
+        if !falling && v1 < v0 && v2 < v1 {
+            falling = true;
+            continue;
+        }
+        if falling && v1 > v0 && v2 > v1 {
+            break;
+        }
+        i += 1;
+    }
+    i.min(n - 1)
+}
+
 /// The old `Spectrum::getCentroidSpectrum` of one scan (algorithms.md §4.1): points split at m/z
 /// gaps above 0.1 and at valleys (two falls, then two rises); each part gives the sum of its points
 /// of at least half its maximum, at their intensity-weighted m/z.
 fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
-    let n = m.len();
-    let at = |i: usize, d: usize, missing: f32| if i + d < n { v[i + d] } else { missing };
     let mut i = 0;
-    while i < n {
+    while i < m.len() {
         let start = i;
-        let mut max = f64::MIN;
-        let mut falling = false;
-        while i < n {
-            let (v0, m1) = (v[i], if i + 1 < n { m[i + 1] } else { m[i] });
-            let v1 = at(i, 1, v0);
-            let v2 = at(i, 2, v1);
-            max = max.max(v0 as f64);
-            if (m1 - m[i]) as f64 > CENTROID_GAP {
-                break;
-            }
-            if !falling && v1 < v0 && v2 < v1 {
-                falling = true;
-                continue;
-            }
-            if falling && v1 > v0 && v2 > v1 {
-                break;
-            }
-            i += 1;
-        }
-        let end = i.min(n - 1);
-        let (mz, sum) = if start == end {
+        i = centroid_part_end(m, v, start);
+        let max = v[start..=i].iter().fold(f64::MIN, |a, x| a.max(*x as f64));
+        let (mz, sum) = if start == i {
             (m[start] as f64, v[start] as f64)
         } else {
             let (mut num, mut sum) = (0.0f64, 0.0f64);
-            for k in start..=end {
-                if v[k] as f64 >= 0.5 * max {
-                    sum += v[k] as f64;
-                    num += (v[k] * m[k]) as f64;
+            for (x, y) in m[start..=i].iter().zip(&v[start..=i]) {
+                if *y as f64 >= 0.5 * max {
+                    sum += *y as f64;
+                    num += (*y * *x) as f64;
                 }
             }
-            (
-                if num == 0.0 && sum == 0.0 {
-                    -1.0
-                } else {
-                    num / sum
-                },
-                sum,
-            )
+            let mz = if num == 0.0 && sum == 0.0 {
+                -1.0
+            } else {
+                num / sum
+            };
+            (mz, sum)
         };
         if mz >= 0.0 {
             out.push((mz as f32, (sum + 0.5).trunc() as f32)); // C `(int)` truncates
