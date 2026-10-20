@@ -5,6 +5,7 @@ use rayon::prelude::*;
 
 pub mod andi;
 pub mod batch;
+pub mod cmp;
 pub mod csv;
 pub mod deconv;
 pub mod diskscan;

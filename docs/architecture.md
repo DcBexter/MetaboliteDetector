@@ -23,13 +23,15 @@ rust-toolchain.toml     pinned Rust version with clippy and rustfmt; Renovate ra
 crates/md-core/         library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
-  src/diskscan.rs       old raw-data cache (.bin + .idx) reader
+  src/diskscan.rs       old raw-data cache (.bin + .idx) reader, RI calibration stored in the .idx
   src/library.rs        compound libraries: old .lbr (versions 2-5) reader, AMDIS MSL import/export,
                         library text format (.mdlib) read/write
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
-  src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
+  src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file,
+                        binary RICalculator record
+  src/cmp.rs            saved components of the old version (.cmp): read and write
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
@@ -335,6 +337,33 @@ failed runs go to stderr, and the exit code is 2 if the table is complete except
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 
+## Old result files
+
+`md_core::cmp` reads and writes the old `.cmp` files (saved components, version 4 of MetaboliteDetector 3.3;
+[file-formats.md](reverse-engineering/file-formats.md) §3) with every field, including the ion peaks and the
+model peak, as `library::LibraryCompound` records (the reader is shared with `.lbr`). `LibraryCompound::component` turns one into the `deconv::Component` the app shows. A `.calib` is
+read by `RiCalibration::read_calib`; the binary calibration the old RI wizard stores in a run's `.idx` by
+`diskscan::read_calibration` (`ri::StoredCalibration`, values kept in ms so it writes back the same bytes).
+Opening a run in the app uses `cmp::saved_components` and `ri::saved_calibration`: components from
+`<run>.cmp` replace the analysis until the settings change, and `<run>.calib` (else the `.idx` calibration)
+becomes the run's own calibration. A `.calib` has no RT shift, so it drops a shift stored in the `.idx`;
+it wins because it is the file the user saved last (the app's "Save .calib" suggests that name). A `.cmp`
+whose apex times do not match the run's scan times, a broken file and versions 1 to 3 of `.cmp` (no sample
+to decode them from) only give a warning: the run opens with its own analysis.
+
+Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
+
+```sh
+# Linux/WSL with the old binary; writes example-data/old-results/ (ignored by git)
+MD_RESULTS=$PWD/example-data/old-results docs/reverse-engineering/tools/golden/make-reference.sh
+cargo test -p md-core --test old_results
+# the old program reads what md-core wrote (the test saves it to old-results/md-core/)
+docs/reverse-engineering/tools/golden/make-reference.sh --reread IN OUT [IN OUT]...
+```
+
+It compares every peak field with the old getters (9 digits), the spectra exactly, and the written
+payload byte for byte with the old one; it passes without checking anything when the files are missing.
+
 ## Golden test
 
 `crates/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
@@ -348,8 +377,8 @@ How the reference is made: `docs/reverse-engineering/tools/golden/make-reference
 and calls the binary's own functions in the order of the GUI's "Detect components": `CdfImporter`,
 `GCMSDiskScan`, `GCMSAnalyzer::detectAllPeaks(true, 10, 0.05)`, `deconvoluteChromatogram`. It uses the
 static `AN_*` defaults compiled into the binary, which are also the values of a fresh config file. This
-is the old code itself, not a re-implementation. The GUI export and `.cmp` files were not used because
-they need clicks per run and `.cmp` holds no peak bounds. The script checks the binary's SHA-256, so
+is the old code itself, not a re-implementation. The GUI export was not used because it needs clicks
+per run. The script checks the binary's SHA-256, so
 another build cannot silently produce a different reference. Neither the binary nor the example data are
 committed.
 
