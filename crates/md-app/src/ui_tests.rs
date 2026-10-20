@@ -15,8 +15,9 @@ use md_core::search::PreparedLibrary;
 
 use crate::{App, Trace, identify};
 
-/// Text the app shows: string literals outside `//` comments in this crate's sources.
-fn ui_strings() -> Vec<(String, String)> {
+/// Non-ASCII characters on code lines (not `//` comments) of this crate's sources. Code outside
+/// strings and char literals is ASCII, so these are the symbols the app can show.
+fn ui_symbols() -> Vec<(String, char)> {
     let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
     let mut found = Vec::new();
     while let Some(dir) = dirs.pop() {
@@ -31,10 +32,8 @@ fn ui_strings() -> Vec<(String, String)> {
             }
             let text = std::fs::read_to_string(&path).unwrap();
             for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
-                // Literals are the odd parts between quotes; good enough for this crate's code.
-                for lit in line.split('"').skip(1).step_by(2) {
-                    found.push((path.display().to_string(), lit.to_owned()));
-                }
+                let chars = line.chars().filter(|c| !c.is_ascii());
+                found.extend(chars.map(|c| (path.display().to_string(), c)));
             }
         }
     }
@@ -54,12 +53,9 @@ fn every_ui_symbol_has_a_glyph() {
         .textures_delta
         .clear();
     let font = egui::FontId::proportional(13.0);
-    let missing: Vec<String> = ui_strings()
+    let missing: Vec<String> = ui_symbols()
         .into_iter()
-        .flat_map(|(file, lit)| lit.chars().map(|c| (file.clone(), c)).collect::<Vec<_>>())
-        .filter(|(_, c)| {
-            !c.is_ascii() && !KNOWN.contains(c) && !ctx.fonts_mut(|f| f.has_glyph(&font, *c))
-        })
+        .filter(|(_, c)| !KNOWN.contains(c) && !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
         .map(|(file, c)| format!("{file}: {c} (U+{:04X})", c as u32))
         .collect();
     assert!(missing.is_empty(), "no glyph:\n{}", missing.join("\n"));

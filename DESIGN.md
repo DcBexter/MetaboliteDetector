@@ -37,7 +37,8 @@ typography:
     fontSize: "13px"
     fontWeight: 400
 rounded:
-  widget: "2px"
+  static: "4px"
+  control: "6px"
   window: "6px"
 spacing:
   item-x: "8px"
@@ -48,12 +49,12 @@ spacing:
   group-gap: "8px"
 components:
   button:
-    textColor: "{colors.panel-light}"
-    rounded: "{rounded.widget}"
+    textColor: "#d7d7d7"
+    rounded: "{rounded.control}"
     padding: "2px 8px"
   toggle-selected:
     backgroundColor: "{colors.selection-dark}"
-    rounded: "{rounded.widget}"
+    rounded: "{rounded.control}"
   window:
     backgroundColor: "{colors.panel-dark}"
     rounded: "{rounded.window}"
@@ -149,13 +150,13 @@ shadows or layering.
 
 ## Shapes
 
-Small, quiet corners: 2 px on widgets, 6 px on windows and menus. Plot markers are filled circles
+Small, quiet corners: 4 px on static widgets, 6 px on controls, windows and menus. Plot markers are filled circles
 (component apexes, radius 3). The run swatch is a filled square.
 
 ## Components
 
 ### Buttons
-- **Shape:** 2 px corners, 8 × 2 px padding, egui's grey fill.
+- **Shape:** 6 px corners, 8 × 2 px padding, egui's grey fill.
 - **States:** hover brightens; disabled is dimmed and should say why on hover
   (`on_disabled_hover_text`).
 - **Labels:** verbs or nouns of the action; `…` when a dialog follows.
