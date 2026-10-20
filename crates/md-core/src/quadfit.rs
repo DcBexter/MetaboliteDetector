@@ -434,6 +434,11 @@ mod tests {
             "{n} cases, {bad} differ, {other_bins} known differences (other bins, x² ≥ 2^53)"
         );
         assert!(n > 0 && bad == 0, "{bad} of {n} cases differ");
+        // About 2 in 10 000 with make-cases.py; more means a regression outside the 10-bin path.
+        assert!(
+            other_bins * 1000 <= n,
+            "{other_bins} known differences in {n} cases"
+        );
     }
 
     #[test]

@@ -78,7 +78,8 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
   - 10 bins per scan, every scan 1 to 1 000 000: no difference.
   - 1, 2, 3, 4, 5, 7, 20, 25, 50 and 100 bins, scans 1 to 50 000: no difference.
 - Whole fit:
-  - 300 269 cases, among them the 269 real precise-apex ties of the example runs.
+  - 300 269 cases, among them the 269 real precise-apex ties of the 15 example runs (217 half-step
+    ties rounded down, 50 rounded up, 2 flat tops).
   - With 10 bins and `x² < 2^53`, every case matches.
   - The 269 ties give the old apex.
 - Golden test:
