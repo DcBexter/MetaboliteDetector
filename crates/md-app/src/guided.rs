@@ -231,7 +231,7 @@ pub struct Guided {
     pub ask: bool,
     /// The running flow and its step (from 0).
     pub flow: Option<(Flow, usize)>,
-    /// The detection flow switched ".cmp" saving on; closing it unfinished switches it off again.
+    /// The detection flow switched ".cmp" saving on; Finish, cancel or another flow switch it off again.
     cmp_switched_on: bool,
 }
 
@@ -391,6 +391,7 @@ impl App {
                 None
             }
             Some(n) if n == steps.len() => {
+                self.restore_cmp();
                 *flow.window(self).1 = true;
                 None
             }
@@ -401,7 +402,14 @@ impl App {
 
     /// Ends the running flow unfinished; a detection takes back the ".cmp" saving it switched on.
     fn cancel_flow(&mut self) {
-        if self.guided.flow.take().is_some() && self.guided.cmp_switched_on {
+        if self.guided.flow.take().is_some() {
+            self.restore_cmp();
+        }
+    }
+
+    /// The batch started in the last step has its options already; the shared setting goes back.
+    fn restore_cmp(&mut self) {
+        if std::mem::take(&mut self.guided.cmp_switched_on) {
             self.batch.stop_saving_cmp();
         }
     }
