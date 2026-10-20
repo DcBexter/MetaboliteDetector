@@ -514,11 +514,51 @@ minutes (AMDIS convention) and is stored as ms, `RESOLUTION:` is the spectrum bi
 equal the number of pairs. Imported compounds get `comb_spec` = spectrum, `ion_freq` 1 per ion and
 `spec_count` 1 like the sample library. Export writes the same keys, then features, then 5 pairs per line.
 
-### 6.2 MSL export: `DialogExportLibrary` (not decompiled)
+### 6.2 MSL export: `LibrarySearch::exportMSL(path, ExportType)` (Observed; ported in `md_core::library::write_msl_as`)
 
-Strings: `Error getting centroid compound for MSL export. Using binned compound.` and the same header keys as
-6.1 (`NAME:`, `QUANTIFICATION:`, `RESOLUTION:`, `NUM PEAKS:`). The writer order is Inferred to match 6.1.
-Gap: the export function was not decoded.
+`DialogExportLibrary::on_okButton_clicked` (0x4cd3b4) maps the combo text to the type: "MSL Nominal" = 1,
+"MSL Profile" = 0, "MSL FWHM" = 2, then calls `exportMSL` (0x629f70). The file is opened for writing; failure
+throws `IOException` "Error opening library file for writing." and a write error "Error writing data to library
+file.". Per compound (in library order; all numbers `std::fixed`):
+
+```
+NAME:<name>
+RI:<ri, 4 decimals>
+RT:<rt in minutes, 4 decimals>
+<key>: <value>                     one line per feature, sorted by key; a ';' in the value starts a new "<key>: " line
+QUANTIFICATION:<ion, 4 decimals><tab> ...      every ion followed by a tab
+RESOLUTION:<bin width, 4 decimals>              not in the FWHM type
+NUM PEAKS:<n>
+<5 peaks per line, each followed by a space; a line break before peaks 0, 5, 10, ...>
+<blank line>
+```
+
+and one more blank line at the end of the file. Peak layout by type (`(` m/z, intensity, `)`):
+
+| Type | Peak text | Example |
+|---|---|---|
+| 1 Nominal | m/z width 4, 0 decimals; intensity width 4 | `(  41   80) ` |
+| 0 Profile | m/z width 10, 6 decimals; intensity width 4 | `( 41.000000   80) ` |
+| 2 FWHM | m/z width 10, 6 decimals; FWHM width 5, 2 decimals; intensity width 4 with no space before it | `( 41.000000  1.00  80) ` |
+
+Before writing, types 1 and 2 ask the compound for its centroid compound (`LibraryCompound` virtual
+`getCentroidLibraryCompound`, 0x61e2ce, which calls `Compound::getCentroidCompound(map&)` 0x611fa8); Nominal then
+bins it to 1.0 (`getBinnedCompound`, 0x60dfc8). On an exception the old code prints "ERROR: Error getting
+centroid compound for MSL export. Using binned compound." to stderr and writes the binned compound. Without a
+FWHM list the centroiding groups profile points that are at most 0.01 apart (0x611fa8); a compound whose masses
+are further apart is unchanged.
+
+Checked against the old program (`tools/golden/make-msl-export.sh`, which loads `lib_aa.lbr` with
+`LibrarySearch::fromDisk` and exports all three types): the rewrite writes the same bytes for all 27 compounds
+(test `msl_export_matches_the_old_program`, needs the sample files, which are not committed). In the sample
+every library is binned to whole masses, has no FWHM list (the old program prints 1.00) and the same peaks in
+all three types.
+
+Not checked or not ported (Gaps): centroiding of spectra whose masses are 0.01 or less apart, rebinning of
+non-integer masses for Nominal (the rewrite only rounds), the FWHM value for a compound without a FWHM list but
+another bin width (the rewrite writes 1.00), and values with `;` or line breaks (the rewrite replaces line
+breaks by a space so a name cannot start a record). The files are not read back exactly by `parse_msl`
+(four decimals) and `parse_msl` does not read the FWHM type.
 
 ### 6.3 NIST MSP parser (`NISTParser`)
 
