@@ -1,0 +1,42 @@
+<!-- Windows installer (WiX 6), built by .github/workflows/release.yml:
+     wix build -arch x64 -d Version=X.Y.Z -d BinDir=target/release installer/metabolite-detector.wxs -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Keep the UpgradeCode forever: it lets a new version replace the installed one. -->
+  <Package Name="MetaboliteDetector" Manufacturer="MetaboliteDetector" Version="$(Version)"
+           UpgradeCode="2E75E840-1C36-4010-9049-025727FAE50E" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of MetaboliteDetector is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="MetaboliteDetector" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Main">
+      <Component Directory="INSTALLFOLDER">
+        <File Id="AppExe" Source="$(BinDir)\metabolite-detector.exe" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Source="$(BinDir)\md-cli.exe" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Source="README.md" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Source="LICENSE" Name="LICENSE.txt" />
+      </Component>
+      <!-- Shortcuts need a registry key path; HKMU is HKLM for this per-machine install. -->
+      <Component Directory="ProgramMenuFolder">
+        <Shortcut Name="MetaboliteDetector" Target="[#AppExe]" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKMU" Key="Software\MetaboliteDetector" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+      <Component Directory="DesktopFolder">
+        <Shortcut Name="MetaboliteDetector" Target="[#AppExe]" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKMU" Key="Software\MetaboliteDetector" Name="DesktopShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>
