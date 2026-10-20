@@ -130,6 +130,45 @@ pub fn student(x: &[f64], y: &[f64]) -> Option<f64> {
     t.is_finite().then(|| t_two_sided(t, df))
 }
 
+/// p of the one-way ANOVA over the replicate groups of a substance (the old "p-value" column,
+/// `tools::Statistics::oneWayANOVA`): `F = (SSB / (k - 1)) / (SSW / (N - k))`, p the upper tail of
+/// the F distribution. One group or none gives 1, like the old code. `None` where the test is
+/// undefined (an empty group, no degrees of freedom left, no spread at all).
+pub fn anova(groups: &[Vec<f64>]) -> Option<f64> {
+    let k = groups.len();
+    if k <= 1 {
+        return Some(1.0);
+    }
+    if groups.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let all: Vec<f64> = groups.iter().flatten().copied().collect();
+    if all.iter().all(|&v| v == all[0]) {
+        return None; // no spread at all; the rounding of the mean would fake one
+    }
+    let (n, grand) = (all.len() as f64, mean(&all));
+    let total: f64 = all.iter().map(|v| (v - grand).powi(2)).sum();
+    let between: f64 = (groups.iter())
+        .map(|g| g.len() as f64 * (mean(g) - grand).powi(2))
+        .sum();
+    let (df1, df2) = ((k - 1) as f64, n - k as f64);
+    let within = total - between;
+    if df2 < 1.0 || !within.is_finite() {
+        return None;
+    }
+    if within <= 0.0 {
+        // All the spread is between the groups: F is infinite. No spread at all is undefined.
+        return (between > 0.0).then_some(0.0);
+    }
+    let f = between / df1 / (within / df2);
+    // Q(F; df1, df2) = I_{df2 / (df2 + df1 F)}(df2 / 2, df1 / 2)
+    Some(regularized_beta(
+        df2 / 2.0,
+        df1 / 2.0,
+        df2 / (df2 + df1 * f),
+    ))
+}
+
 /// A single value has no spread; the pooled test counts it as 0.
 fn variance_or_zero(x: &[f64]) -> f64 {
     if x.len() > 1 { variance(x) } else { 0.0 }
@@ -596,6 +635,32 @@ mod tests {
         let p = student(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]).unwrap();
         assert!((p - 0.02131).abs() < 5e-5, "{p}");
         assert_eq!(student(&[1.0], &[2.0]), None);
+    }
+
+    #[test]
+    fn anova_is_the_f_test_over_the_groups() {
+        // Hand calculation: means 2, 3, 6, grand mean 11/3: SSB = 26, SSW = 6, F = (26 / 2) / (6 / 6) = 13.
+        // For 2 numerator degrees of freedom the tail is closed: (1 + 2 * 13 / 6)^-3 = 27 / 4096.
+        let g = [
+            vec![1.0, 2.0, 3.0],
+            vec![2.0, 3.0, 4.0],
+            vec![5.0, 6.0, 7.0],
+        ];
+        let p = anova(&g).unwrap();
+        assert!((p - 27.0 / 4096.0).abs() < 1e-12, "{p}");
+        // Two groups are the pooled t-test (F = t^2).
+        let (x, y) = ([1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 9.0]);
+        let two = anova(&[x.to_vec(), y.to_vec()]).unwrap();
+        assert!((two - student(&x, &y).unwrap()).abs() < 1e-12, "{two}");
+        // Old code: one group or none is p = 1; undefined where nothing can be tested.
+        assert_eq!(anova(&[]), Some(1.0));
+        assert_eq!(anova(&g[..1]), Some(1.0));
+        assert_eq!(anova(&[vec![1.0], vec![2.0]]), None);
+        assert_eq!(anova(&[vec![1.0, 2.0], vec![]]), None);
+        assert_eq!(anova(&[vec![3.0, 3.0], vec![3.0, 3.0]]), None);
+        assert_eq!(anova(&[vec![0.1; 3], vec![0.1; 2]]), None);
+        // Perfect separation: infinite F.
+        assert_eq!(anova(&[vec![1.0, 1.0], vec![2.0, 2.0]]), Some(0.0));
     }
 
     #[test]

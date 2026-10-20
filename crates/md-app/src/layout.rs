@@ -260,16 +260,32 @@ mod tests {
         let controls: Vec<_> = (widgets.iter())
             .filter_map(|w| {
                 let id = w.id.accesskit_id();
-                Some((id, nodes.names.get(&id)?, w.interact_rect))
+                Some((id, nodes.names.get(&id)?, w.interact_rect, w.rect))
             })
-            .filter(|(_, (role, _), r)| !CONTAINERS.contains(&role.as_str()) && r.is_positive())
+            .filter(|(_, (role, _), r, _)| !CONTAINERS.contains(&role.as_str()) && r.is_positive())
             .collect();
         let mut found = Vec::new();
-        for (i, (ia, a, ra)) in controls.iter().enumerate() {
-            for (ib, b, rb) in &controls[i + 1..] {
+        for (i, (ia, a, ra, fa)) in controls.iter().enumerate() {
+            for (ib, b, rb, fb) in &controls[i + 1..] {
                 let own_label = nodes.combo_labels.contains(&(*ia, *ib))
                     || nodes.combo_labels.contains(&(*ib, *ia));
-                if !own_label && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
+                // A bar floats over the edge of the scroll area, so it lies over a row that the
+                // area clips at that edge; that row is half hidden by design, not covered by mistake.
+                let slack = egui::style::ScrollStyle::solid().allocated_width() + 1.0;
+                let clipped = |bar: &(String, String),
+                               r: &egui::Rect,
+                               other: &egui::Rect,
+                               full: &egui::Rect| {
+                    bar.0 == "ScrollBar"
+                        && ((r.width() > r.height()
+                            && other.max.y < full.max.y - 0.5
+                            && (other.max.y - r.min.y).abs() <= slack)
+                            || (r.width() < r.height()
+                                && other.max.x < full.max.x - 0.5
+                                && (other.max.x - r.min.x).abs() <= slack))
+                };
+                let under_bar = clipped(a, ra, rb, fb) || clipped(b, rb, ra, fa);
+                if !own_label && !under_bar && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
                     found.push(format!("{a:?} {ra:?} overlaps {b:?} {rb:?}"));
                 }
             }
