@@ -36,9 +36,9 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | #24 |
 | 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | #28 |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
-| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 read, MSL import/export done (#11); editor #12; add compound / copy RTs #80; profile MSL #84; v5 `.lbr` #41 |
+| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 read, MSL import done (#11), nominal MSL export in core only; export in the app and profile MSL #84; editor #12; add compound / copy RTs #80; v5 `.lbr` #41 |
 | 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | #21 |
-| 20 | R console | `RConsole`, `MDRConsole`, RInside | Results as R `data.frame data`, scripts, SVG/PDF plots, `.RData` export. | replaced by CSV + R template (#26); embedded R not ported on purpose |
+| 20 | R console | `RConsole`, `MDRConsole`, RInside | Results as R `data.frame data`, scripts, SVG/PDF plots, `.RData` export. | CSV + R template #26 (embedded R not ported on purpose) |
 | 21 | Exports | `NetCDFExporter`, `CSVChromatogramExporter`, `CompoundExporter` | Chromatogram to NetCDF/CSV, compound tables to CSV, plots to PDF/PNG. | NetCDF done (#30); CSV/PNG/PDF/SVG/clipboard #9; compound CSV #78 |
 
 ## Parity with the new app
@@ -59,19 +59,20 @@ by exactly one issue.
 | 7 | Per-run result list: table, find compound, CSV, save/load `.cmp`, `.cmp` as batch input | #78 |
 | 8, 19 | NIST import into SQLite, fragment pre-filter (`SQL_*`), `LS_IDENTIFICATION_ALGORITHM`, NIST path | #21 |
 | 9 | Calibration mix from a library, editable RT/RI table, RT-only fallback, calibration per run | #81 |
-| 11 | Non-targeted batch, excluded ions, discrepancy index, S/N and required-peaks filters | #58 |
+| 11 | Non-targeted batch, rescan for missing quant ions, excluded ions, discrepancy index, S/N and required-peaks filters | #58 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |
-| 18 | MSL export as profile/FWHM spectrum | #84 |
+| 18 | MSL export in the app, also as profile/FWHM spectrum | #84 |
 | 18 | `.lbr` version 5 | #41 |
 | 13 | Internal standard, summed signal, pool (with pool mapping export), z-score | #23 |
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
 | 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots | #28 |
+| 20 | CSV results + R template instead of the embedded R console | #26 |
 | files | `.cmp` and binary `.calib` layout, RT unit | #13 |
 | files | High-resolution runs (`getDataType() == 2`) | #34 |
 
-Blocked issues (#13, #21, #28, #29, #34, #41) have a plan on the issue to produce references with the
+Issues that waited for lab or licensed files (#13, #21, #28, #29, #34, #41) now have a plan on the issue to produce references with the
 old binary through the golden harness (`tools/golden/`) or with synthetic data, so none of them waits
 for lab files any more.
 
