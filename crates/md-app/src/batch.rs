@@ -168,6 +168,8 @@ pub struct Batch {
     settings: TableSettings,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
+    /// Whether the search is by retention time only (Analysis → RI calibration).
+    rt_only: bool,
     job: Option<Job>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
@@ -200,6 +202,7 @@ impl Default for Batch {
             },
             settings: TableSettings::default(),
             applied: GcmsSettings::default(),
+            rt_only: false,
             job: None,
             scan: None,
             table: None,
@@ -217,7 +220,8 @@ impl Default for Batch {
 
 impl Batch {
     /// Takes the applied settings; changed `QUANT_*` values replace those of the window.
-    pub fn use_settings(&mut self, applied: &GcmsSettings) {
+    pub fn use_settings(&mut self, applied: &GcmsSettings, rt_only: bool) {
+        self.rt_only = rt_only;
         if self.applied != *applied {
             let quant = applied.quant();
             if quant != self.applied.quant() {
@@ -411,6 +415,11 @@ impl Batch {
     }
 
     /// Progress and Cancel while a scan runs, else Start and what it will use.
+    /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
+    fn library_ready(&self, lib: &Library) -> bool {
+        lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
+    }
+
     fn job_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -436,9 +445,9 @@ impl Batch {
                 }
             }
             None => {
-                // Not while the library is rebuilt for new search settings: it would be scaled differently.
-                let ready =
-                    lib.filter(|l| !self.paths.is_empty() && l.settings == self.applied.search());
+                // Not while the library is rebuilt for new search settings or a switch of RT-only: it
+                // would be scaled differently, and the calibration is hidden meanwhile.
+                let ready = lib.filter(|l| !self.paths.is_empty() && self.library_ready(l));
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new("Start"))
                     .clicked()
@@ -458,7 +467,7 @@ impl Batch {
                     )),
                     None => ui.label("Open a library first (File → Open library)."),
                 };
-                if lib.is_some_and(|l| l.settings != self.applied.search()) {
+                if lib.is_some_and(|l| !self.library_ready(l)) {
                     ui.label("Library is being prepared for the new search settings.");
                 }
                 ui.label(&self.note);
@@ -1042,16 +1051,16 @@ mod tests {
             quant_ion_number: 5,
             ..Default::default()
         };
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 5);
         // An edit in the window survives settings that leave QUANT_* alone ...
         b.settings.quant.ion_number = 2;
         applied.ls_ri_diff += 1.0;
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 2);
         // ... and the next change of QUANT_* replaces it.
         applied.quant_ion_number = 4;
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 4);
     }
 
@@ -1112,5 +1121,27 @@ mod tests {
             .map(|r| r.path.file_name().unwrap().to_owned())
             .collect();
         assert_eq!(names, ["c.cdf", "a.cdf"]);
+    }
+
+    #[test]
+    fn start_waits_for_the_library_to_match_search_settings_and_rt_only() {
+        let search = GcmsSettings::default().search();
+        let lib = |rt_only: bool| Library {
+            path: PathBuf::new(),
+            name: String::new(),
+            prepared: if rt_only {
+                md_core::search::PreparedLibrary::new_rt_only(&[], &search)
+            } else {
+                md_core::search::PreparedLibrary::new(&[], &search)
+            },
+            compounds: Vec::new(),
+            settings: search.clone(),
+        };
+        let mut b = Batch::default();
+        assert!(b.library_ready(&lib(false)));
+        assert!(!b.library_ready(&lib(true)));
+        b.use_settings(&GcmsSettings::default(), true);
+        assert!(b.library_ready(&lib(true)));
+        assert!(!b.library_ready(&lib(false)));
     }
 }
