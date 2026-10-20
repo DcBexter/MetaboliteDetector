@@ -71,30 +71,84 @@ impl App {
         }
     }
 
+    /// Setup first, then the active run, then all runs, then the stand-alone calculator.
     fn analysis_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("RI calibration…").clicked() {
-            self.ri.open = true;
-        }
-        if ui.button("Settings…").clicked() {
-            self.settings.open = true;
-        }
-        if ui.button("Batch quantification…").clicked() {
-            self.batch.open = true;
-        }
-        if ui.button("Mass isotopomer distributions…").clicked() {
-            self.mid.open = true;
-        }
-        if ui.button("Biomarker statistics…").clicked() {
-            self.statistics.open = true;
-        }
-        if ui.button("Run info…").clicked() {
-            self.view.info_open = true;
-        }
-        if ui.button("Natural isotopes…").clicked() {
-            self.isotopes.open = true;
-        }
-        if ui.button("Results of the active run…").clicked() {
-            self.results.open = true;
+        type Toggle = fn(&mut App) -> &mut bool;
+        // The flag marks entries that need an open run.
+        let groups: [&[(&str, &str, Toggle, bool)]; 4] = [
+            &[
+                (
+                    "Settings…",
+                    "Peak detection, deconvolution and library search parameters",
+                    |a| &mut a.settings.open,
+                    false,
+                ),
+                (
+                    "RI calibration…",
+                    "Retention index calibration from alkanes, a calibration mix or a .calib file",
+                    |a| &mut a.ri.open,
+                    false,
+                ),
+            ],
+            &[
+                (
+                    "Run info…",
+                    "File, instrument and scan details of the active run",
+                    |a| &mut a.view.info_open,
+                    true,
+                ),
+                (
+                    "Results of the active run…",
+                    "Table of every component with its library hit; sortable, exportable as CSV",
+                    |a| &mut a.results.open,
+                    false,
+                ),
+            ],
+            &[
+                (
+                    "Batch quantification…",
+                    "Quantify the library's substances across many runs",
+                    |a| &mut a.batch.open,
+                    false,
+                ),
+                (
+                    "Mass isotopomer distributions…",
+                    "Labelling experiments: isotopomer distributions of the library's fragments across runs",
+                    |a| &mut a.mid.open,
+                    false,
+                ),
+                (
+                    "Biomarker statistics…",
+                    "Group comparison, box plots and PCA of the batch table",
+                    |a| &mut a.statistics.open,
+                    false,
+                ),
+            ],
+            &[(
+                "Natural isotopes…",
+                "Isotope distribution (M+0, M+1, …) of a molecular formula",
+                |a| &mut a.isotopes.open,
+                false,
+            )],
+        ];
+        for (i, group) in groups.into_iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for (name, hint, open, needs_run) in group {
+                // Run info shows nothing without a run; the others explain their empty state.
+                if ui
+                    .add_enabled(
+                        !needs_run || !self.runs.is_empty(),
+                        egui::Button::new(*name),
+                    )
+                    .on_hover_text(*hint)
+                    .on_disabled_hover_text("Open a run first")
+                    .clicked()
+                {
+                    *open(self) = true;
+                }
+            }
         }
     }
 }
