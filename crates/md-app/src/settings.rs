@@ -5,6 +5,7 @@ use std::io::Read;
 use std::ops::RangeInclusive;
 use std::sync::mpsc;
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::deconv::{Component, DeconvSettings, deconvolute};
@@ -113,8 +114,8 @@ impl Settings {
     pub fn window(&mut self, ctx: &egui::Context) {
         let mut open = self.open;
         egui::Window::new("Settings")
+            .tool_window(ctx, 0, [480.0, 420.0])
             .open(&mut open)
-            .default_width(480.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 60.0)

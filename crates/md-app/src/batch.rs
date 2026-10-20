@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
@@ -157,8 +158,8 @@ impl Batch {
     pub fn finished(&mut self, lib: Arc<Library>, runs: Vec<RunResult>) {
         self.scan = Some(Scan {
             lib,
-            runs,
-            extra: Vec::new(),
+            runs: runs.into(),
+            extra: Vec::new().into(),
             rescanned: 0,
             errors: Vec::new(),
             took: Duration::ZERO,
@@ -180,8 +181,8 @@ impl Batch {
         self.poll(ctx);
         let mut open = self.open;
         egui::Window::new("Batch quantification")
+            .tool_window(ctx, 2, [900.0, 600.0])
             .open(&mut open)
-            .default_size([900.0, 600.0])
             .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
     }

@@ -48,6 +48,24 @@ pub fn side_panel(
     }
 }
 
+/// Where a tool window opens the first time; egui keeps where the user moves it later.
+pub trait ToolWindow {
+    /// Opens window `n` over the plots, right of the run list (a side panel, so at most 30 % of the
+    /// width), each a step down and right so none opens on another. `size` is capped to the room
+    /// there, so egui does not push the window back over the list to keep it on screen. A window
+    /// without its own size passes egui's default `[340.0, 420.0]`: unset, egui guesses 600 px wide.
+    fn tool_window(self, ctx: &egui::Context, n: u8, size: [f32; 2]) -> Self;
+}
+
+impl ToolWindow for egui::Window<'_> {
+    fn tool_window(self, ctx: &egui::Context, n: u8, [w, h]: [f32; 2]) -> Self {
+        let (screen, step) = (ctx.content_rect(), 20.0 * f32::from(n));
+        let x = screen.min.x + screen.width() * 0.3 + 16.0 + step;
+        self.default_pos([x, screen.min.y + 40.0 + step])
+            .default_size([w.min(screen.max.x - x - 40.0), h])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::*;
@@ -67,7 +85,7 @@ mod tests {
             app.isotopes.open,
         ) = (true, true, true, true);
         (app.editor.open, app.view.info_open) = (true, true);
-        (app.results.open, app.statistics.open) = (true, true);
+        (app.results.open, app.statistics.open, app.mid.open) = (true, true, true);
         let mut c = md_core::library::LibraryCompound::new("Phenylalanine 2TMS");
         (c.spectrum.masses, c.spectrum.values) = (vec![73.0, 218.0], vec![1000, 800]);
         app.editor.compounds = vec![c];
@@ -209,6 +227,7 @@ mod tests {
             "Copy retention times",
             "Results",
             "Biomarker statistics",
+            "Mass isotopomer distributions",
             "Library hits",
             "a_long_run_name_from_the_lab_60.cdf",
         ];
@@ -228,6 +247,41 @@ mod tests {
                 .flatten()
                 .collect()
         })
+    }
+
+    #[test]
+    fn windows_open_beside_the_run_list_and_apart() {
+        for size in [[1200.0, 800.0], [800.0, 600.0]] {
+            let mut app = app_with_every_window();
+            let (ctx, _) = draw(&mut app, size);
+            let key = egui::Id::unique(("side panel wanted width", "runs"));
+            let list = ctx
+                .data(|d| d.get_temp::<f32>(key))
+                .unwrap()
+                .min(size[0] * 0.3);
+            let windows: Vec<egui::Rect> = ctx.memory(|m| {
+                (m.layer_ids().filter(|l| l.order == egui::Order::Middle))
+                    .filter_map(|l| m.area_rect(l.id))
+                    .collect()
+            });
+            assert!(
+                windows.len() >= 11,
+                "{size:?}: only {} windows",
+                windows.len()
+            );
+            let over_list: Vec<_> = windows.iter().filter(|w| w.min.x < list).collect();
+            assert!(
+                over_list.is_empty(),
+                "{size:?}: cover the run list (to {list}): {over_list:?}"
+            );
+            for (i, w) in windows.iter().enumerate() {
+                assert!(
+                    !windows[..i].iter().any(|o| o.min == w.min),
+                    "{size:?}: two windows open at {:?}",
+                    w.min
+                );
+            }
+        }
     }
 
     #[test]
