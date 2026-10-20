@@ -56,7 +56,7 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (String, Vec<f64>, Vec<
 }
 
 /// Writes through `<path>.part` and renames, so a failed export never leaves a half-written file.
-pub fn write_file(
+pub(crate) fn write_file(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<std::fs::File>) -> std::io::Result<()>,
 ) -> Result<(), String> {
@@ -76,7 +76,7 @@ pub fn write_file(
 }
 
 /// PNG of `rect` (points) out of a full-window screenshot taken at `ppp` pixels per point.
-fn write_png(
+pub(crate) fn write_png(
     path: &Path,
     shot: &egui::ColorImage,
     rect: egui::Rect,
@@ -200,7 +200,7 @@ impl App {
 
 /// Normalisation picker above the spectrum plot.
 pub fn norm_picker(ui: &mut egui::Ui, norm: &mut Normalization) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Normalise spectrum:");
         for n in Normalization::ALL {
             ui.selectable_value(norm, n, n.label());

@@ -18,8 +18,26 @@ impl App {
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {
-                        let (components, peak_masses, peaks) = settings::analyze(&data, &key)?;
-                        Ok(Run {
+                        // Results the old program saved next to the run replace the analysis
+                        // until the settings change. A broken side file only gives a warning.
+                        let mut warnings = Vec::new();
+                        let saved = md_core::cmp::saved_components(&p, &data.scan_times_s)
+                            .unwrap_or_else(|e| {
+                                warnings.push(e.to_string());
+                                None
+                            });
+                        // shortcut: saved components carry no `Peak` list, so their panel shows no
+                        // S/N, quality or sharpness; read them from the `.cmp` peaks (follow-up).
+                        let (components, peak_masses, peaks) = match saved {
+                            Some((c, m)) => (c, m, Vec::new()),
+                            None => settings::analyze(&data, &key)?,
+                        };
+                        let saved_calibration =
+                            md_core::ri::saved_calibration(&p).unwrap_or_else(|e| {
+                                warnings.push(format!("calibration: {e}"));
+                                None
+                            });
+                        let run = Run {
                             name: p.file_stem().unwrap_or_default().to_string_lossy().into(),
                             minutes: data.scan_times_s.iter().map(|t| t / 60.0).collect(),
                             tic: data.tic(),
@@ -29,6 +47,7 @@ impl App {
                             sic_for: None,
                             sic_job: None,
                             components,
+                            saved_calibration,
                             peak_masses,
                             peaks,
                             analysis: settings::Analysis::new(key),
@@ -38,7 +57,8 @@ impl App {
                             ident: None,
                             ident_job: None,
                             rev: 0,
-                        })
+                        };
+                        Ok((run, warnings))
                     }
                 })
                 .map_err(|e| format!("{}: {e}", p.display()))
@@ -54,7 +74,16 @@ impl App {
         );
         self.loading.retain(|(_, rx)| {
             match rx.try_recv() {
-                Ok(Ok(run)) => self.runs.push(run),
+                Ok(Ok((mut run, warnings))) => {
+                    if let Some(cal) = run.saved_calibration.take() {
+                        self.ri.set_own(run.path.clone(), cal);
+                    }
+                    if !warnings.is_empty() {
+                        self.error =
+                            Some(format!("{}: {}", run.path.display(), warnings.join("; ")));
+                    }
+                    self.runs.push(run);
+                }
                 Ok(Err(e)) => self.error = Some(e),
                 Err(mpsc::TryRecvError::Empty) => return true,
                 Err(mpsc::TryRecvError::Disconnected) => self.error = Some("loader crashed".into()),

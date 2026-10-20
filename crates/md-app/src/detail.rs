@@ -142,12 +142,12 @@ fn body(ui: &mut egui::Ui, run: &Run, k: usize, mz: &mut f32, trace: &mut Trace)
         row(
             "Mean S/N",
             "Mean signal-to-noise of the ion peaks",
-            format!("{:.1}", d.mean_signal_to_noise),
+            stat(&d, d.mean_signal_to_noise, 1),
         );
         row(
             "Peak sharpness",
             "Mean sharpness of the ion peaks",
-            format!("{:.2}", d.mean_sharpness),
+            stat(&d, d.mean_sharpness, 2),
         );
         let disc = if d.discrepancy < 0.0 {
             "–".into()
@@ -195,6 +195,14 @@ fn body(ui: &mut egui::Ui, run: &Run, k: usize, mz: &mut f32, trace: &mut Trace)
     peak_list(ui, &d.peaks, mz, trace);
     ui.separator();
     identify::hits_list(ui, run);
+}
+
+/// A mean over the ion peaks, or a dash for a component that has none (saved by the old program).
+fn stat(d: &md_core::detail::Detail, value: f64, decimals: usize) -> String {
+    match d.peaks.is_empty() {
+        true => "–".into(),
+        false => format!("{value:.decimals$}"),
+    }
 }
 
 /// A right-aligned number cell, so decimals line up down the column.

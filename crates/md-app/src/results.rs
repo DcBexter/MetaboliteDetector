@@ -384,6 +384,7 @@ pub(crate) mod tests {
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
             peaks: Vec::new(),
+            saved_calibration: None,
             analysis: settings::Analysis::default(),
             scan: 0,
             component: None,

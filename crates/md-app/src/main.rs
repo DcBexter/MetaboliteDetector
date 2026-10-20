@@ -17,12 +17,14 @@ mod export;
 mod identify;
 mod isotopes;
 mod jobs;
+mod layout;
 mod library_editor;
 mod loading;
 mod menu;
 mod results;
 mod run_list;
 mod settings;
+mod statistics;
 mod status;
 mod style;
 #[cfg(test)]
@@ -67,7 +69,7 @@ struct App {
     runs: Vec<Run>,
     /// Index into `runs` whose scan cursor and spectrum are shown.
     active: usize,
-    loading: Vec<(PathBuf, mpsc::Receiver<Result<Run, String>>)>,
+    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, String>>)>,
     load_started: Option<Instant>,
     load_note: String,
     error: Option<String>,
@@ -83,6 +85,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    statistics: statistics::Statistics,
     results: results::Results,
     export: export::Export,
     view: view::View,
@@ -110,6 +113,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            statistics: statistics::Statistics::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
@@ -120,6 +124,9 @@ impl Default for App {
 
 /// (m/z, tolerance) of a SIC.
 type SicKey = (f32, f32);
+
+/// A loaded run with warnings about its side files (`.cmp`, `.calib`).
+type Loaded = (Run, Vec<String>);
 
 struct Run {
     path: PathBuf,
@@ -138,6 +145,8 @@ struct Run {
     peak_masses: Vec<u32>,
     /// The peaks themselves (S/N, quality, sharpness), indexed like `peak_masses`.
     peaks: Vec<Peak>,
+    /// Calibration saved with the run by the old program, handed to the calibration window on load.
+    saved_calibration: Option<md_core::ri::RiCalibration>,
     analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
@@ -190,7 +199,11 @@ impl App {
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
-        self.batch.window(ctx, self.library.as_ref(), cal);
+        let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
+        self.batch
+            .window(ctx, self.library.as_ref(), cal, reference);
+        self.statistics
+            .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
         self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);

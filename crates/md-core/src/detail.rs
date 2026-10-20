@@ -38,7 +38,10 @@ pub struct Detail {
 pub fn component_detail(c: &Component, all: &[Peak], masses: &[u32]) -> Detail {
     let mut peaks: Vec<PeakRow> = Vec::new();
     for f in &c.peaks {
-        let (p, mass) = (&all[f.peak], masses[f.peak]);
+        // Components read from an old `.cmp` come without a peak list: their ions have no statistics.
+        let (Some(p), Some(&mass)) = (all.get(f.peak), masses.get(f.peak)) else {
+            continue;
+        };
         if peaks.iter().all(|r| r.mass != mass) {
             peaks.push(PeakRow {
                 mass,
@@ -182,6 +185,12 @@ mod tests {
         assert_eq!(d.mean_signal_to_noise, 15.0);
         assert_eq!(d.mean_sharpness, 6.0);
         assert_eq!(d.discrepancy, 3.0);
+    }
+
+    #[test]
+    fn peaks_missing_from_the_list_are_skipped() {
+        let d = component_detail(&component(&[(0, 5.0)]), &[], &[73]);
+        assert!(d.peaks.is_empty() && d.discrepancy == -1.0);
     }
 
     #[test]

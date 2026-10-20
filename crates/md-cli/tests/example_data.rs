@@ -79,7 +79,7 @@ fn csv_equals_the_core_table_of_the_example_runs() {
     let (found, errors) =
         scan_runs(&runs, &prepared, &settings.scan(None), 4, &done, &cancel).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
-    let t = table(&found, &compounds, &TableSettings::default()).unwrap();
+    let t = table(&found, &compounds, &[], &TableSettings::default()).unwrap();
     let mut expected = Vec::new();
     t.write_csv(&mut expected).unwrap();
 

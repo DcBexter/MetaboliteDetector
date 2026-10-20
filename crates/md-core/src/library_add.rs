@@ -266,6 +266,7 @@ mod tests {
             mass,
             integral,
             quality: 0.1,
+            signal_to_noise: 10.0,
         }
     }
 

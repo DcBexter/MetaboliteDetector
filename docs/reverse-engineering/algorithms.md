@@ -1,6 +1,6 @@
 # MetaboliteDetector 3.3 (Linux x86-64) - algorithm notes
 
-Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. MID, statistics tests and PCA are NOT analyzed yet (see Section 8).
+Status: partial. Noise/baseline, peak detection and peak metrics (ported in `crates/md-core/src/peaks.rs`, deviations in `docs/architecture.md#peak-detection`), deconvolution (Section 4), library scoring (Section 5, ported in `crates/md-core/src/search.rs`), RI calibration (Section 6) and quantification ion selection (Section 7) are reconstructed. Normalisation (Section 7c) is reconstructed. Statistics and PCA (Section 7f) are reconstructed. MID is NOT analyzed yet (see Section 8).
 
 Conventions
 - Observed = read from decompiler or disassembly output. Inferred = deduced from usage, names or typical patterns; verify before porting.
@@ -261,7 +261,7 @@ All addresses below are syms addresses (MCP = +0x100000). Ghidra cuts most of th
 
 - GUI path: `metabolitedetector::ComponentDetector::detectComponents()` (0x4b3a0c) calls `GCMSAnalyzer::detectAllPeaks(reorder=true, scan_dist=10.0f, ion_dist=0.05f)` (call at 0x4b3a87; floats at rodata 0xa81010 = 10.0 and 0xa8100c = 0.05). Then it calls `deconvoluteChromatogram()` (0x5e907e).
 - RI calibration wizard: `RICalibrationWizard::CompoundDetector::detect()` calls `detectAllPeaks(reorder=false, ...)` (0x3f4710), then `deconvoluteChromatogram()`.
-- Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window.
+- Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window. Details of the whole batch rescan: [batch-quantification.md](batch-quantification.md).
 - `MIN_PEAK_NUMBER` is field +0x0 of GCMSAnalyzer. The settings dialog sets it from `AN_MIN_PEAK_NUMBER` (call at 0x3c1177). The GCMSAnalyzer ctor sets it to `AN_MIN_PEAK_NUMBER` (Observed).
 - `deconvoluteChromatogram()` (0x5e907e) = `deconvoluteChromatogram(this->peaks, scan->vtbl[3]() /*scan count*/, 0, AN_DECONVOLUTION_WIDTH)`. Observed.
 
@@ -793,7 +793,7 @@ else: comp2ions[c] = added
 - `QuantIonChecker::detectCompounds2Process`.
 - The source of `ion_number` (Inferred QUANT_ION_NUMBER).
 - The quantity reported per ion (Inferred: the PeakEssential integral from 4.9).
-- MID, statistics tests and PCA are not analyzed (normalisation: Section 7c). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
+- MID is not analyzed (normalisation: Section 7c, statistics and PCA: Section 7f). Settings in play: QUANT_ION_NUMBER, QUANT_MIN_DIST_IONS, QUANT_QUALITY_CUTOFF, QUANT_EXCL_IONS. tools::Statistics::collectedMean (syms 0x6c3a2c), collectedVariance (0x6c383a / 0x6c3640) and polynomialRegression (0x6c3292) are entry points only.
 
 ## 7b. Natural isotope calculator (Observed)
 
@@ -894,6 +894,59 @@ Deviations and gaps of the rewrite:
 - The result is an entry in the rewrite's `.mdlib` (saved through the library editor), not an `.lbr`.
 - Source string "no source" and the `LibraryCompound(Compound, source)` constructor defaults for the combined spectrum are Inferred from the MSL importer.
 
+## 7f. Biomarker statistics, box plots and PCA (Observed; ported in `crates/md-core/src/stats.rs`)
+
+Addresses are `nm` addresses of the ELF (Ghidra = nm + 0x100000). Found by disassembling `BiomarkerWidget::exportData` (0x4882e6; `createGUI` 0x48a044 repeats the same loop for the table), `BoxPlot::setData` (0x48d42c), `BatchQuantificationResultWidget::showPCA` (0x4557e0) and `tools::PCA` (0x6d7bc2).
+
+**Two-group table** (`BiomarkerDialog` picks two lists of replicate groups; `BiomarkerWidget(series, group1, group2, independent)`; the flag is the byte at `this+0x60`). For every substance:
+
+```
+independent: x = getSummedGroupIntegrals(g, compound) for every g in group 1   # one value per run
+             y = the same for group 2
+else:        x = getGroupMean(g, compound, true) for every g in group 1        # one value per replicate group
+             y = ... group 2
+hits1, hits2 = sum over the groups of getGroupHits(g, compound)                # runs of the group with a hit
+mean1 = alglib::samplemean(x), mean2 = alglib::samplemean(y), ratio = mean1 / mean2
+p = alglib::unequalvariancettest(x, nx, y, ny, &both, &left, &right) -> both   # two-sided
+```
+
+- The only test is **Welch's t-test** (unequal variance, two-sided); `studentttest1/2` are linked but never called from the dialog. alglib 3 (0x744ef0): `nx < 2` or `ny < 2` gives p = 1; a zero sample variance in either group gives p = 1; else `t = (mx - my) / sqrt(vx/nx + vy/ny)`, `df = (vx/nx + vy/ny)^2 / ((vx/nx)^2/(nx-1) + (vy/ny)^2/(ny-1))` (not rounded) and `p = I_{df/(df+t^2)}(df/2, 1/2)` with the regularised incomplete beta function (`incompletebeta` 0x7b7800), which is the same p-value as R's `t.test(x, y)`.
+- There is **no paired test and no multiple-testing correction** in the old program. "Independent samples = no" means a Welch test over the replicate group means. The rewrite adds a paired t-test (group k of side 1 against group k of side 2 in the order given, run by run; same number of groups and of runs per pair, else no p-value; `t.test(paired = TRUE)`) because issue #24 asks for it.
+- Missing values are 0 in the old table, so they are part of the means and of the test. The ratio is not guarded (division by zero gives inf/NaN).
+- CSV (`exportData`): tab separated, header `Metabolite  Identification Score  Hits 1  Hits 2  RT  RI  Mean G1  Mean G2  Ratio  P-value`, then the values of group 1 and of group 2. "Identification Score" is the reference compound's `lib_score` feature. Further sub-features: paste a sample list to fill a group (`autoSelect`, exact match of each item with a group name), filter by p-value, choose groups and their order for the box plot.
+
+**Box plot** (`on_b_boxplot_clicked` 0x421842, `BoxPlot::setData`): per selected substance and per selected group the `getSummedGroupIntegrals` values (all runs of the group, sorted). `QCPStatisticalBox::setData(key, min, q1, median, q3, max)` with `min`/`max` the smallest and largest value (no outlier rule), `median = gsl_stats_median_from_sorted_data`, `q1`/`q3 = gsl_stats_quantile_from_sorted_data(0.25 / 0.75)` (linear interpolation, `h = (n-1)p`, R `quantile(type = 7)`). Boxes sit at x = 0, 1, 2, ... in the chosen order.
+
+**PCA** (`showPCA` and `tools::PCA`):
+
+```
+rows = getTableData(false, true) of the shown table    # substance x run (as normalised on screen)
+runs = all runs except the replicate group "$POOL"
+a row is dropped if any value is inf or NaN; else it is z-scored over the runs
+        (tools::Filter::zScoreTransformation, N-1 variance; a constant row gives NaN and is dropped)
+PCA(dims = the kept rows, samples = the runs):
+    centre every dimension (gsl_stats_mean subtracted; a no-op after z-scoring)
+    C = covariance matrix of the dimensions (gsl_stats_covariance, N-1)         # = correlation matrix here
+    gsl_eigen_symmv(C) ; eigenvectors * -1 ; gsl_eigen_symmv_sort(GSL_EIGEN_SORT_VAL_DESC)
+getTransformedData(k)   = centred data * first k eigenvectors                    # scores, runs x k
+getPrincipalComponent(i)= eigenvector i                                          # loadings, one value per substance
+getProportionOfVariance = eigenvalue_i / sum(eigenvalues)
+```
+
+It throws `PCAException` for an empty input or dimensions of unequal length. `PCAPlot` has combo boxes for the x and y component (`comboPCAChanged`), a score plot, a "dimension impact" (loadings) plot and a histogram plus cumulative histogram of the proportion of variance.
+
+Deviations of the rewrite:
+
+- The eigenvectors are computed through an SVD of the centred runs x substances matrix (`nalgebra`). It has the same components as the covariance eigenproblem (`prcomp(t(Z), scale = FALSE)` in R) but costs `O(runs^2 x substances)` instead of `O(substances^3)`. Components with a numerically zero eigenvalue (beyond runs - 1) are kept with proportion 0.
+- The old program flips every eigenvector (`* -1`), GSL's own sign being arbitrary. Signs are arbitrary in any implementation; the rewrite fixes the sign so that the largest absolute loading of each component is positive. The tests compare absolute values or the sign-invariant product.
+- A missing value is `None` in the rewrite and 0 in the old table; PCA and the two-group test treat it as 0 by default (`missing_as_zero`), or skip it when that option is off. On a z-scored table a missing value is always skipped (0 would mean "average" there). Values that the normalisation could not compute are also `None`.
+- Not ported: PDF/clipboard export of the plots (PNG only).
+
+### 7f.1 Unknowns (statistics)
+
+- Whether `BiomarkerWidget::createGUI` differs from `exportData` besides the table widget (the same alglib calls appear at 0x48a94a-0x48ab20).
+- The default p-value filter and the dialog defaults for the independent flag.
+
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
@@ -907,7 +960,7 @@ Deviations and gaps of the rewrite:
 6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
-9. MID, statistics tests, PCA: not started. Normalisation is done (Section 7c).
+9. MID: not started. Normalisation (7c), statistics and PCA (7f) are done.
 
 ## 9. Ranked next steps
 
@@ -915,4 +968,4 @@ Deviations and gaps of the rewrite:
 - Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
-Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Remaining statistics not analyzed.
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Statistics and PCA reconstructed (Section 7f).
