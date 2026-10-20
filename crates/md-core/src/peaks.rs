@@ -1114,6 +1114,45 @@ mod tests {
     }
 
     #[test]
+    fn reorder_peaks_gives_a_tie_to_the_older_profile() {
+        // Row 0 has two peaks (95 and 105); the row-1 peak at 100 is 5 scans from both. The old
+        // bin lists are appended and walked from the front, so the profile made first (95) wins.
+        let scans = 300;
+        let mut traces = [noisy(scans), noisy(scans)];
+        gauss(&mut traces[0], 95.0, 2.0, 20_000.0);
+        gauss(&mut traces[0], 105.0, 2.0, 20_000.0);
+        gauss(&mut traces[1], 100.0, 3.0, 20_000.0);
+        let c = Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64).collect(),
+            offsets: (0..=scans).map(|s| 2 * s).collect(),
+            mz: (0..scans).flat_map(|_| [73.047f32, 73.089]).collect(),
+            intensity: (0..scans)
+                .flat_map(|s| [traces[0][s], traces[1][s]])
+                .collect(),
+        };
+        let t = IonTraces::exact(&c).unwrap();
+        let peak = |row, first, apex, last| Peak {
+            row,
+            first_scan: first,
+            apex_scan: apex,
+            last_scan: last,
+            precise_apex: Some(apex as f32),
+            signal_to_noise: 10.0,
+            quality: 0.0,
+            sharpness: 1.0,
+        };
+        let mut p = [
+            peak(0, 80, 95, 100),
+            peak(0, 101, 105, 120),
+            peak(1, 80, 100, 120),
+        ];
+        reorder_peaks(&mut p, &t, 10.0, 0.05, 10);
+        assert_eq!(p[0].apex_scan, p[2].apex_scan);
+        assert!(p[2].apex_scan < 100);
+        assert_eq!(p[1].apex_scan, 105);
+    }
+
+    #[test]
     fn reorder_peaks_leaves_out_the_last_bin_of_a_profile() {
         // The profile of the first peak (bin 1003) covers bins 903..1103 (insertIonProfile, §4.2); bin
         // 1103 shares a lookup block with the covered bins, so the range test decides.

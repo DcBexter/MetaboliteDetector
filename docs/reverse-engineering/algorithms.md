@@ -335,7 +335,7 @@ for each profile (each once, `processed` flag):
 delete all profiles
 ```
 
-- `insertIonProfile(bin, bins, dist, p)` (0x5eb972, objdump): `prof = new IonProfile(p)`. Then `lo = (int)(bin - dist) < 0 ? 0 : bin - dist` and `hi = min(bin + dist, bins.size - 1)`. It pushes `prof` into `bins[k]` for k in [lo, hi). The upper bound is exclusive, so bin `hi` is not filled (Observed: `jae` at 0x5eba59).
+- `insertIonProfile(bin, bins, dist, p)` (0x5eb972, objdump): `prof = new IonProfile(p)`. Then `lo = (int)(bin - dist) < 0 ? 0 : bin - dist` and `hi = min(bin + dist, bins.size - 1)`. It pushes `prof` into `bins[k]` for k in [lo, hi). The upper bound is exclusive, so bin `hi` is not filled (Observed: `jae` at 0x5eba59). It appends (`list::push_back`, 0x5eba7b), and reorderPeaks walks `bins[b]` from `begin()` with `operator++` (0x5eaf62..0x5eb1b3). With the strict `d < min_dist`, the profile created first wins a tie (Observed).
 - `IonProfile(p)` (0x649594): processed = false; addPeak(p). `IonProfile::addPeak(p)` (0x648f90): push p; last_ion = p.ion; max_scan = Peak(peaks).maxScan (the apex of the summed profile). Observed.
 
 ### 4.3 Peak(list<Peak*>) - summed peak (0x5f28f8, Observed)
