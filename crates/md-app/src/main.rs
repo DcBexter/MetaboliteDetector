@@ -22,6 +22,7 @@ mod menu;
 mod results;
 mod run_list;
 mod settings;
+mod statistics;
 mod status;
 mod style;
 #[cfg(test)]
@@ -82,6 +83,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    statistics: statistics::Statistics,
     results: results::Results,
     export: export::Export,
     view: view::View,
@@ -108,6 +110,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            statistics: statistics::Statistics::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
@@ -186,6 +189,8 @@ impl App {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
+        self.statistics
+            .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
         self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);

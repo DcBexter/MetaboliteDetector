@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 flate2.workspace = true
+nalgebra.workspace = true
 netcdf3.workspace = true
 rayon.workspace = true
 regex.workspace = true
