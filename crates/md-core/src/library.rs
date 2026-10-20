@@ -270,6 +270,18 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
+/// Opens a library by extension: `.lbr`, else AMDIS `.msl`.
+pub fn open(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let path = path.as_ref();
+    match path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"))
+    {
+        true => read_lbr(path),
+        false => import_msl(path),
+    }
+}
+
 /// Imports an AMDIS `.msl` file; each compound records the file as its source like the old app.
 pub fn import_msl(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
     let path = path.as_ref();

@@ -265,6 +265,40 @@ pub struct Row {
     pub values: Vec<Option<f64>>,
 }
 
+impl Table {
+    /// CSV with a header `Substance,RT_min,Quant_ions,<run>...`; quant ions are space-separated and a
+    /// substance not quantified in a run leaves its cell empty. Values are full-precision sums.
+    pub fn write_csv(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        fn line(w: &mut impl std::io::Write, cells: &[String]) -> std::io::Result<()> {
+            let quoted: Vec<String> = cells
+                .iter()
+                .map(|c| match c.contains([',', '"', '\n', '\r']) {
+                    true => format!("\"{}\"", c.replace('"', "\"\"")),
+                    false => c.clone(),
+                })
+                .collect();
+            writeln!(w, "{}", quoted.join(","))
+        }
+        let head = ["Substance", "RT_min", "Quant_ions"].map(String::from);
+        line(w, &[head.as_slice(), &self.runs].concat())?;
+        for r in &self.rows {
+            let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
+            let mut cells = vec![
+                r.name.clone(),
+                format!("{:.3}", r.rt_s / 60.0),
+                ions.join(" "),
+            ];
+            cells.extend(
+                r.values
+                    .iter()
+                    .map(|v| v.map(|v| v.to_string()).unwrap_or_default()),
+            );
+            line(w, &cells)?;
+        }
+        Ok(())
+    }
+}
+
 pub fn table(
     runs: &[RunResult],
     lib: &[LibraryCompound],
@@ -420,6 +454,27 @@ mod tests {
             path: PathBuf::from("data").join(name),
             found,
         }
+    }
+
+    #[test]
+    fn csv_quotes_names_and_leaves_missing_cells_empty() {
+        let t = Table {
+            runs: vec!["a.cdf".into(), "b,1.cdf".into()],
+            groups: vec![String::new(); 2],
+            rows: vec![Row {
+                compound: 0,
+                name: "2,3-\"X\"".into(),
+                rt_s: 90.0,
+                ions: vec![73, 147],
+                values: vec![Some(1.5), None],
+            }],
+        };
+        let mut out = Vec::new();
+        t.write_csv(&mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Substance,RT_min,Quant_ions,a.cdf,\"b,1.cdf\"\n\"2,3-\"\"X\"\"\",1.500,73 147,1.5,\n"
+        );
     }
 
     #[test]

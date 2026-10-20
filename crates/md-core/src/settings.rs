@@ -6,8 +6,10 @@ use std::io::Read;
 
 use flate2::read::GzDecoder;
 
+use crate::batch::{QuantSettings, ScanSettings};
 use crate::deconv::DeconvSettings;
 use crate::peaks::PeakSettings;
+use crate::ri::RiCalibration;
 use crate::search::SearchSettings;
 
 /// Old `GCMSSettings`. Defaults are the old static values (file-formats.md §5.1).
@@ -360,6 +362,29 @@ impl GcmsSettings {
             min_height_bp: self.an_min_height_bp,
             modeled_integration: self.an_modeled_values_for_integration,
             excluded_model_ions: self.quant_excl_ions.clone(),
+        }
+    }
+
+    /// Settings of a batch scan: the library is prepared with `search()`, but hits are cut off at the
+    /// default `LS_CUTOFF` (the GUI colours by score, a table needs a decision).
+    pub fn scan(&self, calibration: Option<RiCalibration>) -> ScanSettings {
+        ScanSettings {
+            peaks: self.peak(),
+            deconv: self.deconv(),
+            search: SearchSettings {
+                cutoff: SearchSettings::default().cutoff,
+                ..self.search()
+            },
+            calibration,
+        }
+    }
+
+    pub fn quant(&self) -> QuantSettings {
+        QuantSettings {
+            ion_number: self.quant_ion_number.max(1) as usize,
+            min_dist: self.quant_min_dist_ions as f32,
+            quality_cutoff: self.quant_quality_cutoff as f32,
+            excluded: self.quant_excl_ions.clone(),
         }
     }
 

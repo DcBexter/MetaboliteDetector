@@ -39,11 +39,13 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/isotopes.rs       natural isotope calculator window
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/batch.rs          batch quantification window and result table
+crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
+  src/main.rs           options, settings/library/calibration loading, CSV output
+  tests/                runs the binary on the 15 example runs
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: `crates/md-cli` (headless batch runs for big studies) and modules in `md-core` for
-normalisation, MID and statistics.
+Planned additions: modules in `md-core` for normalisation, MID and statistics.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
@@ -276,6 +278,24 @@ memory depends on the runs in memory, not on the study size (`examples/batch.rs`
 (~27 ms per run) is the largest share. Not ported yet (#58): the non-targeted mode, the SIC rescan of missing quant
 ions (`ResultSeries::scanIons`, §4.0), the discrepancy index and `QUANT_EXCL_IONS` in the app.
 
+### Command line (`md-cli`)
+
+`md-cli` runs the same two passes without a window, for big studies on servers or clusters:
+
+```sh
+cargo run --release -p md-cli -- --library lib.msl --settings algorithms.settings --calibration run.calib \
+    --replicates '^(.+)_\d+\.cdf$' -j 8 -o table.csv study/*.cdf
+```
+
+Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings` is the old settings file
+(`GcmsSettings::from_bytes`): its `AN_*`/`LS_*` values drive peak detection, deconvolution and search, its
+`QUANT_*` values are the quant defaults, which `--ions`, `--min-dist` and `--quality-cutoff` override.
+`--replicates`, `--min-reproducibility` and `--min-ions` are the batch window's filters. The CSV is
+`Table::write_csv` (`Substance,RT_min,Quant_ions,<run>...`, empty cell = not quantified); progress and
+failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
+Without `--settings` and `--calibration` the table equals the app's batch window with default settings
+and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
+
 ## Golden test
 
 `crates/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
@@ -379,6 +399,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 cargo run --release -p md-core --example perf
 cargo run --release -p md-core --example batch -- 4 library.msl run1.cdf run2.cdf
+cargo run --release -p md-cli -- --library library.msl -o table.csv run1.cdf run2.cdf
 cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
