@@ -540,7 +540,8 @@ pub fn import_msl(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, Librar
 }
 
 /// Parses AMDIS MSL text, and NIST MSP text (peak lines `m/z intensity` separated by `;` or spaces,
-/// quoted annotations ignored). `RT:` is in minutes; keys without a field of their own become features,
+/// quoted annotations ignored). `RT:` is in minutes; `RI:` and the MSP spellings `Retention_index:` and
+/// `RetentionIndex:` set the retention index; keys without a field of their own become features,
 /// repeated keys (MSP `Synon:`) joined with `\n`. Fields MSL has no key for keep the defaults the old
 /// importer left (sample library).
 pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
@@ -584,6 +585,13 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
         let num = |v: &str| v.parse::<f64>().map_err(|_| err("invalid number"));
         match key.as_str() {
             "RI" => c.spectrum.ri = num(value)?,
+            // MSP spellings the old program keeps as features; an explicit `RI:` or an unreadable
+            // number wins over them.
+            "RETENTION_INDEX" | "RETENTIONINDEX" | "RETENTION INDEX"
+                if c.spectrum.ri < 0.0 && value.parse::<f64>().is_ok_and(f64::is_finite) =>
+            {
+                c.spectrum.ri = num(value)?;
+            }
             "RT" => c.spectrum.rt_ms = num(value)? * 60_000.0,
             "RESOLUTION" => c.spectrum.bin_width = num(value)? as f32,
             "NUM PEAKS" => {
@@ -1540,6 +1548,47 @@ mod tests {
             a.spectrum.rt_ms = b.spectrum.rt_ms;
         }
         assert_eq!(again, lib);
+    }
+
+    /// MSP files (MoNA, MS-DIAL) write the retention index as `Retention_index:`, which the old program
+    /// only keeps as a feature. Synthetic records, no library data.
+    #[test]
+    fn msp_retention_index_spellings_set_the_ri() {
+        let text = "Name: a
+Retention_index: 1817.1
+Num Peaks: 1
+73 999
+
+Name: b
+RETENTIONINDEX: 1234.5
+RI: 1500
+Num Peaks: 1
+73 999
+
+Name: c
+RI: 1500
+Retention_index: 1700
+Num Peaks: 1
+73 999
+
+Name: d
+Retention_index: n/a
+Num Peaks: 1
+73 999
+
+Name: e
+Retention_index: inf
+Num Peaks: 1
+73 999
+";
+        let lib = parse_msl(text).unwrap();
+        let ri: Vec<_> = lib.iter().map(|c| c.spectrum.ri).collect();
+        // `RI:` wins over a spelling, whatever the order; a spelling with no number stays a feature.
+        assert_eq!(ri, [1817.1, 1500.0, 1500.0, -1.0, -1.0]);
+        assert_eq!(lib[4].features["RETENTION_INDEX"], "inf");
+        assert!(!lib[0].features.contains_key("RETENTION_INDEX"));
+        assert_eq!(lib[2].features["RETENTION_INDEX"], "1700");
+        assert_eq!(lib[3].features["RETENTION_INDEX"], "n/a");
     }
 
     /// The old `importMSL` leaves RT and RI at -1 (unknown) when a record has none; 0 stays 0.
