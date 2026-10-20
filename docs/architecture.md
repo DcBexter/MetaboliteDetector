@@ -19,7 +19,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 
 ```
 Cargo.toml              workspace: members crates/*, shared dependencies and lints, release profile
-rust-toolchain.toml     stable toolchain with clippy and rustfmt
+rust-toolchain.toml     pinned Rust version with clippy and rustfmt; Renovate raises it
 crates/md-core/         library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
@@ -32,12 +32,22 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
+  src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
+  src/csv.rs            CSV writer for plotted series
   examples/perf.rs      performance smoke test on synthetic large runs
   examples/batch.rs     batch quantification timing on real files
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
+  src/main.rs           entry point, `App` state and one call per UI area in `ui`
+  src/menu.rs           top menu bar (File, Analysis)
+  src/status.rs         bottom status bar
+  src/run_list.rs       left list of the open runs
+  src/central.rs        centre: TIC/SIC plots, scan cursor, spectrum
+  src/loading.rs        opening files, load polling, SIC jobs
+  src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
+  src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/layout.rs         shared style and list/details split; a test checks no control covers another
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
@@ -61,11 +71,11 @@ TypeScript, Python and C#), so it shows no architecture for this project.
 
 ### Code analysis
 
-`.github/workflows/sonar.yml` runs SonarQube Cloud on `main` and on pull requests. It measures coverage with
-`cargo llvm-cov` (LCOV) and hands Sonar a Clippy JSON report; Sonar does not run Clippy itself. `sonar-project.properties` marks each crate's
+The Ubuntu job of `.github/workflows/ci.yml` runs SonarQube Cloud on `main` and on pull requests, reusing its own build: it measures coverage with
+`cargo llvm-cov` (LCOV) and hands Sonar its Clippy JSON report; Sonar does not run Clippy itself. `sonar-project.properties` marks each crate's
 `src/` as code and `tests/`, `examples/` and `benches/` as test code. Coverage counts `md-core` only: `md-app` just draws, so logic that
 needs tests belongs in `md-core`. Automatic Analysis cannot analyze Rust,
-so it must be off; the job is skipped until the repository secret `SONAR_TOKEN` exists.
+so it must be off; the scan step is skipped until the repository secret `SONAR_TOKEN` exists.
 
 ## Performance rules
 
@@ -182,6 +192,19 @@ RIs of an alkane series (C10, C11, … → 1000, 1100, …); `window_points` tak
 time window per marker. The app's *Analysis → RI calibration* window finds alkanes in the active run
 (m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
 library search, and the status bar shows the RI of the scan or selected component.
+
+Calibration mix (old wizard, [algorithms.md](reverse-engineering/algorithms.md) §6.8): the user picks library
+compounds with RI; the calibration run's components are searched against them by spectrum only, and
+`match_mix` assigns them as the old `matchCompounds` does (mix by ascending RI, each takes the next component
+in time order that has it as a hit). The result is an editable table (use / RT / RI); substances not found
+are unused rows. A change takes effect when the field is left or the drag ends and builds a new
+`RiCalibration` (invalid tables keep the old one and show the error). Each run can take over the table as
+its own calibration and save it as `.calib`; runs without one use the table. Deviations: the old table offered
+the components' times in a combo box, here the time is typed; substances with the same RI are both kept.
+*RT only* (old "Use Retention time for chromatogram alignment (not recommended)", with its warning):
+`RiCalibration::identity()` (RI = time in s) and `PreparedLibrary::new_rt_only` (library RI = library RT in s)
+make the library search and the reference shift compare times. The RT/1000 fallback of §5.6 is still not
+ported for the normal mode.
 
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
@@ -438,6 +461,17 @@ back unchanged. Times match to f32 precision: the old importer kept times as f32
 also re-imports the exported NetCDF files with identical spectra and times; only the stored TIC differs,
 because the example `.cdf` files carry the instrument's `total_intensity`, not the sum of the spectrum.
 
+## Spectrum normalisation and export
+
+`md_core::spectrum::normalize` divides a spectrum by one norm: none, base peak, unit (vector length) or
+relative (total signal), like the old `SpectrumPlot` ([algorithms.md](reverse-engineering/algorithms.md) §7d).
+Spectra are centroid in this rewrite (NetCDF and `.bin` hold ions, not profile points), so there is no
+profile/centroid switch. File → Export (`crates/md-app/src/export.rs`) writes the shown chromatogram of the
+active run (TIC and/or SIC, every scan, not the decimated plot points) and the shown spectrum (with the
+chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plot as PNG. PNG is a crop of
+egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
+renamed.
+
 ## Settings
 
 `md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
@@ -468,10 +502,14 @@ cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
 
-`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy ... -D warnings` and
-`cargo test --workspace` on Ubuntu and Windows for every non-draft PR and every push to `main` that
-touches `crates/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the workflow. It does not fetch the example data, so
-those tests skip themselves; run them locally. Only `main` saves the cargo cache; PRs restore it.
+`.github/workflows/ci.yml` runs for every non-draft PR and every push to `main`, with no paths filter, because the required
+checks must report on every PR. Ubuntu runs `cargo fmt --check`, Clippy (warnings fail), the tests through `cargo llvm-cov` and the
+Sonar scan, so Linux builds once for both; Windows only runs the tests, since no code is platform-specific. PRs without changes to
+`crates/`, the Cargo files, the toolchain, `sonar-project.properties` or the workflow skip the build and only run the Sonar scan;
+`main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
+result for `main`. It does not fetch the example data, so those tests skip themselves;
+run them locally. Only `main` saves the cargo cache; PRs restore it. The cache key
+follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall.
 
 ## Compatibility goals
 

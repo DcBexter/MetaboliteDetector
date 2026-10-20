@@ -703,7 +703,25 @@ scan.setRICalculator(ric); scan.writeIndexFile()
 
 ### 6.7 Unknowns (RI)
 
-- How the wizard proposes the alkane RT/RI table rows (CompoundDetector + library matching in RICalibrationWizard, startRICalibration 0x3e93b8). Not read.
+- Wizard flow (strings, Observed): intro; chromatogram selection (file, "Recalibrate", "Use Retention time for chromatogram alignment (not recommended)" with a warning); "RI Calibration Mix" (library file, mix of library compounds, add/remove); "Calibration Table" ("Adjust the retention time to retention index mapping here"); then `RISetter` per chromatogram, with optional "advanced" reference shift (`CalibrationTablePage::performAdvancedCalibration/getLib/getCutoff`). `CalibrationSetter` (F9 dialog) applies the same to a list of chromatograms.
+
+### 6.8 Mix assignment: CalibrationPage::matchCompounds (0x3eef58, objdump; Observed)
+
+```
+comps  = multimap{ comp.vslot2 (RT) -> hits }  for each detected component (library search without RI)
+mix    = map{ c.vslot3 (RI) -> c }             for each mix compound (the set in the page)
+found  = {}; it = begin(comps)
+for (_, m) in mix (ascending RI):
+    j = it; matched = false
+    while j != end and not matched:
+        (rt, hits) = *j++
+        for h in hits: if h.overall >= cutoff (page field +0x68) and h.compound == m: found[m] = rt; matched = true
+    if matched: it = j          # the next substance starts after this component
+missing = mix - found
+fillTable(found, missing)
+```
+
+`fillTable` (0x3ef57c) writes three columns (name, RT in display unit, RI) and sorts by RI. Found rows: RT from the component. Missing rows: RT = -1, red background, the RT cell edited through a `ComboDelegate` listing the RTs of all detected components. `setDataToChromatogram` (6.6) skips rows with RT < 0, so unmatched substances are left out of the calibration. The RT-only checkbox skips both pages: no `RICalculator` is set and the library search uses RT/1000 instead of RI (5.6).
 - TimeMapper units, and the internal RT unit (ms is Inferred from the `/1000` fallbacks).
 - RICalculator ctor default of `drt` (Inferred 0). The stream format (fromStream 0x6d315a) was not read.
 - `recalibrateChromatograms` (0x3f52ec) was not read.
@@ -795,6 +813,19 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 - Dialog defaults for the pool `count` and MEAN/MEDIAN mode, and the unit of `times`.
 - `ResultSeries::getTotalSampleIntensity` sums `getSummedIntegral`, which would apply the PoolNormalizer when one is set; the GUI never combines pool and sum.
 
+## 7d. Spectrum display normalisation (Observed)
+
+`SpectrumPlot::actNormalizationChanged` (nm 0x4156d2; Ghidra addresses are nm + 0x100000) maps four toolbar actions to `Normalization` = `NONE`, `SUM`, `SSUM`, `BP` and calls `setNormalizationMode`, which re-plots `getNormalizedData` (0x4177de) for the profile and the centroid spectrum. `getNormalizedData` divides every integer intensity by one `norm` (double division, no rounding):
+
+| Mode | `norm` |
+|------|--------|
+| `NONE` | 1 |
+| `BP` | `getBasePeakIntensity()` (0x601d22), the largest intensity |
+| `SSUM` | `getSpectrumVectorLength()` (0x601c32) = `sqrt(Σ i²)` (decompiled) |
+| `SUM` | `getTotalSignal()` (0x601b6e) = Σ i (name only, not decompiled) |
+
+The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of the total signal), `md_core::spectrum::normalize`. A zero norm is not guarded in the old code (division by zero); the rewrite leaves such a spectrum unchanged. The toolbar label strings were not read, so the names Unit/Relative are inferred from the issue. `SplitSpectrumPlot` and `LibrarySpectrumPlot` reuse the same mode.
+
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
@@ -805,7 +836,7 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
    - the `i` update after a rejected peak (possible off-by-one)
    - the identity of vtbl[4]/[5]
 5. MatchedPeakDetector: the density it passes to the filter, its region rules, and raw or filtered values in createPeak.
-6. The RI wizard's automatic alkane assignment (6.7).
+6. (done, 6.8)
 7. Pooled statistics formula (collectedMean/collectedVariance; N-1 denominator Observed) and the meaning of the `n` field in BaselineStatistics.
 8. The source of the noise factor that GCMSAnalyzer passes to setNoiseFactor (Section 2.3).
 9. MID, statistics tests, PCA: not started. Normalisation is done (Section 7c).
@@ -816,4 +847,4 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 - Decompile `Spectrum<int,float>::getBinnedSpectrum` / `getCentroidCompound`.
 - Produce golden output from the old binary on one sample (peaks, components, spectra, hits, RI) and diff the Rust port against it. Reproduce the quirks in 4.5, 5.3 and 7.2 first, then decide whether to fix them.
 
-Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6; wizard auto-assignment open). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Remaining statistics not analyzed.
+Status: Deconvolution complete (Section 4). Library scoring complete (Section 5; binning/centroid internals open). RI calibration complete (Section 6, mix assignment 6.8). Quantification ion selection complete (Section 7.1-7.3). Normalisation reconstructed (Section 7c). Remaining statistics not analyzed.

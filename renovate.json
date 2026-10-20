@@ -13,5 +13,20 @@
   },
   "git-submodules": {
     "enabled": true
-  }
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Pinned Rust toolchain in rust-toolchain.toml",
+      "managerFilePatterns": [
+        "/(^|/)rust-toolchain\\.toml$/"
+      ],
+      "matchStrings": [
+        "channel\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "rust",
+      "packageNameTemplate": "rust-lang/rust",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
 }
