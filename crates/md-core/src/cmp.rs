@@ -7,8 +7,10 @@ use std::path::Path;
 
 use crate::deconv::{Component, FittedPeak};
 use crate::library::{
-    LibraryCompound, LibraryError, LibraryModel, LibraryPeak, Reader, gunzip, read_compound_record,
+    LibraryCompound, LibraryError, LibraryModel, LibraryPeak, LibrarySpectrum, Reader, gunzip,
+    read_compound_record,
 };
+use crate::peaks::Peak;
 
 impl LibraryCompound {
     /// The component as the deconvolution returns it; None without a model peak (a library compound
@@ -36,11 +38,18 @@ impl LibraryCompound {
     }
 }
 
-/// Components and the ion mass of each of their peaks (`FittedPeak::peak` indexes it).
-pub type SavedComponents = (Vec<Component>, Vec<u32>);
+/// Whether `path` names a `.cmp` file.
+pub fn is_cmp(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmp"))
+}
+
+/// Components, the ion mass of each peak and the peaks themselves (`FittedPeak::peak` indexes both
+/// lists), as `settings::analyze` returns them. A saved peak has no ion-trace row (`Peak::row` is 0).
+pub type SavedComponents = (Vec<Component>, Vec<u32>, Vec<Peak>);
 
 /// Components saved next to a run (`<run>.cmp`), ordered by apex like `deconvolute`'s callers use
-/// them, and the ion mass of every peak their `FittedPeak::peak` points to. None without a file; an
+/// them, with the ion mass and the peak of every `FittedPeak::peak`. None without a file; an
 /// error when a component lies outside the run or its apex time does not match the run's
 /// `scan_times_s` (a `.cmp` of another run).
 pub fn saved_components(
@@ -64,7 +73,41 @@ pub fn saved_components(
             c.spectrum.rt_ms
         )));
     }
-    let scans = scan_times_s.len();
+    components_of(&path, &compounds, scan_times_s.len()).map(Some)
+}
+
+/// The components of a `.cmp` file without its run (batch input), and scan times that are right at
+/// the apex scans only (`rt_ms / 1000`, every other scan is 0): all the batch passes read of them.
+pub fn standalone_components(path: &Path) -> Result<(SavedComponents, Vec<f64>), LibraryError> {
+    let compounds = read_cmp(path)?;
+    let scans = (compounds.iter().filter_map(|c| c.model.as_ref()))
+        .map(|m| m.peak.last_scan as usize + 1)
+        .max()
+        .unwrap_or(0);
+    // A scan number far beyond any run would allocate for nothing.
+    if scans > MAX_SCANS {
+        return Err(LibraryError::Unsupported(format!(
+            "{}: scan number {scans} is not plausible",
+            path.display()
+        )));
+    }
+    let mut times = vec![0.0; scans];
+    for c in &compounds {
+        let apex = c.model.as_ref().map(|m| m.peak.max_scan as usize);
+        if let Some(t) = apex.and_then(|a| times.get_mut(a)) {
+            *t = c.spectrum.rt_ms / 1000.0;
+        }
+    }
+    Ok((components_of(path, &compounds, scans)?, times))
+}
+
+const MAX_SCANS: usize = 1 << 22;
+
+fn components_of(
+    path: &Path,
+    compounds: &[LibraryCompound],
+    scans: usize,
+) -> Result<SavedComponents, LibraryError> {
     // Version 4 always has a model peak, so every compound gives a component.
     let mut components: Vec<_> = compounds.iter().filter_map(|c| c.component()).collect();
     if let Some(k) = components.iter().find(|k| {
@@ -80,13 +123,101 @@ pub fn saved_components(
         )));
     }
     // One peak list for the run, like `deconvolute` gets it.
-    let mut masses = Vec::new();
-    for (k, c) in components.iter_mut().zip(&compounds) {
+    let (mut masses, mut peaks) = (Vec::new(), Vec::new());
+    for (k, c) in components.iter_mut().zip(compounds) {
         k.peaks.iter_mut().for_each(|f| f.peak += masses.len());
         masses.extend(c.peaks.iter().map(|p| p.ion.round() as u32));
+        peaks.extend(c.peaks.iter().map(peak_of));
     }
     components.sort_by_key(|k| k.apex_scan);
-    Ok(Some((components, masses)))
+    Ok((components, masses, peaks))
+}
+
+fn peak_of(p: &LibraryPeak) -> Peak {
+    Peak {
+        row: 0,
+        first_scan: p.first_scan,
+        apex_scan: p.max_scan,
+        last_scan: p.last_scan,
+        precise_apex: Some(p.interpolated_max_scan as f32),
+        signal_to_noise: p.signal_to_noise as f32,
+        quality: p.quality as f32,
+        sharpness: p.sharpness as f32,
+    }
+}
+
+/// The compounds the old program saves for a run's `comps` (`masses[p]` and `peaks[p]` as in
+/// [`SavedComponents`], `ris[i]` the RI of component `i`, -1 when unknown). The old map keeps one peak
+/// per ion mass, the first, and writes them in ascending ion order. The name stays empty: a
+/// component has none.
+// shortcut: the model peak carries scan range and values only; its other fields and the noise
+// factor are 0 (not recovered from the old program), and `count` is 1 for every ion peak.
+pub fn compounds_of_components(
+    comps: &[Component],
+    masses: &[u32],
+    peaks: &[Peak],
+    scan_times_s: &[f64],
+    ris: &[f64],
+) -> Vec<LibraryCompound> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    comps
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut ions: Vec<LibraryPeak> = Vec::new();
+            for f in &c.peaks {
+                let (Some(p), Some(&mass)) = (peaks.get(f.peak), masses.get(f.peak)) else {
+                    continue;
+                };
+                if ions.iter().all(|x| x.ion != mass as f32) {
+                    ions.push(LibraryPeak {
+                        ion: mass as f32,
+                        sharpness: f64::from(p.sharpness),
+                        integral: f.integral,
+                        quality: f64::from(p.quality),
+                        signal_to_noise: f64::from(p.signal_to_noise),
+                        count: 1,
+                        first_scan: p.first_scan,
+                        last_scan: p.last_scan,
+                        model_parameter: f.model_share,
+                        max_scan: p.apex_scan,
+                        interpolated_max_scan: p
+                            .precise_apex
+                            .map_or(f64::from(p.apex_scan), f64::from),
+                    });
+                }
+            }
+            ions.sort_by(|a, b| a.ion.total_cmp(&b.ion));
+            let mut model = zero_peak();
+            model.ion = 1.0;
+            model.count = 1;
+            (model.first_scan, model.max_scan, model.last_scan) =
+                (c.first_scan, c.apex_scan, c.last_scan);
+            model.interpolated_max_scan = f64::from(c.apex_scan);
+            let mut compound = LibraryCompound::new("");
+            compound.spectrum = LibrarySpectrum {
+                scan: c.apex_scan,
+                rt_ms: scan_times_s
+                    .get(c.apex_scan as usize)
+                    .map_or(0.0, |t| t * 1000.0),
+                ri: ris.get(i).copied().unwrap_or(-1.0),
+                bin_width: 1.0,
+                masses: c.spectrum.iter().map(|p| p.0 as f32).collect(),
+                values: c.spectrum.iter().map(|p| p.1 as i32).collect(),
+            };
+            compound.peaks = ions;
+            compound.model = Some(LibraryModel {
+                peak: model,
+                noise_factor: 0.0,
+                values: c.model.clone(),
+            });
+            compound.time_stamp = stamp;
+            compound.id = i as i64;
+            compound
+        })
+        .collect()
 }
 
 const VERSION: u32 = 4;
@@ -282,8 +413,6 @@ fn zero_peak() -> LibraryPeak {
 mod tests {
     use super::*;
 
-    use crate::library::LibrarySpectrum;
-
     fn peak(ion: f32, first: u32, apex: u32, last: u32) -> LibraryPeak {
         LibraryPeak {
             ion,
@@ -368,7 +497,11 @@ mod tests {
         let times: Vec<f64> = (0..20).map(|i| 247.16 + (i - 12) as f64 * 0.2).collect();
         assert!(saved_components(&run, &times).unwrap().is_none());
         write_cmp(dir.join("run.cmp"), &sample()).unwrap();
-        let (k, masses) = saved_components(&run, &times).unwrap().unwrap();
+        let (k, masses, peaks) = saved_components(&run, &times).unwrap().unwrap();
+        assert_eq!(
+            (peaks.len(), peaks[1].signal_to_noise, peaks[1].apex_scan),
+            (2, 42.0, 12)
+        );
         assert_eq!(k.len(), 2);
         // sample(): the first compound has peaks at 73 and 147, the second none.
         assert_eq!(masses, [73, 147]);
@@ -385,6 +518,92 @@ mod tests {
         let other: Vec<f64> = times.iter().map(|t| t + 0.1).collect();
         assert!(saved_components(&run, &other).is_err(), "another run");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn components_survive_saving_with_their_peak_values() {
+        use crate::deconv::FittedPeak;
+        use crate::detail::component_detail;
+
+        let pk = |apex, quality, sharpness, snr| Peak {
+            row: 5,
+            first_scan: apex - 2,
+            apex_scan: apex,
+            last_scan: apex + 2,
+            precise_apex: Some(apex as f32 + 0.5),
+            signal_to_noise: snr,
+            quality,
+            sharpness,
+        };
+        // Mass 147 sits twice (§4.5): the first, sharper one counts.
+        let (masses, peaks) = (
+            vec![147, 73, 147, 207],
+            vec![
+                pk(10, 0.5, 9.0, 40.0),
+                pk(10, 1.5, 7.0, 20.0),
+                pk(11, 2.5, 3.0, 10.0),
+                pk(10, 0.0, 5.0, 30.0),
+            ],
+        );
+        let fit = |peak, integral| FittedPeak {
+            peak,
+            model_share: 0.25,
+            integral,
+        };
+        let comps = vec![
+            Component {
+                first_scan: 8,
+                apex_scan: 10,
+                last_scan: 12,
+                model: vec![1.0, 5.0, 9.0, 5.0, 1.0],
+                spectrum: vec![(73, 500), (147, 999), (207, 40)],
+                peaks: vec![fit(0, 900.0), fit(1, 400.0), fit(2, 100.0), fit(3, 30.0)],
+            },
+            Component {
+                first_scan: 3,
+                apex_scan: 4,
+                last_scan: 5,
+                model: vec![1.0, 2.0, 1.0],
+                spectrum: vec![(50, 10)],
+                peaks: vec![],
+            },
+        ];
+        let times: Vec<f64> = (0..20).map(|i| 100.0 + f64::from(i) * 0.5).collect();
+        let compounds = compounds_of_components(&comps, &masses, &peaks, &times, &[1500.0]);
+        assert_eq!(compounds[0].spectrum.ri, 1500.0);
+        assert_eq!(compounds[1].spectrum.ri, -1.0, "no RI given");
+        assert_eq!(compounds[0].spectrum.rt_ms, 105_000.0);
+        let ions: Vec<f32> = compounds[0].peaks.iter().map(|p| p.ion).collect();
+        assert_eq!(ions, [73.0, 147.0, 207.0], "one peak per mass, ascending");
+
+        let dir = std::env::temp_dir().join(format!("md-core-comps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("run.cmp");
+        write_cmp(&file, &compounds).unwrap();
+        let ((back, m2, p2), standalone_times) = standalone_components(&file).unwrap();
+        // Next to its run the file is checked against the run's times; alone it rebuilds the apex times.
+        let (back2, ..) = saved_components(&dir.join("run.cdf"), &times)
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(back, back2);
+        assert_eq!(standalone_times[10], 105.0);
+        // Components come back ordered by apex, so the one saved first is second now.
+        assert_eq!((back[1].apex_scan, back[0].apex_scan), (10, 4));
+        let (mut before, after) = (
+            component_detail(&comps[0], &peaks, &masses),
+            component_detail(&back[1], &p2, &m2),
+        );
+        // The old file keeps its ion peaks ascending by mass, not sharpest first.
+        before.peaks.sort_by_key(|r| r.mass);
+        assert_eq!(
+            before, after,
+            "panel values from the file equal the originals"
+        );
+        assert_eq!(after.peaks.len(), 3);
+        assert_eq!(back[1].spectrum, comps[0].spectrum);
+        assert_eq!(back[1].model, comps[0].model);
+        assert_eq!(p2[0].precise_apex, Some(10.5));
     }
 
     #[test]

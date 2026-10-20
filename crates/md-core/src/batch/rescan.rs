@@ -49,7 +49,7 @@ type Rescued = (usize, Vec<IonPeak>, f64);
 
 /// Looks for the quant ions each substance lacks in a run (see the module doc) and adds them to the
 /// run's `found`. Substances absent from a run get a `Found` with `rescanned` set. Runs are read
-/// again, at most `parallel` at a time, and only if they have gaps. Returns the number of ions added
+/// again, at most `parallel` at a time, and only if they have gaps; `.cmp` inputs are skipped. Returns the number of ions added
 /// and the files that could not be read (their runs stay as they were), or `None` once `cancel` is set.
 /// The quant ions come from `q`, as `table` would choose them with the same settings.
 #[allow(clippy::too_many_arguments)]
@@ -63,7 +63,10 @@ pub fn rescan_runs(
     parallel: usize,
     cancel: &AtomicBool,
 ) -> Option<(usize, Vec<String>)> {
-    let work: Vec<(usize, Vec<Todo>)> = plan(runs, lib, extra, q, r).into_iter().collect();
+    // A `.cmp` input has no raw data to look into.
+    let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, r).into_iter())
+        .filter(|(i, _)| !crate::cmp::is_cmp(&runs[*i].path))
+        .collect();
     let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
     let next = AtomicUsize::new(0);
     let mut done: Vec<(usize, Result<Vec<Rescued>, String>)> = std::thread::scope(|scope| {
