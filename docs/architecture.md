@@ -600,7 +600,11 @@ end
 The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
 active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
-comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
+comments and other features. Collapsed sections (`library_editor/extras.rs`) show the automatic quant ions
+("Use as quant ions", "Clear automatic ions"), the ion frequency with the spectrum count (read only), the resolution
+(`bin_width`, read only) and the v5 MID fragments as a table (start, end, sum formula checked with `isotope::parse_formula`, MID size:
+add, change, remove). That table is the list the MID wizard reads (`mid::series::fragments`); the `FRAG` feature is a separate list
+that only the FRAG export reads. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
 and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. "Export MSL" writes the library as AMDIS text in the three
 types of the old export dialog (Nominal, Profile, FWHM; `library::write_msl_as`, file-formats.md §6.2) and only to a
@@ -691,7 +695,9 @@ window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. 
 shown table (`mid::frag_export`). The worker also computes the mean and standard error of the labelled
 runs (`mid::group_stat`, per-run methods) and the old result window's text exports (`Mids::run_text`,
 `stats_text`, `group_text`, numbers in Qt's `%g` via `mid::qt_g`); the window shows them as table
-columns and bar plots and saves or copies the texts. Methods 2 and 3, the statistics and both per-run
+columns and bar plots and saves or copies the texts. ‹ › move a run column and ▲ ▼ a substance with its
+tables and plots; the window then swaps the fits or substances in its `Mids` and rebuilds the statistics
+and texts, so the exports follow the shown order (old reorder dialogs and deviations: algorithms.md §7g.7). Methods 2 and 3, the statistics and both per-run
 exports are tested against the old `MIDCompoundSeries`, methods 0 and 1 and the group export against the
 old `MIDWizard::Calculate` and `MIDResultWidget` (`tests/mid_series.rs`, harness
 `docs/reverse-engineering/tools/isotopes/make-midseries.sh`; the old program computes but never shows the

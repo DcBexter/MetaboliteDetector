@@ -85,7 +85,7 @@ fn wait(h: &mut Harness<'_, App>, done: impl Fn(&App) -> bool) {
 /// A library made of the first run's components, so the hit panel and labels have real scores.
 fn library(app: &App) -> identify::Library {
     let run = &app.runs[0];
-    let compounds: Vec<_> = (run.components.iter())
+    let mut compounds: Vec<_> = (run.components.iter())
         .map(|k| {
             let rt = run.data.scan_times_s[k.apex_scan as usize];
             let mut c = LibraryCompound::new(&format!("Compound at {:.2} min", rt / 60.0));
@@ -94,6 +94,14 @@ fn library(app: &App) -> identify::Library {
             c
         })
         .collect();
+    // The first substance shows the fields of the newer library versions.
+    if let Some(c) = compounds.first_mut() {
+        c.auto_quant_ions = c.spectrum.masses.iter().take(3).copied().collect();
+        c.ion_freq = c.spectrum.masses.iter().map(|&m| (m, 3)).collect();
+        c.spec_count = 3;
+        c.formulas.push((73, 76, "C3H9Si".into()));
+        c.mid_sizes.push((73, 76, 4));
+    }
     let settings = app.settings.applied.search();
     identify::Library {
         path: "screenshots.mdlib".into(),
@@ -217,6 +225,12 @@ fn screenshots() {
                 .expect("no compound in the library editor list")
                 .click();
             h.run_steps(2);
+            for section in ["Automatic quant ions", "MID fragments (sum formulas)"] {
+                h.get_by_label(section).click();
+                h.run_steps(2);
+            }
+            // A grid takes its column widths from the frame before.
+            h.run_steps(3);
         }
         shots.save(&mut h, name);
         *open(h.state_mut()) = false;
