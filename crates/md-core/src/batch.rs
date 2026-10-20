@@ -717,6 +717,8 @@ pub fn table(
     };
     let group = |n: &str| match (s.sample_groups.get(&run_key(n)), pattern.captures(n)) {
         (Some(g), _) => g.clone(),
+        // A run the table lacks is a group of its own, not part of "all runs".
+        _ if s.replicates.is_empty() && !s.sample_groups.is_empty() => n.into(),
         _ if s.replicates.is_empty() => String::new(),
         (_, Some(c)) => c.get(1).or(c.get(0)).map_or("", |m| m.as_str()).into(),
         (_, None) => n.into(),
@@ -1056,8 +1058,10 @@ mod tests {
             sizes,
             BTreeMap::from([("0", 3), ("1", 3), ("2", 3), ("3", 3), ("4", 3)])
         );
-        // A run the table lacks falls back to the pattern.
+        // A run the table lacks is a group of its own, or follows the pattern if there is one.
         let more = [runs, vec![run("extra_9.cdf", vec![])]].concat();
+        let t = table(&more, &[], &[], &s).unwrap();
+        assert_eq!(t.groups.last().unwrap(), "extra_9.cdf");
         let s = TableSettings {
             replicates: "^([a-z]+)_".into(),
             ..s

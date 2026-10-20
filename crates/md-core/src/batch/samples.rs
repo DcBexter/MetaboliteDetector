@@ -2,16 +2,17 @@
 //! columns `CDF_FILE` and `TIME_POINT`. CSV, TSV or semicolon-separated, first line = column names.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// Run key (lower-case file name without extension) → replicate group.
 pub type SampleGroups = BTreeMap<String, String>;
 
-/// Key of a run or table entry: path and extension do not matter, nor the case (Windows).
+/// Key of a run or table entry: path, the extension of a run file and the case (Windows) do not matter.
 pub fn run_key(name: &str) -> String {
-    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let stem = Path::new(file).file_stem().unwrap_or_default();
-    stem.to_string_lossy().to_lowercase()
+    let file = (name.rsplit(['/', '\\']).next().unwrap_or(name)).to_lowercase();
+    match file.rsplit_once('.') {
+        Some((stem, "cdf" | "nc" | "bin" | "cmp" | "fft")) => stem.into(),
+        _ => file,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,13 +51,25 @@ impl SampleTable {
             })
     }
 
+    /// The columns to start with: `CDF_FILE` (else the first) and `TIME_POINT` (else the last).
+    pub fn default_columns(&self) -> (usize, usize) {
+        let last = self.columns.len() - 1;
+        (
+            self.column("CDF_FILE").unwrap_or(0),
+            self.column("TIME_POINT").unwrap_or(last),
+        )
+    }
+
     /// Group of each run named in column `file`, taken from column `group`. Rows without a file or a
-    /// group are skipped; a run named twice with different groups is an error.
+    /// group (or that end before them) are skipped; a run named twice with different groups is an error.
     pub fn groups(&self, file: usize, group: usize) -> Result<SampleGroups, String> {
+        if file == group {
+            return Err("choose different columns for the files and the groups".into());
+        }
         let mut out = SampleGroups::new();
-        for (i, row) in self.rows.iter().enumerate() {
+        for row in &self.rows {
             let (Some(f), Some(g)) = (row.get(file), row.get(group)) else {
-                return Err(format!("row {}: too few columns", i + 2));
+                continue;
             };
             if f.is_empty() || g.is_empty() {
                 continue;
@@ -100,8 +113,21 @@ mod tests {
         assert!(SampleTable::parse("  \n").is_err());
         let t = SampleTable::parse("File,Group\na.cdf,x\nb.cdf\na.cdf,y\n").unwrap();
         assert!(t.column("nope").unwrap_err().contains("File, Group"));
-        assert!(t.groups(0, 1).unwrap_err().starts_with("row 3"));
-        let t = SampleTable::parse("File,Group\na.cdf,x\nA.CDF,y\n").unwrap();
+        // b.cdf ends before the group column and is skipped; a.cdf has two groups.
         assert!(t.groups(0, 1).unwrap_err().contains("groups x and y"));
+        assert!(t.groups(1, 1).is_err());
+        let t = SampleTable::parse("File,Group\na.cdf,x\nb.cdf\n").unwrap();
+        assert_eq!(t.groups(0, 1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn default_columns_follow_the_example_table() {
+        let t = SampleTable::parse("CDF_FILE\tMEASUREMENT_DAY\tTIME_POINT\n").unwrap();
+        assert_eq!(t.default_columns(), (0, 2));
+        let t = SampleTable::parse("run,group").unwrap();
+        assert_eq!(t.default_columns(), (0, 1));
+        // A dot in a name stays unless it starts a run file extension.
+        assert_eq!(run_key("d/Sample.1.CDF"), "sample.1");
+        assert_eq!(run_key("sample.1"), "sample.1");
     }
 }

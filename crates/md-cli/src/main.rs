@@ -37,8 +37,8 @@ Options:
       --replicates REGEX      replicate group = first capture group of the file name
       --sample-table FILE     replicate groups from a CSV/TSV table (first line = column names); runs it
                               lacks are grouped by --replicates
-      --sample-file-column N  column with the run file names (default: the first)
-      --sample-group-column N column with the group (default: the second)
+      --sample-file-column NAME column with the run file names (default: CDF_FILE, else the first)
+      --sample-group-column NAME column with the group (default: TIME_POINT, else the last)
       --min-reproducibility F keep a substance only if a group quantifies it in this share of its runs
       --min-ions N            quant ions that must be found for a value
       --ions N                quant ions per substance (default: QUANT_ION_NUMBER of the settings)
@@ -228,9 +228,10 @@ fn run(a: Args) -> Result<bool, String> {
             Some(n) => t.column(n),
             None => Ok(default),
         };
+        let (file, group) = t.default_columns();
         let (file, group) = (
-            col(&a.sample_file_column, 0)?,
-            col(&a.sample_group_column, 1)?,
+            col(&a.sample_file_column, file)?,
+            col(&a.sample_group_column, group)?,
         );
         ts.sample_groups = t
             .groups(file, group)
@@ -535,10 +536,10 @@ mod tests {
         assert!(run(args(&with(cols)).unwrap().unwrap()).unwrap());
         let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
         assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,5\n");
-        // Without names the first two columns are used; NOTE names no run, so the pattern applies.
+        // Without names CDF_FILE and TIME_POINT are used.
         assert!(run(args(&with("")).unwrap().unwrap()).unwrap());
         let groups = std::fs::read_to_string(dir.join("out.groups.csv")).unwrap();
-        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,ctrl\n");
+        assert_eq!(groups, "\u{feff}Run,Group\nctrl_1.cdf,5\n");
         let err = run(args(&with("--sample-group-column nope")).unwrap().unwrap()).unwrap_err();
         assert!(err.contains("no column nope"), "{err}");
         assert!(args(&format!("{line} --sample-group-column x")).is_err());

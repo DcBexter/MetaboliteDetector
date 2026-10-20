@@ -266,10 +266,10 @@ fn samples_row(
                 .and_then(|t| SampleTable::parse(&t))
             {
                 Ok(table) => {
-                    let group = 1.min(table.columns.len() - 1);
+                    let (file, group) = table.default_columns();
                     let mut s = Samples {
                         table,
-                        file: 0,
+                        file,
                         group,
                         error: None,
                     };
