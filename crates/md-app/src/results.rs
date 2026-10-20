@@ -20,9 +20,8 @@ const HEAD: [&str; 8] = [
     "Quant. Ions",
 ];
 
-/// What the cached rows were built from: active run, its components and its identification (a new
-/// one is allocated while the old one is still alive, so the addresses differ).
-type Stamp = (usize, usize, usize);
+/// What the cached rows were built from: active run and its `rev`.
+type Stamp = (usize, u64);
 
 #[derive(Default)]
 pub struct Results {
@@ -52,15 +51,11 @@ impl Results {
             ui.label("Open a chromatogram first.");
             return;
         };
-        let Some(((lib, ..), id, _)) = &run.ident else {
+        let Some(((lib, ..), _, _)) = &run.ident else {
             ui.label("Open a library to identify the components of the run.");
             return;
         };
-        let stamp = (
-            active,
-            run.components.as_ptr() as usize,
-            id.hits.as_ptr() as usize,
-        );
+        let stamp = (active, run.rev);
         let mut cache = self.cache.take().filter(|c| c.0 == stamp);
         if cache.is_none() {
             cache = Some((stamp, build_rows(run)));
@@ -82,6 +77,7 @@ impl Results {
             );
             if !self.filter.is_empty() && ui.button("Clear").clicked() {
                 self.filter.clear();
+                self.looked_up = None;
             }
         });
         let want = self.filter.to_lowercase();
@@ -400,6 +396,7 @@ mod tests {
                 None,
             )),
             ident_job: None,
+            rev: 0,
         }
     }
 
@@ -423,5 +420,30 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "Alanine");
         assert_eq!(rows[0].area, Some(5.0));
+    }
+
+    #[test]
+    fn a_new_result_rebuilds_the_rows() {
+        let ctx = egui::Context::default();
+        let mut runs = vec![run()];
+        let mut r = Results {
+            open: true,
+            ..Default::default()
+        };
+        let draw = |r: &mut Results, runs: &mut Vec<Run>| {
+            ctx.run_ui(Default::default(), |ui| r.window(ui.ctx(), runs, 0))
+                .textures_delta
+                .clear();
+        };
+        draw(&mut r, &mut runs);
+        assert_eq!(r.cache.as_ref().unwrap().1.len(), 2);
+        // The hits shrink with the components; a stale cache would index past them.
+        runs[0].components.truncate(1);
+        let id = &mut runs[0].ident.as_mut().unwrap().1;
+        id.hits.truncate(1);
+        id.assigned.truncate(1);
+        runs[0].rev += 1;
+        draw(&mut r, &mut runs);
+        assert_eq!(r.cache.as_ref().unwrap().1.len(), 1);
     }
 }

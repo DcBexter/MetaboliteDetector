@@ -136,6 +136,8 @@ struct Run {
     /// Library hits of `components` once a library is open.
     ident: Option<identify::Identified>,
     ident_job: Option<identify::IdentJob>,
+    /// Counts every replacement of `components` and `ident`, so caches can tell a new result from the old.
+    rev: u64,
 }
 
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).

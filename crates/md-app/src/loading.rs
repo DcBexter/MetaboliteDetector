@@ -36,6 +36,7 @@ impl App {
                             visible: true,
                             ident: None,
                             ident_job: None,
+                            rev: 0,
                         })
                     }
                 })

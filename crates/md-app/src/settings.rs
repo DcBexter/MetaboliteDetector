@@ -82,6 +82,7 @@ impl Settings {
                                 (run.components, run.peak_masses) = (components, masses);
                                 // Selection and library hits belong to the old components.
                                 (run.component, run.ident, run.ident_job) = (None, None, None);
+                                run.rev += 1;
                             }
                             Err(e) => error = Some(format!("{}: {e}", run.name)),
                         }
