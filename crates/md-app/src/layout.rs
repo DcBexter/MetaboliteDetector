@@ -190,7 +190,10 @@ mod tests {
             if let Some(n) = name(w)
                 && !CONTAINERS.contains(&n.0.as_str())
                 && w.rect.width() > 0.0
-                // Scrolled out of view vertically: hidden, and its row's twins in view are checked.
+                // Scrolled out of view vertically: hidden, so not cut off.
+                // shortcut: assumes a scroll area did the hiding, so a row unique to the hidden
+                // part, or content hidden by a clip that does not scroll, goes unchecked; check
+                // the clip owner if such content appears.
                 && r.1.height() > 0.0
                 && (left || right)
                 && !bars.iter().any(scrolls)
