@@ -506,17 +506,20 @@ impl eframe::App for App {
             }
 
             export::norm_picker(ui, &mut self.export.norm);
+            let top = ui.cursor().min;
             let (name, mz, y) = export::shown_spectrum(run, self.export.norm);
             let bars = mz.iter().zip(&y).map(|(m, i)| Bar::new(*m, *i).width(0.3));
             let label = match self.export.norm {
                 md_core::spectrum::Normalization::None => "Intensity",
                 _ => "Normalised intensity",
             };
-            let plot = Plot::new("spectrum")
+            Plot::new("spectrum")
                 .x_axis_label("m/z")
                 .y_axis_label(format!("{label} — {}", run.name))
                 .show(ui, |p| p.bar_chart(BarChart::new(name, bars.collect())));
-            self.export.spectrum = plot.response.rect;
+            // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
+            self.export.spectrum =
+                egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
         });
     }
 }

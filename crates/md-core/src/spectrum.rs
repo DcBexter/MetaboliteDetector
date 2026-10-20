@@ -30,8 +30,8 @@ impl Normalization {
 
 /// Intensities divided by the norm of `mode`. A spectrum whose norm is not a positive finite number
 /// (empty, all zero) stays unchanged: the old code divided by zero and plotted NaN.
-pub fn normalize(intensity: &[f32], mode: Normalization) -> Vec<f64> {
-    let values = intensity.iter().map(|v| f64::from(*v));
+pub fn normalize(intensity: &[f64], mode: Normalization) -> Vec<f64> {
+    let values = intensity.iter().copied();
     let norm = match mode {
         Normalization::None => 1.0,
         Normalization::BasePeak => values.clone().fold(0.0, f64::max),
@@ -50,7 +50,7 @@ pub fn normalize(intensity: &[f32], mode: Normalization) -> Vec<f64> {
 mod tests {
     use super::*;
 
-    const SPECTRUM: [f32; 3] = [3.0, 4.0, 0.0];
+    const SPECTRUM: [f64; 3] = [3.0, 4.0, 0.0];
 
     #[test]
     fn each_mode_divides_by_its_norm() {

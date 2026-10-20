@@ -34,13 +34,13 @@ impl Default for Export {
 /// The spectrum on screen: title, m/z and (normalised) intensities. The deconvoluted spectrum of a
 /// selected component replaces the raw scan.
 pub fn shown_spectrum(run: &Run, norm: Normalization) -> (&'static str, Vec<f64>, Vec<f64>) {
-    let (title, mz, intensity): (_, Vec<f64>, Vec<f32>) = match run.component {
+    let (title, mz, intensity): (_, Vec<f64>, Vec<f64>) = match run.component {
         Some(k) => {
             let s = &run.components[k].spectrum;
             (
                 "deconvoluted spectrum",
                 s.iter().map(|(m, _)| f64::from(*m)).collect(),
-                s.iter().map(|(_, h)| *h as f32).collect(),
+                s.iter().map(|(_, h)| f64::from(*h)).collect(),
             )
         }
         None => {
@@ -48,7 +48,7 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (&'static str, Vec<f64>
             (
                 "spectrum",
                 mz.iter().map(|m| f64::from(*m)).collect(),
-                i.to_vec(),
+                i.iter().map(|v| f64::from(*v)).collect(),
             )
         }
     };
