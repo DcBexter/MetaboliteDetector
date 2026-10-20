@@ -57,6 +57,9 @@ impl App {
         if ui.button("Biomarker statistics…").clicked() {
             self.statistics.open = true;
         }
+        if ui.button("Run info…").clicked() {
+            self.view.info_open = true;
+        }
         if ui.button("Natural isotopes…").clicked() {
             self.isotopes.open = true;
         }
