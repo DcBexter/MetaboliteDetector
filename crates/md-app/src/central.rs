@@ -77,12 +77,13 @@ const LABEL_GAP_PX: f32 = 6.0;
 /// A click this close to a component apex (along the time axis) selects the component.
 const SNAP_PX: f64 = 10.0;
 
-/// One chromatogram plot with a line per run and `marks` as dots, unzoomed when `reset`; returns
+/// One chromatogram plot with a line per run and `marks` as dots, unzoomed when `reset`, moved by `nav`
+/// (only in one of two linked plots: the link hands the change to the other); returns
 /// the clicked retention time and the snap radius `SNAP_PX`, both in minutes.
 #[allow(clippy::too_many_arguments)]
 fn trace_plot(
     ui: &mut egui::Ui,
-    (id, reset): (&str, bool),
+    (id, reset, nav): (&str, bool, Option<Nav>),
     label: &str,
     height: f32,
     runs: &[Run],
@@ -92,6 +93,8 @@ fn trace_plot(
     marks: &[[f64; 2]],
     labels: &[identify::Label],
 ) -> Option<(f64, f64)> {
+    // Neither a run colour nor the dots' red, so the triangles stand out from the lines.
+    let marker = ui.visuals().strong_text_color();
     let link = egui::Id::unique("chromatograms");
     let mut plot = Plot::new(id);
     if reset {
@@ -124,7 +127,7 @@ fn trace_plot(
                     p.line(Line::new(run.name.as_str(), points).color(color(i)));
                 }
             }
-            if let Some(nav) = view.nav {
+            if let Some(nav) = nav {
                 nav.apply(p);
             }
             let b = p.plot_bounds();
@@ -143,7 +146,12 @@ fn trace_plot(
                     Points::new("components", marks.iter().map(at).collect::<Vec<_>>()).radius(3.0),
                 );
                 // Triangles on the x axis: bigger click targets than the dots.
-                let y = y_lo + 8.0 * (y_hi - y_lo) / p.response().rect.height().max(1.0) as f64;
+                // With Auto Y off and the plot fitting its items itself, a triangle below the data
+                // would lower the range every frame, so it sits on the lowest data point.
+                let y = match y_span {
+                    Some((low, _)) if !view.auto_y && p.auto_bounds().y => low,
+                    _ => y_lo + 8.0 * (y_hi - y_lo) / p.response().rect.height().max(1.0) as f64,
+                };
                 let tri = marks
                     .iter()
                     .map(|m| [view.time(m[0]), y])
@@ -151,7 +159,8 @@ fn trace_plot(
                 p.points(
                     Points::new("components", tri)
                         .shape(egui_plot::MarkerShape::Up)
-                        .radius(5.0),
+                        .radius(5.0)
+                        .color(marker),
                 );
             }
             // Hide overlapping names, best score first (3.3 does the same).
@@ -372,7 +381,7 @@ impl App {
             };
             clicked = trace_plot(
                 ui,
-                ("tic", reset),
+                ("tic", reset, self.view.nav),
                 &self.derivative_label("TIC".into()),
                 height,
                 &self.runs,
@@ -388,7 +397,11 @@ impl App {
             let label = self.derivative_label(label);
             let sic = trace_plot(
                 ui,
-                ("sic", reset),
+                (
+                    "sic",
+                    reset,
+                    self.view.nav.filter(|_| self.trace == Trace::Sic),
+                ),
                 &label,
                 height,
                 &self.runs,
