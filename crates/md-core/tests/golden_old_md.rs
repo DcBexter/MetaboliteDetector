@@ -1,5 +1,6 @@
-//! Golden test: peaks and deconvolution against the old MetaboliteDetector 3.3 on the example runs.
-//! The reference `tests/data/old-md-3.3.tsv` comes from the old binary itself
+//! Golden test: peaks and deconvolution against the old MetaboliteDetector 3.3 on the example runs,
+//! with the default and the matched peak detector. The references `tests/data/old-md-3.3*.tsv` come
+//! from the old binary itself
 //! (docs/reverse-engineering/tools/golden/make-reference.sh); tolerances are explained in
 //! docs/architecture.md ("Golden test"). Passes without checking anything when example-data/ is
 //! missing. `--nocapture` prints every difference.
@@ -8,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use md_core::deconv::{DeconvSettings, deconvolute};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::peaks::{Detector, IonTraces, PeakSettings};
 
 /// The reference prints S/N with 6 significant digits.
 const SN_TOLERANCE: f64 = 1e-5;
@@ -16,10 +17,14 @@ const SN_TOLERANCE: f64 = 1e-5;
 const HEIGHT_TOLERANCE: u32 = 1;
 /// Integrals: the reference prints 7 significant digits.
 const INTEGRAL_TOLERANCE: f64 = 1e-5;
-/// Known deconvolution differences: precise-apex ties the old GSL fit rounds up (docs/architecture.md).
-const KNOWN_MISSING_COMPONENTS: usize = 1;
-const KNOWN_OTHER_IONS: usize = 3;
-const KNOWN_OTHER_VALUES: usize = 1;
+
+/// Components the port may miss, pair with other ions or apex, or give other values, and why.
+struct Known {
+    missing: usize,
+    extra: usize,
+    other_ions: usize,
+    other_values: usize,
+}
 
 #[derive(Default)]
 struct RefRun {
@@ -35,8 +40,7 @@ struct RefComp {
     ions: Vec<(u32, u32, f64)>,
 }
 
-fn reference() -> Vec<RefRun> {
-    let text = include_str!("data/old-md-3.3.tsv");
+fn reference(text: &str) -> Vec<RefRun> {
     let mut runs: Vec<RefRun> = Vec::new();
     for line in text.lines().filter(|l| !l.starts_with('#')) {
         let f: Vec<&str> = line.split('\t').collect();
@@ -77,6 +81,38 @@ struct Count {
 
 #[test]
 fn matches_old_version() {
+    // Precise-apex ties the old GSL fit rounds up (docs/architecture.md).
+    let known = Known {
+        missing: 1,
+        extra: 0,
+        other_ions: 3,
+        other_values: 1,
+    };
+    compare(
+        include_str!("data/old-md-3.3.tsv"),
+        &PeakSettings::default(),
+        known,
+    );
+}
+
+#[test]
+fn matches_old_version_with_matched_filtering() {
+    // The same precise-apex ties, far more often on the integer filtered traces: fed with the old
+    // precise apex values, every component of 7235eg04 matches (docs/architecture.md).
+    let known = Known {
+        missing: 43,
+        extra: 38,
+        other_ions: 66,
+        other_values: 41,
+    };
+    let peaks = PeakSettings {
+        detector: Detector::MATCHED,
+        ..PeakSettings::default()
+    };
+    compare(include_str!("data/old-md-3.3-matched.tsv"), &peaks, known);
+}
+
+fn compare(text: &str, settings: &PeakSettings, known: Known) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../example-data/TargetSearchData/inst/gc-ms-data");
     if !dir.is_dir() {
@@ -86,13 +122,13 @@ fn matches_old_version() {
         );
         return;
     }
-    let runs = reference();
+    let runs = reference(text);
     assert_eq!(runs.len(), 15);
     let (mut peak_runs, mut total) = (0, Count::default());
     for r in &runs {
         let c = md_core::andi::read(dir.join(&r.name)).unwrap();
-        let traces = IonTraces::new(&c).unwrap();
-        let peaks = traces.detect_peaks(&PeakSettings::default());
+        let mut traces = IonTraces::new(&c).unwrap();
+        let peaks = traces.detect_peaks(settings);
         let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
         let mass = |row: u32| traces.masses[row as usize];
 
@@ -112,9 +148,9 @@ fn matches_old_version() {
                     .iter()
                     .find(|p| mass(p.row) == ion && p.apex_scan == apex)
                     .unwrap();
-                let dev = (p.signal_to_noise as f64 - sn).abs() / sn;
+                // The matched detector leaves S/N at the old default -1.
                 assert!(
-                    dev <= SN_TOLERANCE,
+                    (p.signal_to_noise as f64 - sn).abs() <= SN_TOLERANCE * sn.abs(),
                     "{}: ion {ion} scan {apex} S/N {sn} vs {}",
                     r.name,
                     p.signal_to_noise
@@ -191,8 +227,11 @@ fn matches_old_version() {
     }
     eprintln!("total: {total:?}");
     assert_eq!(peak_runs, 3);
-    assert_eq!(total.extra, 0, "new components without an old partner");
-    assert!(total.missing <= KNOWN_MISSING_COMPONENTS, "{total:?}");
-    assert!(total.other_ions <= KNOWN_OTHER_IONS, "{total:?}");
-    assert!(total.other_values <= KNOWN_OTHER_VALUES, "{total:?}");
+    assert!(
+        total.extra <= known.extra,
+        "new components without an old partner: {total:?}"
+    );
+    assert!(total.missing <= known.missing, "{total:?}");
+    assert!(total.other_ions <= known.other_ions, "{total:?}");
+    assert!(total.other_values <= known.other_values, "{total:?}");
 }

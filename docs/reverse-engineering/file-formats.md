@@ -24,48 +24,62 @@ Container: gzip (`ogzstream`, Observed in `LibraryCompound::toDisk` 0x721070). S
 
 Top level (Observed, `LibraryCompound::toDisk` 0x721070): `ogzstream` open, then `u32 version = 5`
 (writer), `u32 compound_count`, then `compound_count` x `LibraryCompound::toStream`.
-The sample file has `version = 2` (produced by an older writer). Parser support: version 2 only.
+The sample file has `version = 2` (produced by an older writer). The old reader
+(`LibraryCompound::fromStream` 0x71fe5c) accepts versions 2 to 5; the gates are listed in 1.2.
+
+Reference files: `tools/golden/make-lbr-v5.sh` makes version 5 files with the old program itself (reading
+the sample and saving it, adding fragments with `addFragment`, an MSL export and import, and compounds from
+a deconvoluted run) and dumps what the old reader gets back (`old.tsv`). They are never committed.
 
 ### 1.1 Top-level fields
 
 | Offset | Type | Meaning | Tag |
 |---|---|---|---|
-| 0 | u32 | version (writer 5; sample 2) | Observed (toDisk 0x721070); sample value Observed (byte check) |
+| 0 | u32 | version (writer 5; sample 2) | Observed (toDisk 0x721070; sample and v5 files byte-checked) |
 | 4 | u32 | compound count | Observed (toDisk 0x721070) |
 | 8 | record | LibraryCompound records (see 1.2) | Observed |
 
 ### 1.2 LibraryCompound record (per compound)
 
-Order as implemented by `parse_lbr.py` (validated on all 27 sample compounds, every check value matches):
+Observed in `LibraryCompound::toStream` 0x71f832 and `fromStream` 0x71fe5c (disassembly), checked byte
+by byte on the version 2 sample and on version 5 files written by the old program (`md-core/tests/lbr_sample.rs`,
+2026-10-20: every field, peak and model value of 97 compounds matches `old.tsv`).
 
-| # | Type | Meaning | Tag |
+| # | Type | Meaning | Versions |
 |---|---|---|---|
-| 1 | Spectrum | reference spectrum (see 1.4) | Observed (Spectrum::toStream 0x7027a2, verified by parser) |
-| 2 | Compound | compound header (see section 3) | Observed (Compound::toStream 0x70fcba, verified by parser) |
-| 3 | u32 count + (f32 mz, i32 intensity)[count] | `comb_spec` (combined spectrum) | Observed (LibraryCompound::toStream 0x71f832, element types Inferred from parser) |
-| 4 | u32 count + (f32, u32)[count] | `ion_freq` (ion frequency map) | Observed (toStream 0x71f832); element types Inferred |
-| 5 | u32 | `spec_count` | Observed (toStream 0x71f832) |
-| 6 | u32 count + f64[count] | `ris` (retention index list) | Observed (toStream 0x71f832); element type Inferred |
-| 7 | u32 count + 40-byte block records | **unresolved** block list between `ris` and `sources` (see 1.3) | Observed in sample bytes; semantics Unknown |
-| 8 | u32 count + string[count] | `sources` | Observed (toStream 0x71f832) |
+| 1 | Spectrum | reference spectrum (see 1.4) | all |
+| 2 | Compound | compound record (section 3.2): n_peaks, peaks, model, name ... check | all |
+| 3 | u32 count + (f32 mz, i32 intensity)[count] | `comb_spec` (combined spectrum, `map<float,int>`) | all |
+| 4 | u32 count + (f32, u32)[count] | `ion_freq` (ion frequency map) | all |
+| 5 | u32 | `spec_count` | all |
+| 6 | u32 count + f64[count] | `ris` (retention index list) | all |
+| 7 | u32 count + 40-byte peak records (1.3) | old peak list, given to the compound with `setPeaks` | 2 and 3 only |
+| 8 | u32 count + string[count] | `sources` | all |
+| 9 | u32 count + (u32 begin, u32 end, string formula)[count] | `formulas` (`pair<ulong,ulong>` written as 2 x u32); the reader trims each formula (`trimFormulas` 0x721876, boost `trim`) | 3 and later |
+| 10 | u32 count + (u32 begin, u32 end, u32 size)[count] | `mid_sizes` | 5 only |
 
-Not present in the sample data (the parser raises NotImplementedError): `formulas` and `mid_sizes`, which
-the decompiled `toStream` lists after `sources`. Their layouts are Unknown.
+Both maps are sorted by key: `addFragment(73,147," C3H9Si ",2)` then `(5,6,"N",0)` is written as
+`(5,6,"N"), (73,147,"C3H9Si")` and mid sizes `(5,6,0), (73,147,2)` (Observed, `fragments_v5.lbr`).
 
-### 1.3 Block record (40 bytes, sample only)
+Versions 2 and 3 compounds with `n_peaks > 0` store `Peak<int,float>` records whose layout is not decoded;
+the rewrite rejects them. The sample and all v5 files have none of those (Observed).
 
-| Offset in record | Type | Value in sample | Meaning | Tag |
-|---|---|---|---|---|
-| 0 | f32 | m/z | | Observed (byte check) |
-| 4 | f64 | 1.0 | constant | Observed (byte check) |
-| 12 | f64 | intensity | equals the comb_spec intensity for the same m/z | Observed (byte check) |
-| 20 | f64 | 0.0 | constant | Observed (byte check) |
-| 28 | f64 | -1.0 | constant | Observed (byte check) |
-| 36 | u32 | 1 | constant | Observed (byte check) |
+### 1.3 Peak record of versions 2 and 3 (40 bytes)
 
-Discrepancy: the v5 `LibraryCompound::toStream` field list in the decompile does not show a block list
-between `ris` and `sources`, but the version 2 sample contains one. The meaning of the block list
-(likely a version 2 model or peak list) is an open gap.
+`PeakEssential<float>` in its pre-version-4 form (Observed: `PeakEssential<float>::fromStream` 0x6fa23c reads
+these fields and stops for versions below 4; the old program turns them into the v5 peaks of 1.6).
+
+| Offset in record | Type | Meaning | Value in sample |
+|---|---|---|---|
+| 0 | f32 | ion (m/z) | m/z |
+| 4 | f64 | sharpness | 1.0 |
+| 12 | f64 | integral | intensity at that m/z |
+| 20 | f64 | quality | 0.0 |
+| 28 | f64 | signal to noise | -1.0 |
+| 36 | u32 | count | 1 |
+
+Saved as version 5, the remaining fields get first/last scan 0, model parameter 1, max scan 0 and
+interpolated max scan 0 (Observed, `lib_aa_v5.lbr`). The rewrite keeps these records as raw `blocks`.
 
 ### 1.4 Spectrum (used in 1.2 #1)
 
@@ -74,7 +88,7 @@ Observed: `Spectrum<int,float>::toStream` 0x7027a2 (decompile) and byte check in
 | Offset | Type | Meaning |
 |---|---|---|
 | 0 | u32 | scan number |
-| 4 | f64 | rt field (unit Inferred: ms) |
+| 4 | f64 | rt in ms (Observed: the MSL export divides it by 60000 for minutes, 6.2) |
 | 12 | f64 | ri |
 | 20 | f32 | bin_width |
 | 24 | u32 | n_masses |
@@ -83,21 +97,44 @@ Observed: `Spectrum<int,float>::toStream` 0x7027a2 (decompile) and byte check in
 | ... | i32[n_values] | values (intensities) |
 | ... | u32 | check = (scan + n_masses) mod 2^32 (Observed in sample) |
 
-### 1.5 Validated parser
+### 1.5 Validated parsers
 
-`docs/reverse-engineering/tools/parse_lbr.py`. Run with `python3 -I parse_lbr.py < file.lbr` (or a decompressed `.raw`).
-Output on the sample: version 2, 27 compounds, all bytes consumed, first compound Hexatriacontane (ri 3599.987).
-Accepts gzip input automatically. Only version 2 is decoded; version 5 raises NotImplementedError.
-The Rust reader `md_core::library::parse_lbr` returns the same values for every field of all 27 sample
-compounds (`tools/dump_lbr.py` against `md-core/tests/lbr_sample.rs`, 2026-10-19). It rejects version 5
-and compounds with peak records as not supported.
+`docs/reverse-engineering/tools/parse_lbr.py` (`python3 -I parse_lbr.py < file.lbr`) decodes version 2 only.
+The Rust reader `md_core::library::parse_lbr` reads versions 2 to 5 and returns the same values for every
+field of all 27 sample compounds (`tools/dump_lbr.py` against `md-core/tests/lbr_sample.rs`, 2026-10-19) and
+of all v5 reference files (1, 2026-10-20). It rejects version 2 and 3 compounds with peak records (1.2).
+
+### 1.6 Peaks and model peak (versions 4 and 5)
+
+Written inside the Compound record (3.2) after `n_peaks`. Observed in `PeakEssential<float>::toStream`
+0x6f994c, `PeakEssential<short>::toStream` 0x6facfe, `Peak<double,short>::toStream` 0x6f66e2 and their
+`fromStream` (0x6fa612, 0x6fb9c7, 0x6f680b); member offsets from the disassembly, values checked on the v5 files.
+
+`PeakEssential<T>` (68 bytes for T = f32, 66 for T = i16), in file order:
+
+| # | Type | Meaning | Member |
+|---|---|---|---|
+| 1 | T | ion | +0x08 |
+| 2 | f64 | sharpness | +0x10 |
+| 3 | f64 | integral | +0x20 |
+| 4 | f64 | quality | +0x18 |
+| 5 | f64 | signal to noise | +0x28 |
+| 6 | u32 | count (`size_t` in memory) | +0x30 |
+| 7 | u32 | first scan | +0x38 |
+| 8 | u32 | last scan | +0x3c |
+| 9 | f64 | model parameter | +0x50 |
+| 10 | u32 | max scan | +0x40 |
+| 11 | f64 | interpolated max scan | +0x48 |
+
+- Peaks: `n_peaks` x `PeakEssential<float>`, sorted by ion (the compound keeps `map<float, PeakEssential*>`).
+- Model (always present from version 4): `Peak<double,short>` = `PeakEssential<short>`, `f64 noise_factor`,
+  `u32 n`, `f64[n]` values, `u32 check = first + last + max + n` (mod 2^32; the reader throws on mismatch).
+  Without a model the old program writes ion 0, sharpness -1, integral -1, quality 0, s/n -1, count 0,
+  scans 0, model parameter 1, noise factor 0.5 and one value 0 (Observed in `lib_aa_v5.lbr`).
 
 ### Unknowns (section 1)
-- Meaning of the 40-byte block list (1.3) and its relation to the v5 layout.
-- `formulas` and `mid_sizes` layouts (absent in the sample).
-- Version 5 peak/model layout (`Peak<double,short>` and `PeakEssential<short>`, see section 3.3).
-- Element types of comb_spec/ion_freq/ris (inferred from the parser, not from DWARF).
-- String encoding (latin-1 assumed by the parser; the real encoding is unverified).
+- `Peak<int,float>` layout of version 2 and 3 compounds with `n_peaks > 0` (no such file seen).
+- String encoding (latin-1 assumed by the parsers; the real encoding is unverified).
 
 ---
 
@@ -241,7 +278,9 @@ compounds by `parse_lbr.py` (`read_compound`). The same record appears inside Li
 
 | # | Type | Meaning | Tag |
 |---|---|---|---|
-| 1 | u32 | n_peaks (count of PeakEssential<float> records that follow; 0 in the sample) | Observed (sample), Inferred (layout of n>0) |
+| 1 | u32 | n_peaks (count of peak records that follow; 0 in the sample) | Observed |
+| 1a | PeakEssential<float>[n_peaks] (version 4+) | peaks, see 1.6 | Observed (v5 library files) |
+| 1b | Peak<double,short> (version 4+) | model peak, see 1.6 | Observed (v5 library files) |
 | 2 | string | name | Observed (sample) |
 | 3 | i32 count + f64[count] | fwhm list; count -1 = null | Observed (sample) |
 | 4 | i32 count + f64[count] | integrals list; count -1 = null | Observed (sample) |
@@ -255,15 +294,11 @@ compounds by `parse_lbr.py` (`read_compound`). The same record appears inside Li
 
 Note: `Compound` members (DWARF): name@120 std::string, features@312 map, time_stamp@360, id@368, drt@376.
 
-### 3.3 Peak records (only when n_peaks > 0)
+### 3.3 Peak records
 
-- `Peak<double,short>::toStream` 0x6f66e2 (Observed, earlier pass): `PeakEssential<short>::toStream`, then
-  `i32 nf`, `u32 n`, `f64[n]`, then `u32 check = n + getFirstScan + getLastScan + getMaxScan`.
-- `PeakEssential<short>::toStream` 0x6facfe (Observed, earlier pass): fields in order `ion`, `sharpness`,
-  `integral`, `quality`, `sn`, `count` (uint), `begin`, `end`, `model_parameter`, `max_scan`,
-  `interpolated_max_scan`. Types were not re-checked in this pass.
-- `PeakEssential<float>::toStream` (nm 0x5f994c, Ghidra 0x6f994c) and `Peak<int,float>::toStream` (nm 0x5f3036,
-  Ghidra 0x6f3036): **not decoded**. The `.cmp` peak layout for float peaks is Unknown.
+The library writer (version 5) and the `.cmp` writer (version 4) both use `Compound::toStream`, so the peaks
+and the model peak have the layout of 1.6 (Observed for libraries; Inferred for `.cmp`, no `.cmp` with peaks
+checked yet). `Peak<int,float>::toStream` (Ghidra 0x6f3036), used by versions below 4, is **not decoded**.
 
 ### 3.4 Reader
 
@@ -272,7 +307,7 @@ Note: `Compound` members (DWARF): name@120 std::string, features@312 map, time_s
 `compoundsFromStream` 0x711596 are not decoded. The reader order is Inferred to mirror 3.1 and 3.2.
 
 ### Unknowns (section 3)
-- Layout of PeakEssential<float> and Peak<int,float> (needed for n_peaks > 0).
+- Layout of Peak<int,float> (versions below 4 with n_peaks > 0).
 - Whether the reader checks the version or accepts only version 4.
 - Fields between fwhm and features in the reader if they differ from the writer (not recovered).
 
@@ -506,19 +541,61 @@ and `MST N` (purpose Unknown). The `Initial import from` string suggests a progr
 | peak lines `(mz int)` | ions and values | Observed (regex); Inferred (line format) |
 | other `key: value` lines | features map (string to string) | Observed (regex); Inferred |
 
-Timing fields (`rt`, `ri`): the importer stores them as `d_rt` and `d_ri`. Which key holds them is not
-recovered (Gap).
+Timing fields: `RT:` is minutes and becomes the spectrum rt in ms (Observed: an MSL written by the old
+export and read back by `importMSL` gives the same rt as the source library, `msl_v5.lbr`, 2026-10-20).
 
-Rewrite choices (`md_core::library`, not verified against the old app): `RI:` is the spectrum ri, `RT:` is
-minutes (AMDIS convention) and is stored as ms, `RESOLUTION:` is the spectrum bin width, `NUM PEAKS:` must
+Rewrite choices (`md_core::library`): `RI:` is the spectrum ri, `RT:` is minutes stored as ms (matches the
+old program, checked in `lbr_sample.rs`), `RESOLUTION:` is the spectrum bin width, `NUM PEAKS:` must
 equal the number of pairs. Imported compounds get `comb_spec` = spectrum, `ion_freq` 1 per ion and
 `spec_count` 1 like the sample library. Export writes the same keys, then features, then 5 pairs per line.
 
-### 6.2 MSL export: `DialogExportLibrary` (not decompiled)
+### 6.2 MSL export: `LibrarySearch::exportMSL(path, ExportType)` (Observed; ported in `md_core::library::write_msl_as`)
 
-Strings: `Error getting centroid compound for MSL export. Using binned compound.` and the same header keys as
-6.1 (`NAME:`, `QUANTIFICATION:`, `RESOLUTION:`, `NUM PEAKS:`). The writer order is Inferred to match 6.1.
-Gap: the export function was not decoded.
+`DialogExportLibrary::on_okButton_clicked` (0x4cd3b4) maps the combo text to the type: "MSL Nominal" = 1,
+"MSL Profile" = 0, "MSL FWHM" = 2, then calls `exportMSL` (0x629f70). The file is opened for writing; failure
+throws `IOException` "Error opening library file for writing." and a write error "Error writing data to library
+file.". Per compound (in library order; all numbers `std::fixed`):
+
+```
+NAME:<name>
+RI:<ri, 4 decimals>
+RT:<rt in minutes, 4 decimals>
+<key>: <value>                     one line per feature, sorted by key; a ';' in the value starts a new "<key>: " line
+QUANTIFICATION:<ion, 4 decimals><tab> ...      every ion followed by a tab
+RESOLUTION:<bin width, 4 decimals>              not in the FWHM type
+NUM PEAKS:<n>
+<5 peaks per line, each followed by a space; a line break before peaks 0, 5, 10, ...>
+<blank line>
+```
+
+and one more blank line at the end of the file. Peak layout by type (`(` m/z, intensity, `)`):
+
+| Type | Peak text | Example |
+|---|---|---|
+| 1 Nominal | m/z width 4, 0 decimals; intensity width 4 | `(  41   80) ` |
+| 0 Profile | m/z width 10, 6 decimals; intensity width 4 | `( 41.000000   80) ` |
+| 2 FWHM | m/z width 10, 6 decimals; FWHM width 5, 2 decimals; intensity width 4 with no space before it | `( 41.000000  1.00  80) ` |
+
+Before writing, types 1 and 2 ask the compound for its centroid compound (`LibraryCompound` virtual
+`getCentroidLibraryCompound`, 0x61e2ce, which calls `Compound::getCentroidCompound(map&)` 0x611fa8); Nominal then
+bins it to 1.0 (`getBinnedCompound`, 0x60dfc8). On an exception the old code prints "ERROR: Error getting
+centroid compound for MSL export. Using binned compound." to stderr and writes the binned compound. Without a
+FWHM list the centroiding groups profile points that are at most 0.01 apart (0x611fa8); a compound whose masses
+are further apart is unchanged.
+
+Checked against the old program (`tools/golden/make-msl-export.sh`, which loads `lib_aa.lbr` with
+`LibrarySearch::fromDisk` and exports all three types): the rewrite writes the same bytes for all 27 compounds
+(test `msl_export_matches_the_old_program`, needs the sample files, which are not committed). In the sample
+every library is binned to whole masses, has no FWHM list (the old program prints 1.00) and the same peaks in
+all three types.
+
+Not checked or not ported (Gaps): centroiding of spectra whose masses are 0.01 or less apart, rebinning of
+non-integer masses for Nominal (the rewrite only rounds), the FWHM value for a compound without a FWHM list but
+another bin width (the rewrite writes 1.00), and values with `;` or line breaks (the rewrite replaces line
+breaks by a space so a name cannot start a record). The files are not read back exactly by `parse_msl`
+(four decimals) and `parse_msl` does not read the FWHM type. The FWHM type joins FWHM and intensity without a
+space when the intensity has four digits (`( 57.000000  1.001000)`): no parser can split that peak, the old program
+writes it the same way. The gaps are owned by #114.
 
 ### 6.3 NIST MSP parser (`NISTParser`)
 
@@ -539,18 +616,17 @@ Unknown; probably the display/export of a compound, not the MSP reader).
 - Whether `NUM PEAKS` is trusted or recounted.
 - NIST parser state machine and field order (all functions undecoded).
 - Encoding of MSL and NIST files.
-- Export order and number formatting for MSL.
 
 ---
 
 ## Unknowns and gaps (summary)
 
 1. .bin/.idx: DataType enum names; compression thresholds; TOF polynomial use (layout decoded, section 2).
-2. .cmp: PeakEssential<float> and Peak<int,float> layouts; reader details.
+2. .cmp: Peak<int,float> layout (versions below 4); reader details.
 3. .calib: rt unit; RICalculator string member; loop structure of toDisk (Inferred).
 4. .mzcalib: reader; precision; encoding.
 5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF and SQL_* fields.
-6. LBR: block list meaning (1.3); formulas and mid_sizes; version 5 peak/model layout.
+6. LBR: Peak<int,float> records of version 2/3 compounds with peaks (decoded otherwise, section 1).
 7. MSL and NIST: most functions undecoded; grammar inferred from strings.
 8. Ghidra no-return truncations hide the tail of several readers (fromStream, readIndexFile, readTOFCalibData,
    RICalculator::fromDisk, importMSL). A disassembly-level or Ghidra no-return fix is needed to close these.
