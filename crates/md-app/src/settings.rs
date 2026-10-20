@@ -381,32 +381,7 @@ impl Settings {
                 "Sub-scan steps for locating the precise apex.",
                 egui::DragValue::new(&mut d.an_number_bins).range(1..=100),
             );
-            let hint = explain(
-                &format!(
-                    "Width in scans of the matched filter over the apex histogram. Auto: {AUTO_WIDTH_S} s at \
-                     each run's scan rate, at least 1 scan (3.3 always used 1). A width from a loaded or \
-                     imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one)."
-                ),
-                "AN_DECONVOLUTION_WIDTH",
-            );
-            let label = ui.label("Deconvolution width").on_hover_text(&hint);
-            ui.horizontal(|ui| {
-                let mut auto = d.an_deconvolution_width.is_none();
-                let check = ui.checkbox(&mut auto, "Auto");
-                if check.labelled_by(label.id).on_hover_text(&hint).changed() {
-                    // A set width starts from the automatic one.
-                    d.an_deconvolution_width = (!auto).then(|| auto_width(times.unwrap_or_default()));
-                }
-                match &mut d.an_deconvolution_width {
-                    Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),
-                    None => match times {
-                        Some(t) => ui.label(format!("{} scans in the shown run", auto_width(t))),
-                        None => ui.weak(format!("{AUTO_WIDTH_S} s of each run")),
-                    },
-                }
-                .on_hover_text(&hint);
-            });
-            ui.end_row();
+            width_row(ui, &mut d.an_deconvolution_width, times);
             row(
                 ui,
                 "Minimum ions per component",
@@ -661,6 +636,36 @@ pub(crate) fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: i
     let hint = explain(hint, key);
     let label = ui.label(name).on_hover_text(&hint);
     ui.add(field).labelled_by(label.id).on_hover_text(hint);
+    ui.end_row();
+}
+
+/// The deconvolution width row: Auto with the scans it gives in the shown run, or a set width.
+fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) {
+    let hint = explain(
+        &format!(
+            "Width in scans of the matched filter over the apex histogram. Auto: {AUTO_WIDTH_S} s at \
+             each run's scan rate, at least 1 scan (3.3 always used 1). A width from a loaded or \
+             imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one)."
+        ),
+        "AN_DECONVOLUTION_WIDTH",
+    );
+    let label = ui.label("Deconvolution width").on_hover_text(&hint);
+    ui.horizontal(|ui| {
+        let mut auto = width.is_none();
+        let check = ui.checkbox(&mut auto, "Auto");
+        if check.labelled_by(label.id).on_hover_text(&hint).changed() {
+            // A set width starts from the automatic one.
+            *width = (!auto).then(|| auto_width(times.unwrap_or_default()));
+        }
+        match width {
+            Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),
+            None => match times {
+                Some(t) => ui.label(format!("{} scans in the shown run", auto_width(t))),
+                None => ui.weak(format!("{AUTO_WIDTH_S} s of each run")),
+            },
+        }
+        .on_hover_text(&hint);
+    });
     ui.end_row();
 }
 
