@@ -37,7 +37,7 @@ Findings from the first review (#102) that live in files other sessions are chan
 
 | Area | Issue | What to check |
 |---|---|---|
-| Windows (layout) | #89 | Windows no longer open stacked at the top left over the run list; `✕` is gone from the library editor (remove it from `KNOWN` in `ui_tests.rs`) |
+| Windows (layout) | #89, done in #127 | ✓ Windows open over the plots beside the run list, a step apart; the library editor uses `×` and `KNOWN` is gone |
 | TIC plot | #111 | Hit labels do not overlap; y axis is readable |
 | Spectrum, hit table | #77 / #78 | The spectrum says whether it shows a scan or a deconvoluted component; table headers are `strong` |
 | Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI; inputs have names |
