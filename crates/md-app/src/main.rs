@@ -7,10 +7,12 @@ use std::time::Instant;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::deconv::Component;
+use md_core::peaks::Peak;
 
 mod batch;
 mod calibration;
 mod central;
+mod detail;
 mod export;
 mod identify;
 mod isotopes;
@@ -87,6 +89,7 @@ struct App {
     results: results::Results,
     export: export::Export,
     view: view::View,
+    spectrum_mode: detail::Mode,
 }
 
 impl Default for App {
@@ -114,6 +117,7 @@ impl Default for App {
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
+            spectrum_mode: detail::Mode::default(),
         }
     }
 }
@@ -139,6 +143,8 @@ struct Run {
     components: Vec<Component>,
     /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
     peak_masses: Vec<u32>,
+    /// The peaks themselves (S/N, quality, sharpness), indexed like `peak_masses`.
+    peaks: Vec<Peak>,
     /// Calibration saved with the run by the old program, handed to the calibration window on load.
     saved_calibration: Option<md_core::ri::RiCalibration>,
     analysis: settings::Analysis,
@@ -166,7 +172,7 @@ impl eframe::App for App {
         self.status_bar(ui);
         self.run_list(ui);
         if let Some(run) = self.runs.get(self.active) {
-            identify::hits_panel(ui, run);
+            detail::panel(ui, run, &mut self.mz, &mut self.trace);
         }
         self.central_panel(ui);
     }
