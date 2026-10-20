@@ -203,6 +203,88 @@ mod tests {
         assert!(args("--help").unwrap().is_none());
     }
 
+    /// Two substances of 12 ions each, apart in time (as in the `md-core` batch test), written to
+    /// `dir` as a run, a library, a settings file and a calibration; returns the argument line.
+    fn study(dir: &std::path::Path) -> String {
+        let (scans, ions) = (200, 24);
+        let c = md_core::Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64 * 0.5).collect(),
+            offsets: (0..=scans).map(|s| s * ions).collect(),
+            mz: (0..scans * ions)
+                .map(|k| 60.0 + (k % ions) as f32)
+                .collect(),
+            intensity: (0..scans * ions)
+                .map(|k| {
+                    let (s, i) = ((k / ions) as f32, k % ions);
+                    let apex = if i < 12 { 60.0 } else { 140.0 };
+                    let noise = ((k as u32).wrapping_mul(2_654_435_761) >> 16) % 41;
+                    let peak =
+                        5000.0 * (i % 12 + 1) as f32 * (-0.5 * ((s - apex) / 2.5).powi(2)).exp();
+                    980.0 + noise as f32 + peak
+                })
+                .collect(),
+        };
+        std::fs::create_dir_all(dir).unwrap();
+        md_core::andi::write(dir.join("ctrl_1.cdf"), &c).unwrap();
+        let spectrum = |first: usize| -> String {
+            (0..12)
+                .map(|j| format!("({} {}) ", 60 + first + j, j + 1))
+                .collect()
+        };
+        let msl = format!(
+            "NAME: late, \"x\"\nNUM PEAKS: 12\n{}\n\nNAME: early\nNUM PEAKS: 12\n{}\n",
+            spectrum(12),
+            spectrum(0)
+        );
+        std::fs::write(dir.join("lib.msl"), msl).unwrap();
+        std::fs::write(dir.join("a.settings"), GcmsSettings::default().to_bytes()).unwrap();
+        std::fs::write(dir.join("a.calib"), "0 0\n100000 1000\n").unwrap();
+        let p = |n: &str| dir.join(n).display().to_string();
+        format!(
+            "-l {} -s {} -o {} --replicates ^(.+)_1 --ions 2 --min-dist 1 --quality-cutoff 5 --min-ions 1 --min-reproducibility 0.5 {}",
+            p("lib.msl"),
+            p("a.settings"),
+            p("out.csv"),
+            p("ctrl_1.cdf")
+        )
+    }
+
+    #[test]
+    fn writes_the_table_of_a_study() {
+        let dir = std::env::temp_dir().join(format!("md-cli-study-{}", std::process::id()));
+        let line = study(&dir);
+        assert!(run(args(&line).unwrap().unwrap()).unwrap());
+        let csv = std::fs::read_to_string(dir.join("out.csv")).unwrap();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines[0], "Substance,RT_s,Quant_ions,ctrl_1.cdf");
+        assert!(lines[1].starts_with("early,"), "{csv}");
+        assert!(lines[2].starts_with("\"late, \"\"x\"\"\","), "{csv}");
+        assert_eq!(lines.len(), 3);
+
+        // With a calibration the library's RI (none here) decides; the run still succeeds.
+        let calib = format!("{line} -c {}", dir.join("a.calib").display());
+        assert!(run(args(&calib).unwrap().unwrap()).unwrap());
+
+        // An unreadable run is reported (exit code 2), the others are kept.
+        let bad = format!("{line} {}", dir.join("missing.cdf").display());
+        assert!(!run(args(&bad).unwrap().unwrap()).unwrap());
+        assert!(
+            run(args(&line.replace("^(.+)_1", "(")).unwrap().unwrap())
+                .unwrap_err()
+                .contains("--replicates")
+        );
+        // Settings, calibration and library are checked.
+        let fails = |line: &str| run(args(line).unwrap().unwrap()).is_err();
+        std::fs::write(dir.join("a.settings"), b"too short").unwrap();
+        assert!(fails(&line));
+        std::fs::write(dir.join("a.settings"), GcmsSettings::default().to_bytes()).unwrap();
+        std::fs::write(dir.join("a.calib"), "x").unwrap();
+        assert!(fails(&calib));
+        std::fs::remove_file(dir.join("lib.msl")).unwrap();
+        assert!(fails(&line));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn rejects_bad_input() {
         assert!(args("a.cdf").is_err(), "library missing");

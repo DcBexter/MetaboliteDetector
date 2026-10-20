@@ -442,6 +442,32 @@ mod tests {
         s.validate().unwrap();
     }
 
+    #[test]
+    fn scan_and_quant_settings_follow_the_fields() {
+        let s = GcmsSettings {
+            quant_ion_number: 0,
+            quant_min_dist_ions: 1.5,
+            quant_quality_cutoff: 2.5,
+            quant_excl_ions: vec![(73.0, 73.0)],
+            ..Default::default()
+        };
+        let q = s.quant();
+        assert_eq!((q.ion_number, q.min_dist, q.quality_cutoff), (1, 1.5, 2.5));
+        assert_eq!(q.excluded, [(73.0, 73.0)]);
+        let cal = RiCalibration::new([(0.0, 0.0), (60.0, 100.0)]).unwrap();
+        let scan = s.scan(Some(cal.clone()));
+        assert_eq!((scan.peaks, scan.calibration), (s.peak(), Some(cal)));
+        // The library is prepared with cutoff 0, the scan itself cuts hits off.
+        assert_eq!(scan.search.cutoff, SearchSettings::default().cutoff);
+        assert_eq!(
+            SearchSettings {
+                cutoff: 0.0,
+                ..scan.search
+            },
+            s.search()
+        );
+    }
+
     /// §5.2: 191 bytes for the defaults, checksum 20.5.
     #[test]
     fn default_file_is_191_bytes_with_checksum_20_5() {
