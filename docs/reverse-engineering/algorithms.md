@@ -869,7 +869,7 @@ p = alglib::unequalvariancettest(x, nx, y, ny, &both, &left, &right) -> both   #
 ```
 
 - The only test is **Welch's t-test** (unequal variance, two-sided); `studentttest1/2` are linked but never called from the dialog. alglib 3 (0x744ef0): `nx < 2` or `ny < 2` gives p = 1; a zero sample variance in either group gives p = 1; else `t = (mx - my) / sqrt(vx/nx + vy/ny)`, `df = (vx/nx + vy/ny)^2 / ((vx/nx)^2/(nx-1) + (vy/ny)^2/(ny-1))` (not rounded) and `p = I_{df/(df+t^2)}(df/2, 1/2)` with the regularised incomplete beta function (`incompletebeta` 0x7b7800), which is the same p-value as R's `t.test(x, y)`.
-- There is **no paired test and no multiple-testing correction** in the old program. "Independent samples = no" means a Welch test over the replicate group means. The rewrite adds a paired t-test (differences of the i-th run of each group; `t.test(paired = TRUE)`) because issue #24 asks for it.
+- There is **no paired test and no multiple-testing correction** in the old program. "Independent samples = no" means a Welch test over the replicate group means. The rewrite adds a paired t-test (group k of side 1 against group k of side 2 in the order given, run by run; same number of groups and of runs per pair, else no p-value; `t.test(paired = TRUE)`) because issue #24 asks for it.
 - Missing values are 0 in the old table, so they are part of the means and of the test. The ratio is not guarded (division by zero gives inf/NaN).
 - CSV (`exportData`): tab separated, header `Metabolite  Identification Score  Hits 1  Hits 2  RT  RI  Mean G1  Mean G2  Ratio  P-value`, then the values of group 1 and of group 2. "Identification Score" is the reference compound's `lib_score` feature. Further sub-features: paste a sample list to fill a group (`autoSelect`, exact match of each item with a group name), filter by p-value, choose groups and their order for the box plot.
 
@@ -897,7 +897,7 @@ Deviations of the rewrite:
 
 - The eigenvectors are computed through an SVD of the centred runs x substances matrix (`nalgebra`). It has the same components as the covariance eigenproblem (`prcomp(t(Z), scale = FALSE)` in R) but costs `O(runs^2 x substances)` instead of `O(substances^3)`. Components with a numerically zero eigenvalue (beyond runs - 1) are kept with proportion 0.
 - The old program flips every eigenvector (`* -1`), GSL's own sign being arbitrary. Signs are arbitrary in any implementation; the rewrite fixes the sign so that the largest absolute loading of each component is positive. The tests compare absolute values or the sign-invariant product.
-- A missing value is `None` in the rewrite and 0 in the old table; PCA and the two-group test treat it as 0 by default (`missing_as_zero`), or skip it when that option is off. Values that the normalisation could not compute are also `None`.
+- A missing value is `None` in the rewrite and 0 in the old table; PCA and the two-group test treat it as 0 by default (`missing_as_zero`), or skip it when that option is off. On a z-scored table a missing value is always skipped (0 would mean "average" there). Values that the normalisation could not compute are also `None`.
 - Not ported: PDF/clipboard export of the plots (PNG only).
 
 ### 7f.1 Unknowns (statistics)

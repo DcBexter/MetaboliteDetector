@@ -34,7 +34,12 @@ pub struct Statistics {
     sides: [Vec<String>; 2],
     paste: String,
     samples: Samples,
+    /// The user's choice; see `zero`.
     missing_as_zero: bool,
+    /// The shown table is z-scored.
+    z_scored: bool,
+    /// Table generation `selected` belongs to.
+    seen: u64,
     /// Show only substances with p at most this.
     p_max: f64,
     sort_by_p: bool,
@@ -62,6 +67,8 @@ impl Default for Statistics {
             paste: String::new(),
             samples: Samples::Independent,
             missing_as_zero: true,
+            z_scored: false,
+            seen: 0,
             p_max: 1.0,
             sort_by_p: true,
             tab: Tab::Table,
@@ -181,7 +188,7 @@ fn samples_picker(ui: &mut egui::Ui, samples: &mut Samples) {
     });
 }
 
-fn filter_row(ui: &mut egui::Ui, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
+fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
     ui.horizontal(|ui| {
         ui.label("Show only p ≤");
         ui.add(
@@ -191,10 +198,10 @@ fn filter_row(ui: &mut egui::Ui, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoG
                 .max_decimals(4),
         );
         ui.checkbox(sort_by_p, "sort by p");
-        if c.samples == Samples::Paired && c.group1.len() != c.group2.len() {
+        if c.samples == Samples::Paired && !stats::pairs_match(t, c) {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                "Paired runs: the sides need the same number of replicate groups.",
+                "Paired: group k of side 1 pairs with group k of side 2; the sides need the same number of groups and runs per pair.",
             );
         }
     });
@@ -305,10 +312,11 @@ fn biomarker_table(
 
 impl Statistics {
     /// `table` is the batch table as shown (normalised), with a number that changes with it.
-    pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>) {
+    pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>, z_scored: bool) {
         if let Ok(e) = self.errors.1.try_recv() {
             self.note = e;
         }
+        self.z_scored = z_scored;
         let mut open = self.open;
         egui::Window::new("Biomarker statistics")
             .open(&mut open)
@@ -322,7 +330,18 @@ impl Statistics {
         self.open = open;
     }
 
+    /// A missing value counts as 0, unless the table is z-scored: there 0 means "average", not
+    /// "not found".
+    fn zero(&self) -> bool {
+        self.missing_as_zero && !self.z_scored
+    }
+
     fn contents(&mut self, ui: &mut egui::Ui, generation: u64, t: &Table) {
+        // Row numbers of an earlier table mean other substances now.
+        if self.seen != generation {
+            self.seen = generation;
+            self.selected = None;
+        }
         // Groups of an earlier table that the new one lacks.
         let all = groups_of(t);
         self.sides
@@ -333,8 +352,17 @@ impl Statistics {
             ui.selectable_value(&mut self.tab, Tab::Box, "Box plot");
             ui.selectable_value(&mut self.tab, Tab::Pca, "PCA");
             ui.separator();
-            ui.checkbox(&mut self.missing_as_zero, "Missing value counts as 0")
-                .on_hover_text("The old program stores 0 for a substance that was not found.");
+            let hint = if self.z_scored {
+                "Not available for a z-scored table: missing values are left out."
+            } else {
+                "The old program stores 0 for a substance that was not found."
+            };
+            ui.add_enabled(
+                !self.z_scored,
+                egui::Checkbox::new(&mut self.missing_as_zero, "Missing value counts as 0"),
+            )
+            .on_hover_text(hint)
+            .on_disabled_hover_text(hint);
         });
         ui.separator();
         match self.tab {
@@ -345,7 +373,7 @@ impl Statistics {
                     group1: self.sides[0].clone(),
                     group2: self.sides[1].clone(),
                     samples: self.samples,
-                    missing_as_zero: self.missing_as_zero,
+                    missing_as_zero: self.zero(),
                 };
                 if self
                     .cache
@@ -387,7 +415,7 @@ impl Statistics {
             ui.label("Choose at least one replicate group on each side.");
             return;
         }
-        filter_row(ui, &mut self.p_max, &mut self.sort_by_p, &cache.1);
+        filter_row(ui, t, &mut self.p_max, &mut self.sort_by_p, &cache.1);
         let mut shown: Vec<&Biomarker> = cache
             .2
             .iter()
@@ -424,12 +452,13 @@ impl Statistics {
         let groups: Vec<(usize, &String)> = (0..2)
             .flat_map(|s| self.sides[s].iter().map(move |g| (s, g)))
             .collect();
+        let zero = self.zero();
         let names: Vec<String> = groups.iter().map(|(_, g)| (*g).clone()).collect();
         let boxes: Vec<BoxElem> = groups
             .iter()
             .enumerate()
             .filter_map(|(i, (side, g))| {
-                let v = stats::group_values(t, row, std::slice::from_ref(*g), self.missing_as_zero);
+                let v = stats::group_values(t, row, std::slice::from_ref(*g), zero);
                 let f = stats::five_numbers(&v)?;
                 Some(
                     BoxElem::new(i as f64, BoxSpread::new(f.min, f.q1, f.median, f.q3, f.max))
@@ -460,10 +489,10 @@ impl Statistics {
         if self
             .pca
             .as_ref()
-            .is_none_or(|p| p.0 != generation || p.1 != self.missing_as_zero)
+            .is_none_or(|p| p.0 != generation || p.1 != self.zero())
         {
-            let r = stats::pca(t, POOL_GROUP, self.missing_as_zero);
-            self.pca = Some((generation, self.missing_as_zero, r));
+            let r = stats::pca(t, POOL_GROUP, self.zero());
+            self.pca = Some((generation, self.zero(), r));
         }
         let Some((_, _, result)) = &self.pca else {
             return;

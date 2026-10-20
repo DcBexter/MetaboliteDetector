@@ -177,7 +177,8 @@ impl App {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
         self.batch.window(ctx, self.library.as_ref(), cal);
-        self.statistics.window(ctx, self.batch.shown_table());
+        self.statistics
+            .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
         self.info_window(ctx);
         self.library_editor(ctx);

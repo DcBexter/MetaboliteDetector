@@ -17,8 +17,9 @@ pub enum Samples {
     /// One sample per replicate group, its mean over the runs; Welch's t-test (the old "not
     /// independent samples").
     GroupMeans,
-    /// The i-th run of group 1 pairs with the i-th run of group 2 (table order); paired t-test.
-    /// Not in the old program.
+    /// Group k of side 1 pairs with group k of side 2 (in the order given), run by run in table
+    /// order; paired t-test. Needs the same number of groups and runs per pair. Not in the old
+    /// program.
     Paired,
 }
 
@@ -129,21 +130,33 @@ pub fn compare(t: &Table, c: &TwoGroups) -> Vec<Biomarker> {
         .collect()
 }
 
-/// Paired t-test over the runs both groups have a value for, paired by position.
+/// Whether a paired test is possible: group i of side 1 is paired with group i of side 2, so both
+/// sides need the same number of groups and each pair the same number of runs.
+pub fn pairs_match(t: &Table, c: &TwoGroups) -> bool {
+    c.group1.len() == c.group2.len()
+        && c.group1.iter().zip(&c.group2).all(|(a, b)| {
+            let runs = |g: &String| t.groups.iter().filter(|x| *x == g).count();
+            runs(a) == runs(b)
+        })
+}
+
+/// Paired t-test: the i-th run of group k on side 1 against the i-th run of group k on side 2
+/// (the order the user gave the groups). Pairs where a value is missing are left out.
 fn paired(t: &Table, row: usize, c: &TwoGroups) -> Option<f64> {
-    let pick = |g: &[String]| -> Vec<Option<f64>> {
-        cells(t, row, g)
+    if !pairs_match(t, c) {
+        return None;
+    }
+    let pick = |g: &String| -> Vec<Option<f64>> {
+        cells(t, row, std::slice::from_ref(g))
             .map(|(_, v)| v.or(c.missing_as_zero.then_some(0.0)))
             .collect()
     };
-    let (a, b) = (pick(&c.group1), pick(&c.group2));
-    if a.len() != b.len() {
-        return None;
-    }
-    let d: Vec<f64> = a
+    let d: Vec<f64> = c
+        .group1
         .iter()
-        .zip(&b)
-        .filter_map(|(a, b)| Some((*a)? - (*b)?))
+        .zip(&c.group2)
+        .flat_map(|(a, b)| pick(a).into_iter().zip(pick(b)))
+        .filter_map(|(a, b)| Some(a? - b?))
         .collect();
     let n = d.len() as f64;
     let se = (variance(&d) / n).sqrt();
@@ -567,6 +580,27 @@ mod tests {
         );
         // All differences are 0: the test is undefined.
         assert!(p[4].is_nan());
+    }
+
+    #[test]
+    fn paired_follows_the_group_order_and_needs_matching_pairs() {
+        let t = table();
+        let two = |g1: &[&str], g2: &[&str]| TwoGroups {
+            group1: g1.iter().map(|g| g.to_string()).collect(),
+            group2: g2.iter().map(|g| g.to_string()).collect(),
+            samples: Samples::Paired,
+            missing_as_zero: true,
+        };
+        let same = two(&["c1", "c2"], &["d1", "d2"]);
+        let swapped = two(&["c1", "c2"], &["d2", "d1"]);
+        assert!(pairs_match(&t, &same) && pairs_match(&t, &swapped));
+        // Pairing c1 with d2 instead of d1 changes the differences, so the p-values.
+        let (a, b) = (compare(&t, &same), compare(&t, &swapped));
+        assert!(a.iter().zip(&b).any(|(a, b)| a.p != b.p));
+        // One group against two, or sides with different group counts: no pairs.
+        let uneven = two(&["c1"], &["d1", "d2"]);
+        assert!(!pairs_match(&t, &uneven));
+        assert!(compare(&t, &uneven).iter().all(|r| r.p.is_none()));
     }
 
     #[test]

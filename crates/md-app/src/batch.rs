@@ -116,6 +116,11 @@ impl Batch {
         self.shown.as_ref().map(|s| (self.generation, &s.1))
     }
 
+    /// Whether the shown table is z-scored; a missing value cannot count as 0 there.
+    pub fn z_scored(&self) -> bool {
+        self.shown.as_ref().is_some_and(|s| s.0.z_score)
+    }
+
     pub fn window(
         &mut self,
         ctx: &egui::Context,
