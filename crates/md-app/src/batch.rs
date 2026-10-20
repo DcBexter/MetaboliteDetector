@@ -294,7 +294,7 @@ impl Batch {
     ) {
         self.poll(ctx);
         let mut open = self.open;
-        // As tall as the screen allows (egui keeps it on screen), so the result table gets the
+        // As tall as the room below its spot (`tool_window` caps it), so the result table gets the
         // room the settings leave.
         egui::Window::new("Batch quantification")
             .tool_window(ctx, 2, [900.0, 2000.0])
