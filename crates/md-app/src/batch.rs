@@ -191,11 +191,9 @@ impl Batch {
             },
             calibration: cal.cloned(),
             // Like the single-run search: only a substance with an RI can be the reference.
-            shift: cal.and(reference).and_then(|(name, cutoff)| {
-                let compound =
-                    (lib.compounds.iter()).position(|c| c.name == name && c.spectrum.ri >= 0.0)?;
-                Some(ShiftReference { compound, cutoff })
-            }),
+            shift: cal
+                .and(reference)
+                .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
             untargeted: self.options.untargeted,
         };
         let rescan = self.options.rescan.then(|| RescanSettings {

@@ -3,6 +3,8 @@
 //! its first member and joins a later component by the library search score (spectrum, plus RI when
 //! calibrated) at the library's cutoff, at most one component per run. Upgrade when the old merging is read.
 
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+
 use super::{Found, RunResult, ScanSettings};
 use crate::library::LibraryCompound;
 use crate::search::{PreparedLibrary, library_hits};
@@ -10,14 +12,19 @@ use crate::search::{PreparedLibrary, library_hits};
 /// Pools the `unknown` components of all runs, in run order. Returns the temporary library; each
 /// component becomes a `Found` of the run with index `first_index + k` for its group `k`
 /// (`first_index` is the length of the reference library, so `table` finds the group in `extra`).
+/// `None` once `cancel` is set; the scoring grows with the square of the number of unknowns.
 pub fn add_unknowns(
     runs: &mut [RunResult],
     first_index: usize,
     s: &ScanSettings,
-) -> Vec<LibraryCompound> {
+    cancel: &AtomicBool,
+) -> Option<Vec<LibraryCompound>> {
     let mut lib: Vec<LibraryCompound> = Vec::new();
     let mut prepared = PreparedLibrary::new(&[], &s.search);
     for run in runs {
+        if cancel.load(Relaxed) {
+            return None;
+        }
         let mut taken = vec![false; lib.len()];
         for u in std::mem::take(&mut run.unknown) {
             let hit = library_hits(&u.spectrum, u.ri, &prepared, &s.search)
@@ -47,5 +54,5 @@ pub fn add_unknowns(
             });
         }
     }
-    lib
+    Some(lib)
 }

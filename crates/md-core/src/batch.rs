@@ -49,6 +49,16 @@ pub struct ShiftReference {
     pub cutoff: f64,
 }
 
+impl ShiftReference {
+    /// The library entry called `name`; only a substance with an RI can be the reference.
+    pub fn find(lib: &[LibraryCompound], name: &str, cutoff: f64) -> Option<Self> {
+        let compound = lib
+            .iter()
+            .position(|c| c.name == name && c.spectrum.ri >= 0.0)?;
+        Some(Self { compound, cutoff })
+    }
+}
+
 /// One ion peak of a found substance.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IonPeak {
@@ -264,7 +274,7 @@ pub fn complete_scan(
     cancel: &AtomicBool,
 ) -> Option<Completed> {
     let extra = if s.untargeted {
-        add_unknowns(runs, lib.len(), s)
+        add_unknowns(runs, lib.len(), s, cancel)?
     } else {
         Vec::new()
     };
@@ -835,8 +845,10 @@ NUM PEAKS: 1
                 ..Default::default()
             })
             .collect();
+        // A cancelled pooling leaves the components of the runs it did not reach.
+        assert!(add_unknowns(&mut runs.clone(), 0, &s, &AtomicBool::new(true)).is_none());
         // Two groups, each with one component of each run.
-        let extra = add_unknowns(&mut runs, 0, &s);
+        let extra = add_unknowns(&mut runs, 0, &s, &AtomicBool::new(false)).unwrap();
         assert_eq!(extra.len(), 2);
         assert!(
             runs.iter()

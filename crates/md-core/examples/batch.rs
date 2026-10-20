@@ -44,7 +44,7 @@ fn main() {
     let scanned = t.elapsed();
     let t = Instant::now();
     let extra = if untargeted {
-        add_unknowns(&mut runs, lib.len(), &s)
+        add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap()
     } else {
         Vec::new()
     };

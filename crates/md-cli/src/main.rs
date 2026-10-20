@@ -203,14 +203,11 @@ fn run(a: Args) -> Result<bool, String> {
         if scan.calibration.is_none() {
             return Err("--shift-reference needs a calibration (-c)".into());
         }
-        // Like the app's window: only substances with an RI can be the reference.
-        let compound = (compounds.iter())
-            .position(|c| &c.name == name && c.spectrum.ri >= 0.0)
-            .ok_or_else(|| format!("--shift-reference: no substance with RI named {name}"))?;
-        scan.shift = Some(ShiftReference {
-            compound,
-            cutoff: a.shift_cutoff.unwrap_or(SearchSettings::default().cutoff),
-        });
+        let cutoff = a.shift_cutoff.unwrap_or(SearchSettings::default().cutoff);
+        scan.shift = Some(
+            ShiftReference::find(&compounds, name, cutoff)
+                .ok_or_else(|| format!("--shift-reference: no substance with RI named {name}"))?,
+        );
     }
     let rescan = a.rescan.then(|| RescanSettings {
         window_s: a

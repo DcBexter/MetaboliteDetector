@@ -249,3 +249,47 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ri::RiCalibration;
+
+    #[test]
+    fn window_follows_the_calibration_of_each_run() {
+        let mut lib = LibraryCompound::new("a");
+        lib.quant_ions = vec![50.0];
+        let found = Found {
+            compound: 0,
+            score: 1.0,
+            rt_s: 100.0,
+            ions: Vec::new(),
+            rescanned: false,
+        };
+        let shifted = RiCalibration::identity().shifted_to(120.0, 100.0);
+        let run = |found: Vec<Found>, calibration| RunResult {
+            found,
+            calibration,
+            ..Default::default()
+        };
+        let r = RescanSettings::default();
+        let q = QuantSettings::default();
+        let window = |runs: &[RunResult]| {
+            let t = &plan(runs, std::slice::from_ref(&lib), &[], &q, &r)[&1][0];
+            (t.from_s, t.to_s)
+        };
+        let id = Some(RiCalibration::identity());
+        let a = run(vec![found.clone()], id.clone());
+        // The same substance elutes 20 s later in a run calibrated 20 s later.
+        assert_eq!(
+            window(&[a.clone(), run(vec![], Some(shifted))]),
+            (117.0, 123.0)
+        );
+        assert_eq!(window(&[a, run(vec![], id)]), (97.0, 103.0));
+        // Without calibrations the retention times are taken as they are.
+        assert_eq!(
+            window(&[run(vec![found], None), run(vec![], None)]),
+            (97.0, 103.0)
+        );
+    }
+}
