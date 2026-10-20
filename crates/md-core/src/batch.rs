@@ -1,11 +1,17 @@
 //! Batch quantification: finds the library substances in many runs and builds a substance × run
 //! table (old `BatchQuantificator`, feature-inventory.md F10–F12). Quant ions follow algorithms.md §7.
 //!
-//! Two passes: `scan_runs` (expensive, once) keeps per run only the identified substances and their ion
-//! integrals; `table` (cheap) turns them into the table, so filters and replicate groups can change
-//! without rescanning. Targeted only: every substance comes from the reference library.
-//! shortcut: no non-targeted mode and no SIC rescan of missing quant ions (old `ResultSeries::scanIons`,
-//! §4.0); a substance not deconvoluted in a run stays empty there. Follow-up issue #58.
+//! Passes: `scan_runs` (expensive, once) keeps per run the identified substances and their ion
+//! integrals; the optional untargeted pass (`untargeted`) pools the unidentified components of all runs
+//! into a temporary library and `rescan` looks for quant ions a run lacks in the ion traces; `table`
+//! (cheap) turns the result into the table, so filters and replicate groups can change without rescanning.
+//! Details of the old program: docs/reverse-engineering/batch-quantification.md.
+
+mod rescan;
+mod untargeted;
+
+pub use rescan::{RescanSettings, rescan_runs};
+pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -18,7 +24,9 @@ use crate::deconv::{Component, DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
 use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
 use crate::ri::RiCalibration;
-use crate::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+use crate::search::{
+    PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
+};
 
 /// Settings of the per-run pass: the single-run defaults, one calibration for every run.
 #[derive(Debug, Clone, Default)]
@@ -28,6 +36,27 @@ pub struct ScanSettings {
     pub search: SearchSettings,
     /// RT → RI for every run; without it the search compares spectra only.
     pub calibration: Option<RiCalibration>,
+    /// Shifts `calibration` per run onto a reference substance (RT shift correction, §6.5).
+    pub shift: Option<ShiftReference>,
+    /// Keep the components without a library hit (`Scanned::unknown`) for `add_unknowns`.
+    pub untargeted: bool,
+}
+
+/// RT shift reference: library index and the minimum overall score it must reach in a run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShiftReference {
+    pub compound: usize,
+    pub cutoff: f64,
+}
+
+impl ShiftReference {
+    /// The library entry called `name`; only a substance with an RI can be the reference.
+    pub fn find(lib: &[LibraryCompound], name: &str, cutoff: f64) -> Option<Self> {
+        let compound = lib
+            .iter()
+            .position(|c| c.name == name && c.spectrum.ri >= 0.0)?;
+        Some(Self { compound, cutoff })
+    }
 }
 
 /// One ion peak of a found substance.
@@ -38,6 +67,8 @@ pub struct IonPeak {
     pub integral: f64,
     /// Peak quality, lower is better (§3.7).
     pub quality: f32,
+    /// Signal-to-noise ratio of the ion peak (`Peak::signal_to_noise`).
+    pub signal_to_noise: f32,
 }
 
 /// A library substance assigned to a component of one run.
@@ -50,12 +81,37 @@ pub struct Found {
     /// Every ion peak of the component, largest integral first. A peak can sit twice (§4.5); §7.2
     /// sees both, as in the old program.
     pub ions: Vec<IonPeak>,
+    /// Made by `rescan_runs` from ion traces only: the substance was not deconvoluted in this run.
+    pub rescanned: bool,
 }
 
+/// A component without library hit, kept by an untargeted scan until `add_unknowns` pools it.
 #[derive(Debug, Clone, PartialEq)]
+pub struct Unknown {
+    pub rt_s: f64,
+    /// RI at the apex under the run's calibration.
+    pub ri: Option<f64>,
+    /// (nominal mass, height), ascending mass.
+    pub spectrum: Vec<(u32, u32)>,
+    pub ions: Vec<IonPeak>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RunResult {
     pub path: PathBuf,
     pub found: Vec<Found>,
+    /// Unidentified components; empty after `add_unknowns`.
+    pub unknown: Vec<Unknown>,
+    /// The calibration of this run, shifted onto the reference if one was found (`None`: not calibrated).
+    pub calibration: Option<RiCalibration>,
+}
+
+/// What one run yields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scanned {
+    pub found: Vec<Found>,
+    pub unknown: Vec<Unknown>,
+    pub calibration: Option<RiCalibration>,
 }
 
 /// The ion peaks of a component, largest integral first (§7.2).
@@ -69,6 +125,7 @@ pub fn ion_peaks(k: &Component, peaks: &[Peak], traces: &IonTraces) -> Vec<IonPe
                 mass: traces.masses[p.row as usize],
                 integral: f.integral,
                 quality: p.quality,
+                signal_to_noise: p.signal_to_noise,
             }
         })
         .collect();
@@ -78,38 +135,58 @@ pub fn ion_peaks(k: &Component, peaks: &[Peak], traces: &IonTraces) -> Vec<IonPe
     ions
 }
 
-/// Deconvolutes one run and returns the library substances assigned to its components.
+/// Deconvolutes one run and returns the library substances assigned to its components (and, if
+/// `s.untargeted`, the other components).
 pub fn scan_chromatogram(
     c: Chromatogram,
     lib: &PreparedLibrary,
     s: &ScanSettings,
-) -> Result<Vec<Found>, TooLarge> {
-    let traces = IonTraces::new(&c)?;
+) -> Result<Scanned, TooLarge> {
+    let mut traces = IonTraces::new(&c)?;
     // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
     // peak memory per run.
     let times = c.scan_times_s.clone();
     drop(c);
     let peaks = traces.detect_peaks(&s.peaks);
     let comps = deconvolute(&traces, &peaks, &s.deconv);
-    let ris = s
-        .calibration
+    let calibration = s.calibration.as_ref().map(|cal| {
+        let shifted = s.shift.and_then(|r| {
+            shift_to_reference(cal, &times, &comps, lib, r.compound, r.cutoff, &s.search)
+        });
+        shifted.unwrap_or_else(|| cal.clone())
+    });
+    let ris = calibration
         .as_ref()
         .map(|cal| cal.component_ris(&times, &comps));
     let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s.search);
-    Ok(comps
-        .iter()
-        .zip(id.assigned)
-        .filter_map(|(k, hit)| {
-            let hit = hit?;
-            let ions = ion_peaks(k, &peaks, &traces);
-            Some(Found {
-                compound: hit.compound,
-                score: hit.overall,
-                rt_s: times[k.apex_scan as usize],
+    let (mut found, mut unknown) = (Vec::new(), Vec::new());
+    for (i, (k, hit)) in comps.iter().zip(id.assigned).enumerate() {
+        if hit.is_none() && !s.untargeted {
+            continue;
+        }
+        let ions = ion_peaks(k, &peaks, &traces);
+        let rt_s = times[k.apex_scan as usize];
+        match hit {
+            Some(h) => found.push(Found {
+                compound: h.compound,
+                score: h.overall,
+                rt_s,
                 ions,
-            })
-        })
-        .collect())
+                rescanned: false,
+            }),
+            None => unknown.push(Unknown {
+                rt_s,
+                ri: ris.as_ref().map(|r| r[i]),
+                spectrum: k.spectrum.clone(),
+                ions,
+            }),
+        }
+    }
+    Ok(Scanned {
+        found,
+        unknown,
+        calibration,
+    })
 }
 
 /// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
@@ -139,9 +216,11 @@ pub fn scan_runs(
                             })
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
-                        .map(|found| RunResult {
+                        .map(|r| RunResult {
                             path: path.clone(),
-                            found,
+                            found: r.found,
+                            unknown: r.unknown,
+                            calibration: r.calibration,
                         })
                         .map_err(|e| format!("{}: {e}", path.display()));
                         mine.push((i, r));
@@ -168,6 +247,46 @@ pub fn scan_runs(
         }
     }
     Some((runs, errors))
+}
+
+/// What `complete_scan` added to the scanned runs.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Completed {
+    /// The pooled unknown substances (untargeted); `table` takes them as `extra`.
+    pub extra: Vec<LibraryCompound>,
+    /// Ions the rescan added.
+    pub rescanned: usize,
+    /// Run files the rescan could not read.
+    pub errors: Vec<String>,
+}
+
+/// The passes after `scan_runs`, shared by the app and the command line: pools the unknown
+/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is
+/// given. `None` once `cancel` is set.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_scan(
+    runs: &mut [RunResult],
+    lib: &[LibraryCompound],
+    s: &ScanSettings,
+    q: &QuantSettings,
+    rescan: Option<&RescanSettings>,
+    parallel: usize,
+    cancel: &AtomicBool,
+) -> Option<Completed> {
+    let extra = if s.untargeted {
+        add_unknowns(runs, lib.len(), s, cancel)?
+    } else {
+        Vec::new()
+    };
+    let (rescanned, errors) = match rescan {
+        Some(r) => rescan_runs(runs, lib, &extra, s, q, r, parallel, cancel)?,
+        None => (0, Vec::new()),
+    };
+    Some(Completed {
+        extra,
+        rescanned,
+        errors,
+    })
 }
 
 /// The old `QUANT_*` settings; defaults are the old static values (file-formats.md §5).
@@ -235,6 +354,11 @@ pub struct TableSettings {
     /// A value counts only if at least this many of the substance's quant ions were found (at most
     /// all of them).
     pub min_ions: usize,
+    /// An ion counts only if its peak has at least this signal-to-noise ratio (old "Req. S/N").
+    pub min_sn: f32,
+    /// A value counts only if the mean peak quality of its ions (the discrepancy index) is at most
+    /// this; the default accepts everything.
+    pub max_discrepancy: f32,
 }
 
 impl Default for TableSettings {
@@ -244,6 +368,8 @@ impl Default for TableSettings {
             replicates: String::new(),
             min_reproducibility: 0.0,
             min_ions: 1,
+            min_sn: 0.0,
+            max_discrepancy: f32::INFINITY,
         }
     }
 }
@@ -298,9 +424,69 @@ impl Table {
     }
 }
 
+/// Library compound `i`; indices past the library address `extra` (the pooled unknowns).
+fn compound_of<'a>(
+    lib: &'a [LibraryCompound],
+    extra: &'a [LibraryCompound],
+    i: usize,
+) -> &'a LibraryCompound {
+    lib.get(i).unwrap_or_else(|| &extra[i - lib.len()])
+}
+
+/// Library compound → its hit in each run.
+fn hits_by_compound<'a>(runs: &[&'a RunResult]) -> BTreeMap<usize, Vec<Option<&'a Found>>> {
+    let mut hits: BTreeMap<usize, Vec<Option<&Found>>> = BTreeMap::new();
+    for (col, r) in runs.iter().enumerate() {
+        for f in &r.found {
+            hits.entry(f.compound)
+                .or_insert_with(|| vec![None; runs.len()])[col] = Some(f);
+        }
+    }
+    hits
+}
+
+/// Quant ions of a substance: the library's own (manual, then automatic), else §7.2 on the
+/// best-scoring run among `found`. `None` if there is no run at all.
+fn compound_ions(
+    c: &LibraryCompound,
+    found: &[Option<&Found>],
+    q: &QuantSettings,
+) -> Option<Vec<u32>> {
+    let given = if c.quant_ions.is_empty() {
+        &c.auto_quant_ions
+    } else {
+        &c.quant_ions
+    };
+    let mut ions: Vec<u32> = given.iter().map(|m| m.round() as u32).collect();
+    if ions.is_empty() {
+        let best = found
+            .iter()
+            .flatten()
+            .filter(|f| !f.rescanned)
+            .max_by(|a, b| a.score.total_cmp(&b.score))?;
+        ions = quant_ions(&best.ions, q);
+    }
+    ions.dedup();
+    Some(ions)
+}
+
+/// The cell of one run: the summed integral of the quant ions found, if enough of them pass the filters.
+fn cell(f: &Found, ions: &[u32], need: usize, s: &TableSettings) -> Option<f64> {
+    // The largest peak of each quant ion; a duplicate peak (§4.5) counts once.
+    let hit: Vec<&IonPeak> = ions
+        .iter()
+        .filter_map(|m| (f.ions.iter()).find(|p| p.mass == *m && p.signal_to_noise >= s.min_sn))
+        .collect();
+    let discrepancy = hit.iter().map(|p| p.quality).sum::<f32>() / hit.len().max(1) as f32;
+    (hit.len() >= need && discrepancy <= s.max_discrepancy)
+        .then(|| hit.iter().map(|p| p.integral).sum())
+}
+
+/// `extra` are the unknowns `add_unknowns` pooled; their indices follow the library's.
 pub fn table(
     runs: &[RunResult],
     lib: &[LibraryCompound],
+    extra: &[LibraryCompound],
     s: &TableSettings,
 ) -> Result<Table, regex::Error> {
     let pattern = Regex::new(&s.replicates)?;
@@ -328,45 +514,16 @@ pub fn table(
     cols.iter()
         .for_each(|c| *sizes.entry(&c.0).or_default() += 1);
 
-    // Library compound → its hit in each column.
-    let mut hits: BTreeMap<usize, Vec<Option<&Found>>> = BTreeMap::new();
-    for (col, (_, _, r)) in cols.iter().enumerate() {
-        for f in &r.found {
-            hits.entry(f.compound)
-                .or_insert_with(|| vec![None; cols.len()])[col] = Some(f);
-        }
-    }
-    let mut rows: Vec<Row> = hits
+    let ordered: Vec<&RunResult> = cols.iter().map(|c| c.2).collect();
+    let mut rows: Vec<Row> = hits_by_compound(&ordered)
         .into_iter()
         .filter_map(|(compound, found)| {
-            let c = &lib[compound];
-            let given = if c.quant_ions.is_empty() {
-                &c.auto_quant_ions
-            } else {
-                &c.quant_ions
-            };
-            let mut ions: Vec<u32> = given.iter().map(|m| m.round() as u32).collect();
-            if ions.is_empty() {
-                let best = found
-                    .iter()
-                    .flatten()
-                    .max_by(|a, b| a.score.total_cmp(&b.score))?;
-                ions = quant_ions(&best.ions, &s.quant);
-            }
-            ions.dedup();
+            let c = compound_of(lib, extra, compound);
+            let ions = compound_ions(c, &found, &s.quant)?;
             let need = s.min_ions.clamp(1, ions.len().max(1));
             let values: Vec<Option<f64>> = found
                 .iter()
-                .map(|f| {
-                    let f = (*f)?;
-                    // The largest peak of each quant ion; a duplicate peak (§4.5) counts once.
-                    let hit: Vec<f64> = ions
-                        .iter()
-                        .filter_map(|m| f.ions.iter().find(|p| p.mass == *m))
-                        .map(|p| p.integral)
-                        .collect();
-                    (hit.len() >= need).then(|| hit.iter().sum())
-                })
+                .map(|f| cell(f.as_ref()?, &ions, need, s))
                 .collect();
             let mut per_group: BTreeMap<&str, usize> = BTreeMap::new();
             for (v, col) in values.iter().zip(&cols) {
@@ -377,7 +534,13 @@ pub fn table(
             let reproducible = per_group
                 .iter()
                 .any(|(g, n)| *n as f64 >= s.min_reproducibility * sizes[g] as f64);
-            let rts: Vec<f64> = found.iter().flatten().map(|f| f.rt_s).collect();
+            // Substances only rescanned in some runs have their retention time from the others.
+            let rts: Vec<f64> = found
+                .iter()
+                .flatten()
+                .filter(|f| !f.rescanned)
+                .map(|f| f.rt_s)
+                .collect();
             reproducible.then(|| Row {
                 compound,
                 name: c.name.clone(),
@@ -402,6 +565,7 @@ mod tests {
             mass,
             integral,
             quality,
+            signal_to_noise: 10.0,
         }
     }
 
@@ -487,6 +651,7 @@ mod tests {
             score: 0.9,
             rt_s,
             ions: ions.iter().map(|(m, i)| ion(*m, *i, 0.0)).collect(),
+            rescanned: false,
         }
     }
 
@@ -494,6 +659,7 @@ mod tests {
         RunResult {
             path: PathBuf::from("data").join(name),
             found,
+            ..Default::default()
         }
     }
 
@@ -523,7 +689,7 @@ mod tests {
             min_ions: 2,
             ..Default::default()
         };
-        let t = table(&runs, &lib, &s).unwrap();
+        let t = table(&runs, &lib, &[], &s).unwrap();
         assert_eq!(t.runs, ["ctrl_1.cdf", "ctrl_2.cdf", "mut_1.cdf"]);
         assert_eq!(t.groups, ["ctrl", "ctrl", "mut"]);
         // A uses the library's ions; ctrl_2 has only one of them, below min_ions.
@@ -538,18 +704,19 @@ mod tests {
             min_reproducibility: 0.75,
             ..s.clone()
         };
-        let t = table(&runs, &lib, &strict).unwrap();
+        let t = table(&runs, &lib, &[], &strict).unwrap();
         assert_eq!(
             t.rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             ["B"]
         );
         // Without a pattern all runs form one group, in input order.
-        let one = table(&runs, &lib, &TableSettings::default()).unwrap();
+        let one = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
         assert_eq!(one.runs, ["ctrl_1.cdf", "mut_1.cdf", "ctrl_2.cdf"]);
         assert!(
             table(
                 &runs,
                 &lib,
+                &[],
                 &TableSettings {
                     replicates: "(".into(),
                     ..s
@@ -559,11 +726,10 @@ mod tests {
         );
     }
 
-    /// Two substances of 12 ions each, apart in time; the library holds their spectra.
-    #[test]
-    fn scan_finds_and_integrates_library_substances() {
+    /// Two substances of 12 ions each, apart in time (early at 30 s, late at 70 s).
+    fn two_substances() -> Chromatogram {
         let (scans, ions) = (200, 24);
-        let c = Chromatogram {
+        Chromatogram {
             scan_times_s: (0..scans).map(|s| s as f64 * 0.5).collect(),
             offsets: (0..=scans).map(|s| s * ions).collect(),
             mz: (0..scans * ions)
@@ -580,20 +746,38 @@ mod tests {
                     980.0 + noise as f32 + peak
                 })
                 .collect(),
-        };
+        }
+    }
+
+    /// The library of `two_substances`: "late" (index 0) and "early" (index 1).
+    fn two_substances_library() -> Vec<LibraryCompound> {
         let spectrum = |first: usize| -> String {
             (0..12)
                 .map(|j| format!("({} {}) ", 60 + first + j, j + 1))
                 .collect()
         };
         let msl = format!(
-            "NAME: late\nNUM PEAKS: 12\n{}\n\nNAME: early\nNUM PEAKS: 12\n{}\n",
+            "NAME: late
+NUM PEAKS: 12
+{}
+
+NAME: early
+NUM PEAKS: 12
+{}
+",
             spectrum(12),
             spectrum(0)
         );
-        let lib = parse_msl(&msl).unwrap();
+        parse_msl(&msl).unwrap()
+    }
+
+    #[test]
+    fn scan_finds_and_integrates_library_substances() {
+        let lib = two_substances_library();
         let s = ScanSettings::default();
-        let found = scan_chromatogram(c, &PreparedLibrary::new(&lib, &s.search), &s).unwrap();
+        let found = scan_chromatogram(two_substances(), &PreparedLibrary::new(&lib, &s.search), &s)
+            .unwrap()
+            .found;
         assert_eq!(found.len(), 2, "{found:?}");
         let early = found.iter().find(|f| f.compound == 1).unwrap();
         assert!((early.rt_s - 30.0).abs() <= 0.5, "{}", early.rt_s);
@@ -605,6 +789,128 @@ mod tests {
                 .windows(2)
                 .all(|w| w[0].integral >= w[1].integral)
         );
+        assert!(early.ions.iter().all(|p| p.signal_to_noise > 0.0));
+    }
+
+    #[test]
+    fn table_filters_by_signal_to_noise_and_discrepancy() {
+        let lib = parse_msl(
+            "NAME: A
+QUANTIFICATION: 100 200
+NUM PEAKS: 1
+(100 1)
+",
+        )
+        .unwrap();
+        let mut good = found(0, 10.0, &[(100, 4.0), (200, 2.0)]);
+        good.ions[1].signal_to_noise = 2.0;
+        good.ions[0].quality = 1.0;
+        good.ions[1].quality = 3.0;
+        let runs = [run("a.cdf", vec![good])];
+        // A substance without any value left drops out of the table.
+        let value = |s: TableSettings| {
+            (table(&runs, &lib, &[], &s).unwrap().rows.first()).and_then(|r| r.values[0])
+        };
+        assert_eq!(value(TableSettings::default()), Some(6.0));
+        // S/N 5 drops ion 200; one of two ions is below min_ions 2.
+        let sn = TableSettings {
+            min_sn: 5.0,
+            ..Default::default()
+        };
+        assert_eq!(value(sn.clone()), Some(4.0));
+        assert_eq!(value(TableSettings { min_ions: 2, ..sn }), None);
+        // Discrepancy = mean quality of the ions: (1 + 3) / 2.
+        let d = |max| TableSettings {
+            max_discrepancy: max,
+            ..Default::default()
+        };
+        assert_eq!(value(d(2.0)), Some(6.0));
+        assert_eq!(value(d(1.9)), None);
+    }
+
+    #[test]
+    fn untargeted_runs_pool_their_unknown_components() {
+        let s = ScanSettings {
+            untargeted: true,
+            ..Default::default()
+        };
+        let none = PreparedLibrary::new(&[], &s.search);
+        let one = scan_chromatogram(two_substances(), &none, &s).unwrap();
+        assert!(one.found.is_empty());
+        assert_eq!(one.unknown.len(), 2);
+        let mut runs: Vec<RunResult> = (0..2)
+            .map(|i| RunResult {
+                path: PathBuf::from(format!("r{i}.cdf")),
+                unknown: one.unknown.clone(),
+                ..Default::default()
+            })
+            .collect();
+        // A cancelled pooling leaves the components of the runs it did not reach.
+        assert!(add_unknowns(&mut runs.clone(), 0, &s, &AtomicBool::new(true)).is_none());
+        // Two groups, each with one component of each run.
+        let extra = add_unknowns(&mut runs, 0, &s, &AtomicBool::new(false)).unwrap();
+        assert_eq!(extra.len(), 2);
+        assert!(
+            runs.iter()
+                .all(|r| r.unknown.is_empty() && r.found.len() == 2)
+        );
+        let t = table(&runs, &[], &extra, &TableSettings::default()).unwrap();
+        assert_eq!(t.rows.len(), 2);
+        assert!(t.rows[0].rt_s < t.rows[1].rt_s);
+        assert!(t.rows[0].name.starts_with("Unknown"));
+        assert!(t.rows.iter().all(|r| r.values.iter().all(Option::is_some)));
+    }
+
+    #[test]
+    fn rescan_fills_the_ions_a_run_lacks() {
+        let dir = std::env::temp_dir().join(format!("md-rescan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.cdf"), dir.join("b.cdf"));
+        crate::andi::write(&a, &two_substances()).unwrap();
+        crate::andi::write(&b, &two_substances()).unwrap();
+        let lib = two_substances_library();
+        let s = ScanSettings::default();
+        let found = scan_chromatogram(two_substances(), &PreparedLibrary::new(&lib, &s.search), &s)
+            .unwrap()
+            .found;
+        let mut runs = vec![
+            RunResult {
+                path: a,
+                found,
+                ..Default::default()
+            },
+            // The second run was scanned, but nothing was identified in it.
+            RunResult {
+                path: b,
+                ..Default::default()
+            },
+        ];
+        let q = QuantSettings::default();
+        let cancel = AtomicBool::new(false);
+        let r = RescanSettings::default();
+        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 2, &cancel).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(runs[1].found.len(), 2, "both substances are completed");
+        let t = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
+        assert!(added >= 2 * 3, "{added}");
+        for row in &t.rows {
+            let (v0, v1) = (row.values[0].unwrap(), row.values[1].unwrap());
+            assert!((v1 / v0 - 1.0).abs() < 0.25, "{} {v0} {v1}", row.name);
+        }
+        // Rescanned entries do not move the retention time of the substance.
+        assert!(runs[1].found.iter().all(|f| f.rescanned && f.score == 0.0));
+        // A substance seen in too few runs is left alone.
+        let strict = RescanSettings {
+            min_share: 1.0,
+            ..r
+        };
+        let mut again = vec![runs[0].clone(), RunResult::default()];
+        again[1].path = runs[1].path.clone();
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, &strict, 1, &cancel).unwrap();
+        assert_eq!(added, 0);
+        cancel.store(true, Relaxed);
+        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, &r, 1, &cancel).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

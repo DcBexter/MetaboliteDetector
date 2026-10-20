@@ -17,6 +17,28 @@ pub struct PeakSettings {
     pub min_peak_height: f32,
     /// `AN_NUMBER_BINS`: sub-scan steps of the precise apex.
     pub number_bins: u32,
+    /// Peak detection method; `Matched` ignores the three thresholds above.
+    pub detector: Detector,
+}
+
+/// "Peak detection method" of the old Calibration Setter window (algorithms.md §3.3). The old main
+/// window always uses `Default`; the method is not part of the old settings file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Detector {
+    /// Old `DefaultPeakDetector`: slope thresholds, robust baseline and S/N (§3.1).
+    #[default]
+    Default,
+    /// Old `MatchedPeakDetector(width, threshold)` ("Matched Filtering"): regions where the trace,
+    /// filtered with a matched filter of density `4 * width` scans, lies above `threshold`.
+    Matched { width: u32, threshold: i32 },
+}
+
+impl Detector {
+    /// The old window's values after switching to "Matched Filtering": width 10, threshold 3.
+    pub const MATCHED: Self = Self::Matched {
+        width: 10,
+        threshold: 3,
+    };
 }
 
 impl Default for PeakSettings {
@@ -26,12 +48,13 @@ impl Default for PeakSettings {
             threshold_end: -5.0,
             min_peak_height: 20.0,
             number_bins: 10,
+            detector: Detector::Default,
         }
     }
 }
 
 /// A peak in one ion trace. Scan numbers are indices into the run; the intensities are
-/// `IonTraces::trace(row)[first_scan..=last_scan]` (for `detect_peaks_matched`: the filtered trace).
+/// `IonTraces::trace(row)[first_scan..=last_scan]` (filtered values after a matched detection).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Peak {
     /// Row in `IonTraces` (`IonTraces::masses[row]` is the nominal mass).
@@ -163,7 +186,40 @@ impl IonTraces {
     }
 
     /// Peaks of every trace, detected in parallel; sorted by row, then scan.
-    pub fn detect_peaks(&self, settings: &PeakSettings) -> Vec<Peak> {
+    /// With `Detector::Matched` every trace is first replaced by its filtered values (truncated to
+    /// integers): the old peaks hold the filtered values, and the deconvolution reads them (§3.3).
+    /// So a matched detection is one-shot: a second call would filter the filtered traces.
+    pub fn detect_peaks(&mut self, settings: &PeakSettings) -> Vec<Peak> {
+        let Detector::Matched { width, threshold } = settings.detector else {
+            return self.detect_default(settings);
+        };
+        if self.scans == 0 {
+            return Vec::new();
+        }
+        let kernel = matched_kernel(4 * width as usize);
+        self.values
+            .par_chunks_mut(self.scans)
+            .enumerate()
+            .map_init(Vec::new, |raw, (row, trace)| {
+                raw.clear();
+                raw.extend_from_slice(trace);
+                let mut peaks = Vec::new();
+                matched_peaks(
+                    raw,
+                    &kernel,
+                    threshold,
+                    settings.number_bins,
+                    trace,
+                    &mut peaks,
+                );
+                peaks.iter_mut().for_each(|p| p.row = row as u32);
+                peaks
+            })
+            .flat_map_iter(|p| p)
+            .collect()
+    }
+
+    fn detect_default(&self, settings: &PeakSettings) -> Vec<Peak> {
         (0..self.len())
             .into_par_iter()
             .map_init(
@@ -408,57 +464,105 @@ fn peak(w: &[f32], first: usize, apex: usize, nf: f64, signal_to_noise: f32, bin
     }
 }
 
-/// Old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): correlation with a negative
-/// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace.
-/// It responds most to Gaussian peaks with sigma ≈ `density / 4` scans.
-pub fn matched_filter<T: Copy + Into<f64>>(v: &[T], density: usize) -> Vec<f64> {
+/// Kernel of the old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): a negative second
+/// derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`.
+fn matched_kernel(density: usize) -> Vec<f64> {
     let d = density.max(1) as isize;
-    let kernel: Vec<f64> = (-d..=d)
+    (-d..=d)
         .map(|x| {
             let u = 4.0 * x as f64 / d as f64;
             1.73 / (d as f64).sqrt() * (1.0 - u * u) * (-0.5 * u * u).exp()
         })
-        .collect();
-    (0..v.len() as isize)
-        .map(|i| {
-            (-d..=d)
-                .filter_map(|x| {
-                    v.get(usize::try_from(i + x).ok()?)
-                        .map(|y| (x, (*y).into()))
-                })
-                .map(|(x, y)| kernel[(x + d) as usize] * y)
-                .sum()
-        })
         .collect()
 }
 
-/// Old `MatchedPeakDetector<int,float>::detectPeaks` (§3.3–3.4): regions where the filtered trace
-/// (truncated to integers like the old int filter) rises above `threshold`, more than 2 scans long.
-/// As in the old code, the peak metrics use the filtered values with noise factor 0.5, there is
-/// no baseline check, and `signal_to_noise` stays 0. The old app takes `density` and `threshold`
-/// from the RI calibration dialog; it has no defaults.
-pub fn detect_peaks_matched(v: &[f32], density: usize, threshold: i32, bins: u32) -> Vec<Peak> {
-    let f: Vec<f32> = matched_filter(v, density)
+/// Correlation of `v` with `kernel` at index `i`; points outside the trace count as zero.
+fn correlate<T: Copy + Into<f64>>(v: &[T], kernel: &[f64], i: usize) -> f64 {
+    let d = kernel.len() / 2;
+    let lo = i.saturating_sub(d);
+    let hi = (i + d + 1).min(v.len());
+    v[lo..hi]
         .iter()
-        .map(|x| x.trunc() as f32)
-        .collect();
+        .zip(&kernel[lo + d - i..])
+        .map(|(y, k)| k * (*y).into())
+        .sum()
+}
+
+/// The old filter's last step: the first and last `d` values, where the kernel reaches past the
+/// trace, take the value of the nearest scan that is not among them, or 0 if the trace is not longer
+/// than `d` (§3.3).
+fn hold_edges<T: Copy + Default>(f: &mut [T], d: usize) {
+    let n = f.len();
+    if d >= n {
+        f.fill(T::default());
+        return;
+    }
+    let first = f[d];
+    f[..d].fill(first);
+    let last = f[n - d - 1];
+    f[n - d..].fill(last);
+}
+
+/// Old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): correlation with a negative
+/// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace,
+/// then the `density` values at each end held at the nearest inner value.
+/// It responds most to Gaussian peaks with sigma ≈ `density / 4` scans.
+pub fn matched_filter<T: Copy + Into<f64>>(v: &[T], density: usize) -> Vec<f64> {
+    let kernel = matched_kernel(density);
+    let mut f: Vec<f64> = (0..v.len()).map(|i| correlate(v, &kernel, i)).collect();
+    hold_edges(&mut f, kernel.len() / 2);
+    f
+}
+
+/// Old `MatchedPeakDetector<int,float>::detectPeaks` (§3.3–3.4) on one trace; the old
+/// `MatchedPeakDetector(width, …)` uses density `4 * width`. Regions where the filtered trace rises
+/// above `threshold`, more than 2 scans long. As in the old code, the peak metrics use the filtered
+/// values with noise factor 0.5, there is no baseline check, and `signal_to_noise` keeps the old
+/// default -1.
+pub fn detect_peaks_matched(v: &[f32], density: usize, threshold: i32, bins: u32) -> Vec<Peak> {
+    let (mut f, mut peaks) = (vec![0.0; v.len()], Vec::new());
+    matched_peaks(
+        v,
+        &matched_kernel(density),
+        threshold,
+        bins,
+        &mut f,
+        &mut peaks,
+    );
+    peaks
+}
+
+/// Filters `v` into `f` (same length; truncated to integers like the old int filter) and appends
+/// the matched-detector peaks of `f` to `out`.
+fn matched_peaks(
+    v: &[f32],
+    kernel: &[f64],
+    threshold: i32,
+    bins: u32,
+    f: &mut [f32],
+    out: &mut Vec<Peak>,
+) {
+    for (i, y) in f.iter_mut().enumerate() {
+        *y = correlate(v, kernel, i).trunc() as f32;
+    }
+    hold_edges(f, kernel.len() / 2);
     let thr = threshold as f32;
-    let mut peaks = Vec::new();
     let mut i = 1;
     while i < f.len() {
+        // Starts where the previous scan lies below and this one above the threshold, ends at the
+        // first scan at or below it (included); a region still open at the trace end is dropped.
         if f[i - 1] < thr && thr < f[i] {
             let Some(end) = (i + 1..f.len()).find(|j| f[*j] <= thr) else {
                 break;
             };
             if end - i > 2 {
                 let w = &f[i..=end];
-                peaks.push(peak(w, i, argmax(w, 0), 0.5, 0.0, bins));
+                out.push(peak(w, i, argmax(w, 0), 0.5, -1.0, bins));
             }
             i = end;
         }
         i += 1;
     }
-    peaks
 }
 
 /// Ordinary least squares `y = icpt + slope * x`; a single point gives a flat line.
@@ -618,11 +722,12 @@ mod tests {
 
     #[test]
     fn matched_filter_finds_peaks_of_its_width() {
-        let mut impulse = [0.0; 9];
-        impulse[4] = 1.0;
+        // Impulse response away from the 8 held scans at each end: the mirrored kernel.
+        let mut impulse = [0.0; 33];
+        impulse[16] = 1.0;
         let k = matched_filter(&impulse, 8);
         assert!(
-            k[4] > 0.0 && k[0] < 0.0 && (k[0] - k[8]).abs() < 1e-12,
+            k[16] > 0.0 && k[8] < 0.0 && (k[8] - k[24]).abs() < 1e-12,
             "{k:?}"
         );
         let mut v = noisy(300);
@@ -632,6 +737,35 @@ mod tests {
         assert_eq!(p.len(), 2, "{p:?}");
         assert_eq!((p[0].apex_scan, p[1].apex_scan), (80, 200));
         assert!(detect_peaks_matched(&[], 8, 10, 10).is_empty());
+    }
+
+    #[test]
+    fn matched_detection_filters_the_traces_in_place() {
+        let mut v = noisy(300);
+        gauss(&mut v, 150.0, 10.0, 50_000.0);
+        let c = Chromatogram {
+            scan_times_s: (0..v.len()).map(|s| s as f64).collect(),
+            offsets: (0..=v.len()).collect(),
+            mz: vec![73.0; v.len()],
+            intensity: v.clone(),
+        };
+        let mut t = IonTraces::new(&c).unwrap();
+        let s = PeakSettings {
+            detector: Detector::MATCHED,
+            ..PeakSettings::default()
+        };
+        let p = t.detect_peaks(&s);
+        assert_eq!(p, detect_peaks_matched(&v, 40, 3, 10), "{p:?}");
+        assert!(p.iter().any(|p| p.apex_scan.abs_diff(150) <= 1), "{p:?}");
+        let f: Vec<f32> = matched_filter(&v, 40)
+            .iter()
+            .map(|x| x.trunc() as f32)
+            .collect();
+        assert_eq!(t.trace(0), &f[..]);
+        // The old filter holds the 40 scans at each end at the nearest inner value.
+        let (head, tail) = (&f[..40], &f[260..]);
+        assert!(head.iter().all(|y| *y == f[40]) && tail.iter().all(|y| *y == f[259]));
+        assert_eq!(matched_filter(&[5.0f32; 3], 3), vec![0.0; 3]);
     }
 
     #[test]
@@ -658,7 +792,7 @@ mod tests {
             mz: (0..scans).flat_map(|_| [72.9f32, 73.2, 147.0]).collect(),
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
         };
-        let t = IonTraces::new(&c).unwrap();
+        let mut t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
         assert_eq!(t.trace(0), &big[..]);
         assert_eq!(t.trace(1), &vec![5.0; scans][..]);

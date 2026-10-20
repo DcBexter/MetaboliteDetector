@@ -8,7 +8,7 @@ use std::time::Instant;
 use md_core::batch::{ScanSettings, scan_chromatogram};
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::library::{LibraryCompound, parse_msl};
-use md_core::peaks::{IonTraces, PeakSettings};
+use md_core::peaks::{Detector, IonTraces, PeakSettings};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 use md_core::{Chromatogram, decimate};
 
@@ -76,7 +76,7 @@ fn main() {
     println!("overlay frame, 15 runs x TIC+SIC: {:?}", t.elapsed());
 
     let t = Instant::now();
-    let traces = IonTraces::new(&c).unwrap();
+    let mut traces = IonTraces::new(&c).unwrap();
     println!("ion traces ({}): {:?}", traces.len(), t.elapsed());
 
     let t = Instant::now();
@@ -91,6 +91,21 @@ fn main() {
         t.elapsed()
     );
     assert_eq!(sic.len(), scans);
+
+    // Matched filtering on a copy, so the default results above stay as they are.
+    let mut matched = traces.clone();
+    let t = Instant::now();
+    let m = matched.detect_peaks(&PeakSettings {
+        detector: Detector::MATCHED,
+        ..PeakSettings::default()
+    });
+    let mc = deconvolute(&matched, &m, &DeconvSettings::default());
+    println!(
+        "matched peaks ({}) + deconvolution ({} components): {:?}",
+        m.len(),
+        mc.len(),
+        t.elapsed()
+    );
 
     // 1 000 of these components against 10 000 library entries: their own spectra plus 9 000 entries of
     // 50 ions each.
@@ -137,7 +152,20 @@ fn main() {
     let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
     println!(
         "batch, one run end to end ({} substances found): {:?}",
-        found.len(),
+        found.found.len(),
+        t.elapsed()
+    );
+    // Untargeted: the same run, also keeping the components without library hit.
+    let u = ScanSettings {
+        untargeted: true,
+        ..s
+    };
+    let t = Instant::now();
+    let both = scan_chromatogram(c.clone(), &prepared, &u).unwrap();
+    println!(
+        "batch untargeted, one run ({} substances, {} unknown): {:?}",
+        both.found.len(),
+        both.unknown.len(),
         t.elapsed()
     );
 }

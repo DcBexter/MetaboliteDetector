@@ -11,8 +11,10 @@ license = "MIT"
 md-core = { path = "crates/md-core" }
 eframe = "0.37"
 egui_extras = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
 egui_plot = "0.38"
 flate2 = "1.1.10"
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 netcdf3 = "0.6"
 png = "0.18"
 rayon = "1.12.0"

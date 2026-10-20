@@ -49,6 +49,10 @@ fn run_points(
     points
 }
 
+/// Rough width of one label character and the gap between labels, in points.
+const LABEL_CHAR_PX: f32 = 7.0;
+const LABEL_GAP_PX: f32 = 6.0;
+
 /// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
 /// time in the view's unit.
 #[allow(clippy::too_many_arguments)]
@@ -73,6 +77,7 @@ fn trace_plot(
         .link_cursor(link, [true, false])
         .x_axis_label(format!("Retention time ({})", view.unit.label()))
         .y_axis_label(label)
+        .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
         .show(ui, |p| {
             // Draw at most ~2 points per pixel of the visible range, whatever the file size.
             let (lo, hi) = visible_minutes(p, view);
@@ -100,7 +105,20 @@ fn trace_plot(
                 let marks: Vec<[f64; 2]> = marks.iter().map(|m| [view.time(m[0]), m[1]]).collect();
                 p.points(Points::new("components", marks).radius(3.0));
             }
-            for (at, name, color) in labels {
+            // Hide overlapping names, best score first (3.3 does the same).
+            let b = p.plot_bounds();
+            let px_per_t = p.response().rect.width() as f64 / (b.max()[0] - b.min()[0]).max(1e-9);
+            let starts: Vec<f32> = labels
+                .iter()
+                .map(|l| ((view.time(l.0[0]) - b.min()[0]) * px_per_t) as f32)
+                .collect();
+            let widths: Vec<f32> = labels
+                .iter()
+                .map(|l| l.1.chars().count() as f32 * LABEL_CHAR_PX + LABEL_GAP_PX)
+                .collect();
+            let scores: Vec<f64> = labels.iter().map(|l| l.3).collect();
+            let keep = identify::visible_labels(&starts, &widths, &scores);
+            for ((at, name, color, _), _) in labels.iter().zip(&keep).filter(|(_, k)| **k) {
                 let text = egui::RichText::new(name).color(*color);
                 let at = [view.time(at[0]), at[1]];
                 p.text(Text::new("hits", at.into(), text).anchor(egui::Align2::LEFT_BOTTOM));
@@ -137,25 +155,27 @@ impl App {
     }
 
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.trace, Trace::Tic, "TIC");
             ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
             ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
-            ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                ui.label("m/z");
-                ui.add(
-                    egui::DragValue::new(&mut self.mz)
-                        .range(1.0..=2000.0)
-                        .max_decimals(2),
-                );
-                ui.label("±");
-                ui.add(
-                    egui::DragValue::new(&mut self.tolerance)
-                        .range(0.0..=10.0)
-                        .speed(0.05)
-                        .max_decimals(2),
-                );
-            });
+            // Each control on its own, not in a nested scope, so the row can wrap between them.
+            let sic = self.trace != Trace::Tic;
+            ui.add_enabled(sic, egui::Label::new("m/z"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.mz)
+                    .range(1.0..=2000.0)
+                    .max_decimals(2),
+            );
+            ui.add_enabled(sic, egui::Label::new("±"));
+            ui.add_enabled(
+                sic,
+                egui::DragValue::new(&mut self.tolerance)
+                    .range(0.0..=10.0)
+                    .speed(0.05)
+                    .max_decimals(2),
+            );
         });
     }
 

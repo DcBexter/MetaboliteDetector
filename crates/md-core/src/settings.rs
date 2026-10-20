@@ -8,7 +8,7 @@ use flate2::read::GzDecoder;
 
 use crate::batch::{QuantSettings, ScanSettings};
 use crate::deconv::DeconvSettings;
-use crate::peaks::PeakSettings;
+use crate::peaks::{Detector, PeakSettings};
 use crate::ri::RiCalibration;
 use crate::search::SearchSettings;
 
@@ -58,6 +58,8 @@ pub struct GcmsSettings {
     pub an_modeled_values_for_integration: bool,
     /// `LS_MASS_FILTER`.
     pub ls_mass_filter: Vec<(f32, f32)>,
+    /// Peak detection method (old Calibration Setter window, not saved by the old app).
+    pub peak_detector: Detector,
 }
 
 impl Default for GcmsSettings {
@@ -94,6 +96,7 @@ impl Default for GcmsSettings {
             an_min_height_bp: 0.0,
             an_modeled_values_for_integration: true,
             ls_mass_filter: Vec::new(),
+            peak_detector: Detector::Default,
         }
     }
 }
@@ -187,6 +190,11 @@ impl GcmsSettings {
             10_000.0,
         )?;
         ranged("AN_MIN_HEIGHT_BP", self.an_min_height_bp, 0.0, 1.0)?;
+        if let Detector::Matched { width, threshold } = self.peak_detector {
+            // The old window's width range; the threshold only needs to stay finite.
+            ranged("Peak width", width as f64, 1.0, 1000.0)?;
+            finite("Peak threshold", threshold as f64)?;
+        }
         ranged("LS_RI_DIFF", self.ls_ri_diff, 1e-6, 1e9)?;
         ranged(
             "QUANT_ION_NUMBER",
@@ -351,6 +359,7 @@ impl GcmsSettings {
             threshold_end: self.an_peak_threshold_end as f32,
             min_peak_height: self.an_min_peak_height as f32,
             number_bins: self.an_number_bins.max(1) as u32,
+            detector: self.peak_detector,
         }
     }
 
@@ -376,6 +385,8 @@ impl GcmsSettings {
                 ..self.search()
             },
             calibration,
+            shift: None,
+            untargeted: false,
         }
     }
 

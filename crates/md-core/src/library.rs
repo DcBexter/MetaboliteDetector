@@ -148,7 +148,7 @@ pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     } else {
         bytes
     };
-    let mut r = Reader { data, pos: 0 };
+    let mut r = Reader::new(data);
     let version = r.u32()?;
     if !(2..=5).contains(&version) {
         return Err(LibraryError::Unsupported(format!(
@@ -162,7 +162,7 @@ pub fn parse_lbr(bytes: &[u8]) -> Result<Vec<LibraryCompound>, LibraryError> {
     Ok(compounds)
 }
 
-fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
+pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
     let mut out = Vec::new();
     flate2::read::MultiGzDecoder::new(bytes)
         .take(MAX_LBR_BYTES + 1)
@@ -181,6 +181,39 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, LibraryError> {
 
 /// `LibraryCompound::fromStream`; the version gates follow the old reader (file-formats.md §1.2).
 fn read_compound(r: &mut Reader, version: u32) -> Result<LibraryCompound, LibraryError> {
+    let mut c = read_compound_record(r, version)?;
+    c.comb_spec = r.list(8, |r| Ok((r.f32()?, r.i32()?)))?;
+    c.ion_freq = r.list(8, |r| Ok((r.f32()?, r.u32()?)))?;
+    c.spec_count = r.u32()?;
+    c.ris = r.list(8, Reader::f64)?;
+    if version <= 3 {
+        c.blocks = r.list(BLOCK_BYTES, Reader::array)?;
+    }
+    c.sources = r.list(4, Reader::string)?;
+    // The old reader trims each formula (`trimFormulas`, C `isspace`, which includes VT).
+    if version >= 3 {
+        c.formulas = r.list(12, |r| {
+            Ok((
+                r.u32()?,
+                r.u32()?,
+                r.string()?
+                    .trim_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b')
+                    .to_string(),
+            ))
+        })?;
+    }
+    if version >= 5 {
+        c.mid_sizes = r.list(12, |r| Ok((r.u32()?, r.u32()?, r.u32()?)))?;
+    }
+    Ok(c)
+}
+
+/// `Compound<int,float>::fromStream` (file-formats.md §3.2), the part a library compound shares with
+/// a `.cmp` compound; the library-only fields keep the defaults of [`LibraryCompound::new`].
+pub(crate) fn read_compound_record(
+    r: &mut Reader,
+    version: u32,
+) -> Result<LibraryCompound, LibraryError> {
     let scan = r.u32()?;
     let rt_ms = r.f64()?;
     let ri = r.f64()?;
@@ -242,42 +275,14 @@ fn read_compound(r: &mut Reader, version: u32) -> Result<LibraryCompound, Librar
         drt,
         time_stamp,
         id,
-        comb_spec: r.list(8, |r| Ok((r.f32()?, r.i32()?)))?,
-        ion_freq: r.list(8, |r| Ok((r.f32()?, r.u32()?)))?,
-        spec_count: r.u32()?,
-        ris: r.list(8, Reader::f64)?,
-        blocks: if version <= 3 {
-            r.list(BLOCK_BYTES, Reader::array)?
-        } else {
-            Vec::new()
-        },
-        sources: r.list(4, Reader::string)?,
         peaks,
         model,
-        // The old reader trims each formula (`trimFormulas`, C `isspace`, which includes VT).
-        formulas: if version >= 3 {
-            r.list(12, |r| {
-                Ok((
-                    r.u32()?,
-                    r.u32()?,
-                    r.string()?
-                        .trim_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b')
-                        .to_string(),
-                ))
-            })?
-        } else {
-            Vec::new()
-        },
-        mid_sizes: if version >= 5 {
-            r.list(12, |r| Ok((r.u32()?, r.u32()?, r.u32()?)))?
-        } else {
-            Vec::new()
-        },
+        ..LibraryCompound::new("")
     })
 }
 
 /// `PeakEssential<float>` (68 bytes) or, with `short_ion`, `PeakEssential<short>` (66 bytes).
-fn read_peak(r: &mut Reader, short_ion: bool) -> Result<LibraryPeak, LibraryError> {
+pub(crate) fn read_peak(r: &mut Reader, short_ion: bool) -> Result<LibraryPeak, LibraryError> {
     Ok(LibraryPeak {
         ion: if short_ion {
             f32::from(i16::from_le_bytes(r.array()?))
@@ -298,7 +303,7 @@ fn read_peak(r: &mut Reader, short_ion: bool) -> Result<LibraryPeak, LibraryErro
 }
 
 /// `Peak<double,short>`: peak, noise factor, values, check = first + last + max scan + value count.
-fn read_model(r: &mut Reader) -> Result<LibraryModel, LibraryError> {
+pub(crate) fn read_model(r: &mut Reader) -> Result<LibraryModel, LibraryError> {
     let peak = read_peak(r, true)?;
     let noise_factor = r.f64()?;
     let values = r.list(8, Reader::f64)?;
@@ -317,17 +322,21 @@ fn read_model(r: &mut Reader) -> Result<LibraryModel, LibraryError> {
 }
 
 /// Little-endian reader that fails instead of panicking on short or inconsistent input.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn remaining(&self) -> usize {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.pos
     }
 
-    fn corrupt<T>(&self, reason: impl Into<String>) -> Result<T, LibraryError> {
+    pub(crate) fn corrupt<T>(&self, reason: impl Into<String>) -> Result<T, LibraryError> {
         Err(LibraryError::Corrupt {
             offset: self.pos,
             reason: reason.into(),
@@ -342,31 +351,31 @@ impl<'a> Reader<'a> {
         Ok(&self.data[self.pos - n..self.pos])
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], LibraryError> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], LibraryError> {
         let mut a = [0; N];
         a.copy_from_slice(self.take(N)?);
         Ok(a)
     }
 
-    fn u32(&mut self) -> Result<u32, LibraryError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, LibraryError> {
         self.array().map(u32::from_le_bytes)
     }
-    fn i32(&mut self) -> Result<i32, LibraryError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, LibraryError> {
         self.array().map(i32::from_le_bytes)
     }
-    fn i64(&mut self) -> Result<i64, LibraryError> {
+    pub(crate) fn i64(&mut self) -> Result<i64, LibraryError> {
         self.array().map(i64::from_le_bytes)
     }
-    fn f32(&mut self) -> Result<f32, LibraryError> {
+    pub(crate) fn f32(&mut self) -> Result<f32, LibraryError> {
         self.array().map(f32::from_le_bytes)
     }
-    fn f64(&mut self) -> Result<f64, LibraryError> {
+    pub(crate) fn f64(&mut self) -> Result<f64, LibraryError> {
         self.array().map(f64::from_le_bytes)
     }
 
     /// Reads a count of elements of at least `min_bytes` each; a count that cannot fit in the
     /// remaining bytes is rejected before anything is allocated.
-    fn count(&mut self, n: usize, min_bytes: usize) -> Result<usize, LibraryError> {
+    pub(crate) fn count(&mut self, n: usize, min_bytes: usize) -> Result<usize, LibraryError> {
         if n.checked_mul(min_bytes)
             .is_none_or(|b| b > self.remaining())
         {
@@ -375,7 +384,7 @@ impl<'a> Reader<'a> {
         Ok(n)
     }
 
-    fn list<T>(
+    pub(crate) fn list<T>(
         &mut self,
         min_bytes: usize,
         mut item: impl FnMut(&mut Self) -> Result<T, LibraryError>,
@@ -390,7 +399,7 @@ impl<'a> Reader<'a> {
     }
 
     /// i32 count (negative = null pointer) followed by f64 values.
-    fn f64_list_or_null(&mut self) -> Result<Option<Vec<f64>>, LibraryError> {
+    pub(crate) fn f64_list_or_null(&mut self) -> Result<Option<Vec<f64>>, LibraryError> {
         let Ok(n) = usize::try_from(self.i32()?) else {
             return Ok(None);
         };
@@ -401,12 +410,12 @@ impl<'a> Reader<'a> {
             .map(Some)
     }
 
-    fn bytes(&mut self) -> Result<&'a [u8], LibraryError> {
+    pub(crate) fn bytes(&mut self) -> Result<&'a [u8], LibraryError> {
         let n = self.u32()? as usize;
         self.take(n)
     }
 
-    fn string(&mut self) -> Result<String, LibraryError> {
+    pub(crate) fn string(&mut self) -> Result<String, LibraryError> {
         self.bytes().map(text)
     }
 }
@@ -577,6 +586,73 @@ pub fn write_msl(compounds: &[LibraryCompound]) -> String {
         }
         s.push('\n');
     }
+    s
+}
+
+/// The three export types of the old "Export Library" dialog (`LibrarySearch::exportMSL`,
+/// docs/reverse-engineering/file-formats.md section 6.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MslType {
+    /// "MSL Nominal": m/z as whole numbers.
+    Nominal,
+    /// "MSL Profile": m/z with six decimals.
+    Profile,
+    /// "MSL FWHM": m/z, FWHM and intensity per peak, no `RESOLUTION:` line.
+    Fwhm,
+}
+
+/// Writes compounds as the old program does for `kind`, byte for byte. Unlike [`write_msl`] this is for
+/// other programs (AMDIS): it rounds RT, RI and quantification ions to four decimals, so reading it
+/// back is not exact, and a `;` inside a feature value starts a new `KEY:` line.
+pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
+    // A line break inside a value would start a new record on import.
+    let one_line = |s: &str| s.replace(['\r', '\n'], " ");
+    let mut s = String::new();
+    for c in compounds {
+        let sp = &c.spectrum;
+        let _ = write!(
+            s,
+            "NAME:{}\nRI:{:.4}\nRT:{:.4}\n",
+            one_line(&c.name),
+            sp.ri,
+            sp.rt_ms / 60_000.0
+        );
+        for (k, v) in &c.features {
+            let (k, v) = (one_line(k), one_line(v));
+            let _ = writeln!(s, "{k}: {}", v.replace(';', &format!("\n{k}: ")));
+        }
+        s.push_str("QUANTIFICATION:");
+        for q in &c.quant_ions {
+            let _ = write!(s, "{q:.4}\t");
+        }
+        if kind != MslType::Fwhm {
+            let _ = write!(s, "\nRESOLUTION:{:.4}", sp.bin_width);
+        }
+        let _ = write!(s, "\nNUM PEAKS:{}", sp.masses.len());
+        for (i, (m, v)) in sp.masses.iter().zip(&sp.values).enumerate() {
+            if i % 5 == 0 {
+                s.push('\n');
+            }
+            let _ = match kind {
+                MslType::Nominal => write!(s, "({m:>4.0} {v:>4}) "),
+                MslType::Profile => write!(s, "({m:>10.6} {v:>4}) "),
+                // shortcut: no FWHM list means 1.0 like the old program on the sample library; upgrade
+                // when a library with another bin width and no FWHM turns up.
+                MslType::Fwhm => {
+                    let w = c
+                        .fwhm
+                        .as_ref()
+                        .and_then(|f| f.get(i))
+                        .copied()
+                        .unwrap_or(1.0);
+                    write!(s, "({m:>10.6} {w:>5.2}{v:>4}) ")
+                }
+            };
+        }
+        s.push_str("\n\n");
+    }
+    // The old program ends the file with one more blank line, also for an empty library.
+    s.push_str("\n\n");
     s
 }
 
@@ -1214,6 +1290,33 @@ mod tests {
         let mut c = parse_msl("NAME: x\nNUM PEAKS: 0\n").unwrap().remove(0);
         c.name = "two\nNAME: lines".into();
         assert_eq!(parse_msl(&write_msl(&[c])).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn old_msl_export_types_differ_in_peak_layout() {
+        let mut c = parse_msl("NAME: x\nRI: 1200.5\nRT: 2\nQUANTIFICATION: 73\nRESOLUTION: 1\nNUM PEAKS: 2\n(73 999) (147.5 1)\n")
+            .unwrap()
+            .remove(0);
+        c.features.insert("K".into(), "a;b".into());
+        let head = "NAME:x\nRI:1200.5000\nRT:2.0000\nK: a\nK: b\nQUANTIFICATION:73.0000\t";
+        let end = "\n\n\n\n";
+        let out = |c: &LibraryCompound, k| write_msl_as(std::slice::from_ref(c), k);
+        assert_eq!(
+            out(&c, MslType::Nominal),
+            format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73  999) ( 148    1) {end}")
+        );
+        assert_eq!(
+            out(&c, MslType::Profile),
+            format!(
+                "{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n( 73.000000  999) (147.500000    1) {end}"
+            )
+        );
+        c.fwhm = Some(vec![0.5]);
+        assert_eq!(
+            out(&c, MslType::Fwhm),
+            format!("{head}\nNUM PEAKS:2\n( 73.000000  0.50 999) (147.500000  1.00   1) {end}")
+        );
+        assert_eq!(write_msl_as(&[], MslType::Nominal), "\n\n");
     }
 
     #[test]

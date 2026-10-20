@@ -56,7 +56,8 @@ pub struct Component {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FittedPeak {
-    /// Index into the peak list given to `deconvolute`.
+    /// Index into the peak list given to `deconvolute` (for saved components: into the mass list
+    /// `cmp::saved_components` returns; for `LibraryCompound::component`: into its own peaks).
     pub peak: usize,
     /// Share of the model peak in this ion trace (`c2` of the fit).
     pub model_share: f64,
@@ -359,7 +360,7 @@ pub(crate) mod tests {
     #[test]
     fn separates_two_overlapping_substances() {
         let (c, truth) = two_substances();
-        let traces = IonTraces::new(&c).unwrap();
+        let mut traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let comps = deconvolute(&traces, &peaks, &DeconvSettings::default());
         assert_eq!(comps.len(), 2, "{comps:?}");
@@ -382,7 +383,7 @@ pub(crate) mod tests {
     #[test]
     fn rejects_components_with_too_few_ions_and_empty_input() {
         let (c, _) = two_substances();
-        let traces = IonTraces::new(&c).unwrap();
+        let mut traces = IonTraces::new(&c).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let strict = DeconvSettings {
             min_peak_number: 13,

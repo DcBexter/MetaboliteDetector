@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Plot};
-use md_core::library::{LibraryCompound, save_mdlib};
+use md_core::library::{LibraryCompound, MslType, save_mdlib, write_msl_as};
 
 mod add;
 
@@ -16,7 +16,7 @@ use add::{AddDialog, RtDialog, Source};
 #[derive(Default)]
 pub struct LibraryEditor {
     pub open: bool,
-    compounds: Vec<LibraryCompound>,
+    pub(crate) compounds: Vec<LibraryCompound>,
     /// `.mdlib` file the compounds came from or were last saved to; Save writes only there.
     path: Option<PathBuf>,
     /// Library name in the title; empty for a new library.
@@ -63,7 +63,7 @@ fn parse_ions(text: &str) -> Option<Vec<f32>> {
 }
 
 impl LibraryEditor {
-    fn select(&mut self, i: Option<usize>) {
+    pub(crate) fn select(&mut self, i: Option<usize>) {
         self.selected = i;
         self.ions = i.map_or(String::new(), |i| ions_text(&self.compounds[i].quant_ions));
     }
@@ -104,6 +104,39 @@ impl LibraryEditor {
         Some(path)
     }
 
+    /// "Export MSL" with the three types of the old export dialog; only `.msl` files are written.
+    fn export_menu(&mut self, ui: &mut egui::Ui, stem: &str) {
+        ui.menu_button("Export MSL", |ui| {
+            for (kind, label) in [
+                (MslType::Nominal, "MSL Nominal"),
+                (MslType::Profile, "MSL Profile"),
+                (MslType::Fwhm, "MSL FWHM"),
+            ] {
+                if ui.button(label).clicked() {
+                    ui.close();
+                    let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MSL library files", &["msl"])
+                        .set_file_name(format!("{stem}.msl"))
+                        .save_file()
+                    else {
+                        return;
+                    };
+                    let text = write_msl_as(&self.compounds, kind);
+                    self.error = if path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("msl"))
+                    {
+                        std::fs::write(&path, text)
+                            .err()
+                            .map(|e| format!("{}: {e}", path.display()))
+                    } else {
+                        Some(format!("{}: export as .msl.", path.display()))
+                    };
+                }
+            }
+        });
+    }
+
     /// Draws the editor; returns the file it saved, if any.
     fn contents(
         &mut self,
@@ -131,11 +164,16 @@ impl LibraryEditor {
             {
                 saved = self.save(path);
             }
-            let stem = Path::new(&self.name).file_stem().unwrap_or_default();
+            let stem = Path::new(&self.name)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            self.export_menu(ui, &stem);
             if ui.button("Save as…").clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("MetaboliteDetector library", &["mdlib"])
-                    .set_file_name(format!("{}.mdlib", stem.to_string_lossy()))
+                    .set_file_name(format!("{stem}.mdlib"))
                     .save_file()
             {
                 // The native dialog asked before replacing a file; only a .mdlib target is written.
@@ -166,20 +204,25 @@ impl LibraryEditor {
         ui.separator();
         self.add_windows(ui.ctx());
 
-        egui::Panel::left("library compounds")
-            .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| self.list(ui, source.as_ref()));
-        if let Some(i) = self.selected {
-            egui::ScrollArea::vertical().show(ui, |ui| self.details(ui, i));
-        } else {
-            ui.label("Select a compound.");
-        }
+        crate::layout::list_and_details(
+            ui,
+            "library compounds",
+            self,
+            |ed, ui| ed.list(ui, source.as_ref()),
+            |ed, ui| match ed.selected {
+                Some(i) => {
+                    egui::ScrollArea::vertical().show(ui, |ui| ed.details(ui, i));
+                }
+                None => {
+                    ui.label("Select a compound.");
+                }
+            },
+        );
         saved
     }
 
     fn list(&mut self, ui: &mut egui::Ui, source: Option<&Source>) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("New compound").clicked() {
                 self.compounds.push(LibraryCompound::new("New compound"));
                 self.dirty = true;
@@ -210,7 +253,11 @@ impl LibraryEditor {
                 self.select(None);
             }
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Filter by name"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.filter)
+                .hint_text("Filter by name")
+                .desired_width(f32::INFINITY),
+        );
         let filter = self.filter.to_lowercase();
         let shown: Vec<usize> = (0..self.compounds.len())
             .filter(|&i| self.compounds[i].name.to_lowercase().contains(&filter))
