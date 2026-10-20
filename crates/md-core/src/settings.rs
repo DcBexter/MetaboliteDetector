@@ -58,6 +58,9 @@ pub struct GcmsSettings {
     pub an_modeled_values_for_integration: bool,
     /// `LS_MASS_FILTER`.
     pub ls_mass_filter: Vec<(f32, f32)>,
+    /// `SQL_MAX_NUMBER_FRAGMENTS` and `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`: NIST pre-filter.
+    pub sql_max_number_fragments: i32,
+    pub sql_minimal_number_equal_fragments: i32,
     /// Peak detection method (old Calibration Setter window, not saved by the old app).
     pub peak_detector: Detector,
 }
@@ -96,6 +99,8 @@ impl Default for GcmsSettings {
             an_min_height_bp: 0.0,
             an_modeled_values_for_integration: true,
             ls_mass_filter: Vec::new(),
+            sql_max_number_fragments: 5,
+            sql_minimal_number_equal_fragments: 3,
             peak_detector: Detector::Default,
         }
     }
@@ -196,6 +201,19 @@ impl GcmsSettings {
             finite("Peak threshold", threshold as f64)?;
         }
         ranged("LS_RI_DIFF", self.ls_ri_diff, 1e-6, 1e9)?;
+        // A component has a few dozen fragments at most; the dialog uses the same limits.
+        ranged(
+            "SQL_MAX_NUMBER_FRAGMENTS",
+            self.sql_max_number_fragments as f64,
+            1.0,
+            100.0,
+        )?;
+        ranged(
+            "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS",
+            self.sql_minimal_number_equal_fragments as f64,
+            0.0,
+            100.0,
+        )?;
         ranged(
             "QUANT_ION_NUMBER",
             self.quant_ion_number as f64,
@@ -412,6 +430,8 @@ impl GcmsSettings {
             use_spec: self.ls_use_spec,
             mass_filter: self.ls_mass_filter.clone(),
             cutoff: 0.0,
+            max_fragments: self.sql_max_number_fragments.max(1) as usize,
+            min_equal_fragments: self.sql_minimal_number_equal_fragments.max(0) as usize,
         }
     }
 }
@@ -451,6 +471,22 @@ mod tests {
             (3, 0.5, 1.0)
         );
         s.validate().unwrap();
+        assert_eq!(
+            (s.search().max_fragments, s.search().min_equal_fragments),
+            (5, 3)
+        );
+        // Not in the old file, so only the dialog can set them; it keeps them in range.
+        for (max, min) in [(0, 3), (101, 3), (5, -1), (5, 101)] {
+            let bad = GcmsSettings {
+                sql_max_number_fragments: max,
+                sql_minimal_number_equal_fragments: min,
+                ..Default::default()
+            };
+            assert!(
+                bad.validate().unwrap_err().starts_with("SQL_"),
+                "{max} {min}"
+            );
+        }
     }
 
     #[test]
@@ -518,6 +554,8 @@ mod tests {
         let base = GcmsSettings {
             an_min_height_bp: 0.25,
             ls_mass_filter: vec![(1.0, 2.0)],
+            sql_max_number_fragments: 7,
+            sql_minimal_number_equal_fragments: 2,
             ..Default::default()
         };
         let got = base
