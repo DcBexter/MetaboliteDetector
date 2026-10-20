@@ -408,7 +408,11 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 `--shift-reference` (needs `-c`; `--shift-cutoff`) switch on the passes above. The CSV is
 `Table::write_csv` (UTF-8 with byte order mark for Excel, `Substance,RT_s,Quant_ions,<run>...`, empty cell = not
 quantified; names that start with `=`, `+`, `-` or `@` get a leading `'`); with replicate groups, `-o FILE`
-and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`); `-o FILE` always
+and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`) and
+`FILE.groupstats.csv` (`Table::write_group_stats_file`: per group `Mean_`, `Rel_Std_Err_`, `Hits_` and with a group
+`BLANK` (the app: the group named in "Blank group"; md-cli: `BLANK`) `P_blank_`, last `P_ANOVA`, unrounded, empty = not defined; the same numbers as the "Group statistics" view,
+which takes them from `Table::group_stats`; the old `exportData` writes the shown table cell by cell, so its group
+view had the p-value column too, #222); `-o FILE` always
 writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
