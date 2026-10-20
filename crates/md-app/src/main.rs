@@ -15,6 +15,7 @@ mod export;
 mod identify;
 mod isotopes;
 mod jobs;
+mod layout;
 mod library_editor;
 mod loading;
 mod menu;
