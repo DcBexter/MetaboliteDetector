@@ -26,10 +26,8 @@ impl App {
                                 warnings.push(e.to_string());
                                 None
                             });
-                        // shortcut: saved components carry no `Peak` list, so their panel shows no
-                        // S/N, quality or sharpness; read them from the `.cmp` peaks (follow-up).
                         let (components, peak_masses, peaks) = match saved {
-                            Some((c, m)) => (c, m, Vec::new()),
+                            Some(saved) => saved,
                             None => settings::analyze(&data, &key)?,
                         };
                         let saved_calibration =

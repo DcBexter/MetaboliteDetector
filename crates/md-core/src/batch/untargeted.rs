@@ -11,6 +11,8 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
+use rayon::prelude::*;
+
 use super::{Found, RunResult, ScanSettings, Unknown};
 use crate::library::LibraryCompound;
 use crate::search::{PreparedLibrary, assign_best_first, library_hits};
@@ -18,7 +20,8 @@ use crate::search::{PreparedLibrary, assign_best_first, library_hits};
 /// Pools the `unknown` components of all runs, in run order. Returns the temporary library; each
 /// component becomes a `Found` of the run with index `first_index + k` for its group `k`
 /// (`first_index` is the length of the reference library, so `table` finds the group in `extra`).
-/// `None` once `cancel` is set; the scoring grows with the square of the number of unknowns.
+/// `None` once `cancel` is set. The scoring grows with the square of the number of unknowns; the
+/// components of a run are scored in parallel.
 pub fn add_unknowns(
     runs: &mut [RunResult],
     first_index: usize,
@@ -32,7 +35,8 @@ pub fn add_unknowns(
             return None;
         }
         let unknown = std::mem::take(&mut run.unknown);
-        let hits: Vec<_> = (unknown.iter())
+        // Every component only reads the library as it was before the run, so they are scored in parallel.
+        let hits: Vec<_> = (unknown.par_iter())
             .map(|u| library_hits(&u.spectrum, u.ri, &prepared, &s.search))
             .collect();
         let assigned = assign_best_first(&hits, lib.len());
@@ -119,6 +123,52 @@ mod tests {
             unknown,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_groups_do_not_depend_on_the_number_of_threads() {
+        let mut seed = 7_u64;
+        let mut rnd = move |n: u64| {
+            seed = (seed.wrapping_mul(6364136223846793005)).wrapping_add(1442695040888963407);
+            (seed >> 33) % n
+        };
+        let base: Vec<Vec<(u32, u32)>> = (0..40)
+            .map(|_| {
+                let mut s: Vec<_> = (0..8)
+                    .map(|_| (50 + rnd(60) as u32, 100 + rnd(900) as u32))
+                    .collect();
+                s.sort_unstable_by_key(|p| p.0);
+                s.dedup_by_key(|p| p.0);
+                s
+            })
+            .collect();
+        let runs: Vec<RunResult> = (0..6)
+            .map(|_| {
+                run((0..60)
+                    .map(|k| unknown(k as f64, &base[rnd(40) as usize]))
+                    .collect())
+            })
+            .collect();
+        let pool = |threads| {
+            let mut runs = runs.clone();
+            let lib = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    add_unknowns(
+                        &mut runs,
+                        3,
+                        &ScanSettings::default(),
+                        &AtomicBool::new(false),
+                    )
+                })
+                .unwrap();
+            (lib, runs.into_iter().map(|r| r.found).collect::<Vec<_>>())
+        };
+        let (lib, found) = pool(1);
+        assert!(lib.len() > 10 && lib.len() < 360, "{}", lib.len());
+        assert_eq!(pool(4), (lib, found));
     }
 
     #[test]

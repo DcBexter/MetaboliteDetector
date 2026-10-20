@@ -18,6 +18,7 @@ use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
+use md_core::stats::{group_values, student, summary};
 
 use crate::identify::Library;
 use crate::spawn;
@@ -53,6 +54,80 @@ struct Norm {
     pool_nearest: usize,
     pool_median: bool,
     z_score: bool,
+    /// Runs and substances the user removed; part of the key because they change the shown table.
+    edits: Edits,
+}
+
+/// Columns and rows removed or moved in the shown table. Runs are edited before the
+/// normalisation (a removed run takes no part in z-scores), substances after it.
+#[derive(Clone, Default, PartialEq)]
+struct Edits {
+    /// Columns of the table `table` built that are kept, in display order; `None` = all.
+    cols: Option<Vec<usize>>,
+    /// Library indices of the removed substances.
+    rows: Vec<usize>,
+}
+
+impl Edits {
+    fn cols(&self, n: usize) -> Vec<usize> {
+        self.cols.clone().unwrap_or_else(|| (0..n).collect())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.cols.is_none() && self.rows.is_empty()
+    }
+
+    /// Applies what the user asked for in the shown table with `n` columns in the base table.
+    fn apply(&mut self, act: Act, n: usize) {
+        let mut cols = self.cols(n);
+        match act {
+            Act::DropRun(j) if j < cols.len() => {
+                cols.remove(j);
+            }
+            Act::MoveRun(j, to) if j < cols.len() && to < cols.len() => cols.swap(j, to),
+            Act::DropRow(compound) => return self.rows.push(compound),
+            _ => return,
+        }
+        self.cols = Some(cols);
+    }
+}
+
+/// What a click in the shown table asks for; columns are numbered as shown.
+#[derive(Clone, Copy)]
+enum Act {
+    DropRun(usize),
+    MoveRun(usize, usize),
+    DropRow(usize),
+}
+
+/// What the shown table lists.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Mode {
+    /// Summed quant ion integrals per run.
+    #[default]
+    Values,
+    /// Retention time of the hit per run, in minutes.
+    Times,
+    /// Mean, relative standard error, hits and p-value against the blanks, per replicate group.
+    Groups,
+}
+
+/// How the shown table is displayed; changing it does not derive the table again.
+struct View {
+    mode: Mode,
+    totals: bool,
+    /// Replicate group of the blank runs (the old program's fixed name).
+    blanks: String,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            mode: Mode::default(),
+            totals: false,
+            blanks: "BLANK".into(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -72,6 +147,7 @@ impl Default for Norm {
             pool_nearest: 2,
             pool_median: false,
             z_score: false,
+            edits: Edits::default(),
         }
     }
 }
@@ -92,11 +168,16 @@ pub struct Batch {
     settings: TableSettings,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
+    /// Whether the search is by retention time only (Analysis → RI calibration).
+    rt_only: bool,
     job: Option<Job>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
     table: Option<(TableSettings, Result<Table, String>)>,
     norm: Norm,
+    view: View,
+    /// Total intensities of the shown table (`generation`), when they are displayed.
+    totals: (u64, Vec<f64>),
     /// `table` normalised as `norm` says.
     shown: Option<(Norm, Table)>,
     /// Counts the tables `shown` has held, so windows reading it know when it changed.
@@ -121,10 +202,13 @@ impl Default for Batch {
             },
             settings: TableSettings::default(),
             applied: GcmsSettings::default(),
+            rt_only: false,
             job: None,
             scan: None,
             table: None,
             norm: Norm::default(),
+            view: View::default(),
+            totals: (0, Vec::new()),
             shown: None,
             generation: 0,
             times: None,
@@ -136,7 +220,8 @@ impl Default for Batch {
 
 impl Batch {
     /// Takes the applied settings; changed `QUANT_*` values replace those of the window.
-    pub fn use_settings(&mut self, applied: &GcmsSettings) {
+    pub fn use_settings(&mut self, applied: &GcmsSettings, rt_only: bool) {
+        self.rt_only = rt_only;
         if self.applied != *applied {
             let quant = applied.quant();
             if quant != self.applied.quant() {
@@ -330,6 +415,11 @@ impl Batch {
     }
 
     /// Progress and Cancel while a scan runs, else Start and what it will use.
+    /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
+    fn library_ready(&self, lib: &Library) -> bool {
+        lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
+    }
+
     fn job_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -355,9 +445,9 @@ impl Batch {
                 }
             }
             None => {
-                // Not while the library is rebuilt for new search settings: it would be scaled differently.
-                let ready =
-                    lib.filter(|l| !self.paths.is_empty() && l.settings == self.applied.search());
+                // Not while the library is rebuilt for new search settings or a switch of RT-only: it
+                // would be scaled differently, and the calibration is hidden meanwhile.
+                let ready = lib.filter(|l| !self.paths.is_empty() && self.library_ready(l));
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new("Start"))
                     .clicked()
@@ -377,7 +467,7 @@ impl Batch {
                     )),
                     None => ui.label("Open a library first (File → Open library)."),
                 };
-                if lib.is_some_and(|l| l.settings != self.applied.search()) {
+                if lib.is_some_and(|l| !self.library_ready(l)) {
                     ui.label("Library is being prepared for the new search settings.");
                 }
                 ui.label(&self.note);
@@ -398,6 +488,7 @@ impl Batch {
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
                     .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
                     .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+                    .add_filter("Saved components (.cmp)", &["cmp", "CMP"])
                     .pick_files()
             {
                 self.paths.extend(p);
@@ -416,8 +507,7 @@ impl Batch {
             let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)
                 .map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
-            self.shown = None;
-            self.times = None;
+            (self.shown, self.times, self.norm.edits) = (None, None, Edits::default());
         }
         ui.separator();
         ui.label(format!(
@@ -436,10 +526,8 @@ impl Batch {
                 norm_controls(ui, &mut self.norm, t);
                 pool_notes(ui, &self.norm, t, &scan.runs, &mut self.times);
                 if self.shown.as_ref().is_none_or(|s| s.0 != self.norm) {
-                    let n = &self.norm;
                     let times = self.times.as_ref().map(|t| t.0.as_slice());
-                    let shown = apply(t, &mode(n, t, times.unwrap_or_default()), n.z_score);
-                    self.shown = Some((n.clone(), shown));
+                    self.shown = Some((self.norm.clone(), shown_table(t, &self.norm, times)));
                     self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
@@ -453,7 +541,19 @@ impl Batch {
                             (self.note, self.frag_job) = ("Exporting MIDs…".into(), Some(rx));
                         }
                     });
-                    table_view(ui, shown, &self.norm);
+                    view_controls(
+                        ui,
+                        &mut self.view,
+                        &mut self.norm.edits,
+                        &group_names(shown),
+                    );
+                    if self.view.totals && self.totals.0 != self.generation {
+                        self.totals = (self.generation, shown.total_intensities());
+                    }
+                    let totals = self.view.totals.then_some(self.totals.1.as_slice());
+                    if let Some(act) = table_view(ui, shown, &self.norm, &self.view, totals) {
+                        self.norm.edits.apply(act, t.runs.len());
+                    }
                 }
             }
             Some(Err(e)) => {
@@ -482,6 +582,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         .set_file_name("mids.csv")
         .save_file()?;
     let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
+    let names = t.runs.clone();
     let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
     Some(spawn(ui.ctx(), move || {
         let n = lib.compounds.len();
@@ -496,7 +597,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
                 ))
             })
             .collect();
-        let e = frag_export(&runs, &compounds);
+        let e = frag_export(&shown_runs(&runs, &names), &compounds);
         let mut note = match std::fs::write(&p, &e.csv) {
             Ok(()) => format!("Saved {}", p.display()),
             Err(err) => format!("Export failed: {err}"),
@@ -511,6 +612,19 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         }
         note
     }))
+}
+
+/// The scanned runs of the shown table's columns, in its order: removed runs stay out of exports.
+/// shortcut: files are found by name, so equal names in different folders are not told apart.
+fn shown_runs(runs: &[RunResult], names: &[String]) -> Vec<RunResult> {
+    let by_name: std::collections::HashMap<_, _> = runs
+        .iter()
+        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), r)))
+        .collect();
+    names
+        .iter()
+        .filter_map(|n| by_name.get(n).copied().cloned())
+        .collect()
 }
 
 /// The export has the values the table shows. Returns a note after a save attempt.
@@ -533,66 +647,281 @@ fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
     })
 }
 
-/// Rows are virtualised, so only the visible ones are laid out each frame.
+/// The table as the user's edits and the normalisation leave it: runs are removed and moved
+/// first, substances are removed last.
+fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
+    let cols = n.edits.cols.as_deref();
+    let edited = cols.map(|c| t.select_runs(c));
+    let base = edited.as_ref().unwrap_or(t);
+    // The file dates follow the runs that are left.
+    let times: Vec<i64> = match (times, cols) {
+        (Some(ts), Some(cols)) => cols
+            .iter()
+            .map(|c| ts.get(*c).copied().unwrap_or(0))
+            .collect(),
+        (Some(ts), None) => ts.to_vec(),
+        (None, _) => Vec::new(),
+    };
+    apply(base, &mode(n, base, &times), n.z_score).without_rows(&n.edits.rows)
+}
+
+fn view_controls(ui: &mut egui::Ui, v: &mut View, edits: &mut Edits, groups: &[&str]) {
+    // Two rows: the window must not need more than the room beside the run list.
+    ui.horizontal(|ui| {
+        for (mode, title) in [
+            (Mode::Values, "Values"),
+            (Mode::Times, "Retention times (min)"),
+            (Mode::Groups, "Group statistics"),
+        ] {
+            let r = ui.selectable_value(&mut v.mode, mode, title);
+            if mode == Mode::Groups {
+                r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.");
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add_enabled(
+            v.mode == Mode::Values,
+            egui::Checkbox::new(&mut v.totals, "Total sample intensities"),
+        )
+        .on_hover_text(
+            "Adds a first row with the sum of each run's values (a missing value counts as 0).",
+        )
+        .on_disabled_hover_text("Only in the Values view.");
+        if v.mode == Mode::Groups {
+            ui.label("Blank group");
+            ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
+                .on_hover_text(
+                    "Replicate group of the blank runs; every other group gets a p-value against it.",
+                );
+            if !groups.contains(&v.blanks.as_str()) {
+                ui.weak("no such group, so no p-values");
+            }
+        }
+        if !edits.is_empty()
+            && ui
+                .button("Restore removed")
+                .on_hover_text(
+                    "Brings back the removed runs and substances and the original order of the runs.",
+                )
+                .clicked()
+        {
+            *edits = Edits::default();
+        }
+    });
+}
+
+/// Replicate groups in name order, like the old statistics table.
+fn group_names(t: &Table) -> Vec<&str> {
+    let mut g: Vec<&str> = t.groups.iter().map(String::as_str).collect();
+    g.sort_unstable();
+    g.dedup();
+    g
+}
+
+/// A run without replicate group (empty pattern) belongs to the whole batch.
+fn group_label(g: &str) -> String {
+    if g.is_empty() {
+        "all runs".into()
+    } else {
+        g.into()
+    }
+}
+
+/// A statistic that is undefined (NaN) shows as a dash.
+fn number(v: f64, decimals: usize) -> String {
+    if v.is_finite() {
+        format!("{v:.decimals$}")
+    } else {
+        "–".into()
+    }
+}
+
+/// Titles and sub-titles of the columns after "Quant ions".
+fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, String)> {
+    if v.mode != Mode::Groups {
+        return (t.runs.iter().zip(&t.groups))
+            .map(|(r, g)| (r.clone(), group_label(g)))
+            .collect();
+    }
+    let stats = ["Mean", "Rel. Std. Err.", "#", "P (blank)"];
+    let per_group = if blank { 4 } else { 3 };
+    (groups.iter())
+        .flat_map(|g| {
+            stats[..per_group]
+                .iter()
+                .map(move |s| (s.to_string(), group_label(g)))
+        })
+        .collect()
+}
+
+/// The cells of one substance in "Group statistics": per group mean, relative standard error,
+/// hits and (with a blank group) the p-value against the blanks.
+fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> Vec<String> {
+    let values = |g: &str| group_values(t, row, &[g.to_string()], true);
+    let blanks = blank.map(values);
+    let mut out = Vec::new();
+    for g in groups {
+        let x = values(g);
+        let s = summary(&x);
+        out.push(number(s.mean, 0));
+        out.push(number(s.rel_std_err, 3));
+        out.push(s.hits.to_string());
+        if let Some(b) = &blanks {
+            let p = (blank != Some(g)).then(|| student(&x, b)).flatten();
+            out.push(p.map_or("–".into(), |p| format!("{p:.4}")));
+        }
+    }
+    out
+}
+
+/// Cells of substance `row` after "Quant ions".
+fn cells(t: &Table, v: &View, groups: &[&str], blank: bool, row: usize) -> Vec<String> {
+    let r = &t.rows[row];
+    match v.mode {
+        Mode::Values => (r.values.iter())
+            .map(|v| v.map_or("–".into(), |v| format!("{v:.0}")))
+            .collect(),
+        Mode::Times => (r.rts_s.iter())
+            .map(|rt| rt.map_or("–".into(), |s| format!("{:.2}", s / 60.0)))
+            .collect(),
+        Mode::Groups => group_cells(t, row, groups, blank.then_some(v.blanks.as_str())),
+    }
+}
+
+/// Buttons in the header of run `j` of `n`: move left, move right, remove.
+fn run_buttons(ui: &mut egui::Ui, j: usize, n: usize) -> Option<Act> {
+    let mut act = None;
+    ui.horizontal(|ui| {
+        if j > 0
+            && ui
+                .small_button("‹")
+                .on_hover_text("Move run left")
+                .clicked()
+        {
+            act = Some(Act::MoveRun(j, j - 1));
+        }
+        if j + 1 < n
+            && ui
+                .small_button("›")
+                .on_hover_text("Move run right")
+                .clicked()
+        {
+            act = Some(Act::MoveRun(j, j + 1));
+        }
+        if ui
+            .small_button("×")
+            .on_hover_text("Remove this run from the results (Restore removed brings it back)")
+            .clicked()
+        {
+            act = Some(Act::DropRun(j));
+        }
+    });
+    act
+}
+
+/// Rows are virtualised, so only the visible ones are laid out each frame. Returns what the user
+/// clicked to change the table.
 /// shortcut: all columns are laid out per visible row; virtualise columns too if studies with
-/// thousands of runs feel slow.
-fn table_view(ui: &mut egui::Ui, t: &Table, norm: &Norm) {
-    let what = match (norm.kind, norm.z_score) {
-        (Kind::None, false) => "summed quant ion integrals",
-        (_, false) => "normalised quant ion integrals",
-        (Kind::None, true) => "z-scores of the summed integrals",
-        (_, true) => "z-scores of the normalised integrals",
+/// thousands of runs feel slow. The total row scrolls with the rows instead of sticking.
+fn table_view(
+    ui: &mut egui::Ui,
+    t: &Table,
+    norm: &Norm,
+    v: &View,
+    totals: Option<&[f64]>,
+) -> Option<Act> {
+    let what = match (v.mode, norm.kind, norm.z_score) {
+        (Mode::Times, ..) => "retention times of the hits in minutes",
+        (Mode::Groups, ..) => "per replicate group; a missing value counts as 0",
+        (_, Kind::None, false) => "summed quant ion integrals",
+        (_, _, false) => "normalised quant ion integrals",
+        (_, Kind::None, true) => "z-scores of the summed integrals",
+        (_, _, true) => "z-scores of the normalised integrals",
     };
     ui.label(format!(
         "{} substances × {} runs; values are {what}",
         t.rows.len(),
         t.runs.len()
     ));
+    let groups = group_names(t);
+    let blank = v.mode == Mode::Groups && groups.contains(&v.blanks.as_str());
+    let heads = heads(t, v, &groups, blank);
+    let totals = totals.filter(|_| v.mode == Mode::Values);
+    let mut act = None;
     egui::ScrollArea::horizontal().show(ui, |ui| {
         // Rows have a fixed height, so cells must not wrap.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         TableBuilder::new(ui)
             .id_salt("batch table")
             .striped(true)
+            .column(Column::exact(28.0))
             .column(Column::auto().at_least(160.0))
             .columns(Column::auto(), 2)
-            .columns(Column::auto().at_least(70.0), t.runs.len())
-            .header(36.0, |mut h| {
+            .columns(Column::auto().at_least(70.0), heads.len())
+            .header(54.0, |mut h| {
+                h.col(|_| {});
                 for title in ["Substance", "RT (min)", "Quant ions"] {
                     h.col(|ui| {
                         ui.strong(title);
                     });
                 }
-                for (run, group) in t.runs.iter().zip(&t.groups) {
+                for (j, (title, sub)) in heads.iter().enumerate() {
                     h.col(|ui| {
                         ui.vertical(|ui| {
-                            ui.strong(run);
-                            ui.label(group);
+                            ui.strong(title);
+                            ui.label(sub);
+                            if v.mode != Mode::Groups {
+                                act = run_buttons(ui, j, heads.len()).or(act);
+                            }
                         });
                     });
                 }
             })
             .body(|body| {
-                body.rows(18.0, t.rows.len(), |mut row| {
-                    let r = &t.rows[row.index()];
+                let lead = totals.is_some() as usize;
+                body.rows(18.0, t.rows.len() + lead, |mut row| {
+                    let Some(i) = row.index().checked_sub(lead) else {
+                        total_row(&mut row, totals.unwrap_or_default());
+                        return;
+                    };
+                    let r = &t.rows[i];
+                    row.col(|ui| {
+                        if ui
+                            .small_button("×")
+                            .on_hover_text(
+                                "Remove this substance from the results (Restore removed brings it back)",
+                            )
+                            .clicked()
+                        {
+                            act = Some(Act::DropRow(r.compound));
+                        }
+                    });
                     let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
-                    row.col(|ui| {
-                        ui.label(&r.name);
-                    });
-                    row.col(|ui| {
-                        ui.label(format!("{:.2}", r.rt_s / 60.0));
-                    });
-                    row.col(|ui| {
-                        ui.label(ions.join(" "));
-                    });
-                    for v in &r.values {
+                    let lead = [r.name.clone(), format!("{:.2}", r.rt_s / 60.0), ions.join(" ")];
+                    for text in lead.into_iter().chain(cells(t, v, &groups, blank, i)) {
                         row.col(|ui| {
-                            ui.label(v.map_or("–".into(), |v| format!("{v:.0}")));
+                            ui.label(text);
                         });
                     }
                 });
             });
     });
+    act
+}
+
+fn total_row(row: &mut egui_extras::TableRow, totals: &[f64]) {
+    row.col(|_| {});
+    row.col(|ui| {
+        ui.strong("Total sample intensity");
+    });
+    row.col(|_| {});
+    row.col(|_| {});
+    for t in totals {
+        row.col(|ui| {
+            ui.strong(format!("{t:.0}"));
+        });
+    }
 }
 
 fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
@@ -722,16 +1051,97 @@ mod tests {
             quant_ion_number: 5,
             ..Default::default()
         };
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 5);
         // An edit in the window survives settings that leave QUANT_* alone ...
         b.settings.quant.ion_number = 2;
         applied.ls_ri_diff += 1.0;
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 2);
         // ... and the next change of QUANT_* replaces it.
         applied.quant_ion_number = 4;
-        b.use_settings(&applied);
+        b.use_settings(&applied, false);
         assert_eq!(b.settings.quant.ion_number, 4);
+    }
+
+    #[test]
+    fn edits_drop_move_and_restore_columns_and_rows() {
+        let mut e = Edits::default();
+        e.apply(Act::MoveRun(0, 1), 3);
+        assert_eq!(e.cols, Some(vec![1, 0, 2]));
+        e.apply(Act::DropRun(1), 3);
+        assert_eq!(e.cols, Some(vec![1, 2]));
+        // Out of range clicks (a stale frame) change nothing.
+        e.apply(Act::DropRun(5), 3);
+        e.apply(Act::MoveRun(1, 2), 3);
+        assert_eq!(e.cols, Some(vec![1, 2]));
+        e.apply(Act::DropRow(7), 3);
+        assert_eq!(e.rows, [7]);
+        assert!(!e.is_empty());
+    }
+
+    #[test]
+    fn the_shown_table_has_no_removed_runs_or_substances() {
+        let row = |compound, values: [f64; 3]| md_core::batch::Row {
+            compound,
+            name: format!("s{compound}"),
+            rt_s: 60.0,
+            ions: vec![73],
+            values: values.map(Some).to_vec(),
+            rts_s: vec![Some(60.0); 3],
+        };
+        let t = Table {
+            runs: vec!["a".into(), "b".into(), "c".into()],
+            groups: vec![String::new(); 3],
+            rows: vec![row(0, [1.0, 2.0, 3.0]), row(1, [4.0, 5.0, 6.0])],
+        };
+        let mut n = Norm::default();
+        n.edits.apply(Act::DropRun(0), 3);
+        n.edits.apply(Act::DropRow(0), 3);
+        let shown = shown_table(&t, &n, None);
+        assert_eq!(shown.runs, ["b", "c"]);
+        assert_eq!(shown.rows.len(), 1);
+        assert_eq!(shown.rows[0].values, [Some(5.0), Some(6.0)]);
+        // Normalised by total signal: the removed run no longer counts, the removed row still does.
+        n.kind = Kind::TotalSignal;
+        let shown = shown_table(&t, &n, None);
+        assert_eq!(shown.rows[0].values, [Some(5.0 / 7.0), Some(6.0 / 9.0)]);
+    }
+
+    #[test]
+    fn exports_use_the_runs_of_the_shown_table_in_its_order() {
+        let run = |n: &str| RunResult {
+            path: format!("dir/{n}.cdf").into(),
+            ..Default::default()
+        };
+        let runs = [run("a"), run("b"), run("c")];
+        let shown = shown_runs(&runs, &["c.cdf".into(), "a.cdf".into()]);
+        let names: Vec<_> = shown
+            .iter()
+            .map(|r| r.path.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["c.cdf", "a.cdf"]);
+    }
+
+    #[test]
+    fn start_waits_for_the_library_to_match_search_settings_and_rt_only() {
+        let search = GcmsSettings::default().search();
+        let lib = |rt_only: bool| Library {
+            path: PathBuf::new(),
+            name: String::new(),
+            prepared: if rt_only {
+                md_core::search::PreparedLibrary::new_rt_only(&[], &search)
+            } else {
+                md_core::search::PreparedLibrary::new(&[], &search)
+            },
+            compounds: Vec::new(),
+            settings: search.clone(),
+        };
+        let mut b = Batch::default();
+        assert!(b.library_ready(&lib(false)));
+        assert!(!b.library_ready(&lib(true)));
+        b.use_settings(&GcmsSettings::default(), true);
+        assert!(b.library_ready(&lib(true)));
+        assert!(!b.library_ready(&lib(false)));
     }
 }

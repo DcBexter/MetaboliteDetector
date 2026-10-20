@@ -25,7 +25,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, run info, score filter, auto-Y done; export #9 |
 | 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison and component panel #77 (done, no profile mode) |
 | 6 | Chromatogram overlay | `ChromatogramOverlayDialog`, `MultiChromatogramPlot` | Overlay TIC or SIC of several runs. | done (#8) |
-| 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` read/write done (#13), save/load in the app #107 |
+| 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` read/write done (#13), save/load in the Results window and `.cmp` as batch input done (#107) |
 | 8 | Library identification | `gcms::LibrarySearch`, `SpectrumFunctions`, settings `LS_*` | Score = spectrum similarity, RI similarity or combined; pure/impure factors, cutoff, max ΔRI, mass filter ranges, scaled library, fragment pre-filter (`SQL_*`). | done (scaled library always on); `SQL_*` pre-filter and `LS_IDENTIFICATION_ALGORITHM` #21 |
 | 9 | RI calibration wizard | `RICalibrationWizard`, `RICalculator` | Alkane (or other) calibration mix from a library, RT→RI table per chromatogram (`.calib`), optional "advanced" RT shift correction using a calibration compound; RT-only alignment as fallback. | basics + reference shift done (#20, #45); mix from library, editable table, per-run calibration, RT-only (#81) |
 | 10 | Batch compound detection wizard | `Compound Detection Wizard...` | Runs #7 for many files after RI calibration. | targeted done (#22); per-run result list done (#78) |
@@ -34,7 +34,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | #23 |
 | 14 | Statistics | `BiomarkerDialog`, `tools::Statistics`, `BoxPlot`, `HistogramPlot` | Two-group biomarker table (means, ratio, p-value, hits), independent/paired samples, box plots. | #24 |
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | #24 |
-| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | done (#28): four corrections, M1, tracer, result tree with CSV, FRAG export; plots and group statistics #141 |
+| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | done (#28, #141): four corrections, M1, tracer, result tree, bar plots, group statistics with StdErr, the old text exports with clipboard copy, FRAG export |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
 | 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), MSL export as nominal / profile / FWHM done (#84, #114); editor #12; add compound / copy RTs done (#80, "Modify entry" spectrum merge not ported) |
 | 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | NIST text `.sdf` with the old fragment pre-filter and NIST MSP `.msp` read and searched (PR #123); live test with a real NIST file open (#21) |
@@ -55,7 +55,6 @@ by exactly one issue.
 | 4, 21 | Copy data/image, CSV, PNG/PDF/SVG, image size dialog | #9 |
 | 5 | Profile (centroid toggle): the rewrite reads centroid spectra only | not planned |
 | 7 | Matched-filter peak detection for components | #82 |
-| 7 | Result list: table, find compound, CSV done (#78); save/load `.cmp` and `.cmp` as batch input | #107 |
 | 8, 19 | NIST import, fragment pre-filter (`SQL_*` defaults) | done (PR #123); live test #21 |
 | 8, 19 | `SQL_*` and `LS_IDENTIFICATION_ALGORITHM` in the settings, NIST path, "NIST search..." for one component | #131 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
@@ -63,7 +62,6 @@ by exactly one issue.
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |
 | 13 | Internal standard, summed signal, pool (with pool mapping export), z-score | #23 |
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
-| 16 | MID wizard: MID plots, group statistics with StdErr, clipboard | #141 |
 | 20 | CSV results + R template instead of the embedded R console | #26 |
 | files | `.cmp` versions 1 to 3 (older releases, no sample) | — |
 | files | High-resolution runs (`getDataType() == 2`) | #34 |

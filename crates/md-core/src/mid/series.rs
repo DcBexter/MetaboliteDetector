@@ -3,7 +3,6 @@
 //! turns them into MIDs.
 
 use super::{MidFit, correct_by_formula, correct_by_reference, replicate_mean};
-use std::fmt::Write;
 
 use rayon::prelude::*;
 
@@ -93,6 +92,8 @@ pub fn intensities(found: &Found, lo: u32, hi: u32) -> Vec<f64> {
 pub struct FragmentMid {
     pub lo: u32,
     pub hi: u32,
+    /// Rows of the per-run exports (old `MIDCompoundSeries`): one per ion, at most the MID size.
+    pub isotopomers: usize,
     /// Per-run methods: one fit per run, `None` where the run lacks the substance or every ion is 0
     /// (the old program shows NaN there). Group methods: the single fit, `None` without usable runs.
     pub fits: Vec<Option<MidFit>>,
@@ -111,47 +112,6 @@ pub struct CompoundMid {
 pub struct Mids {
     pub compounds: Vec<CompoundMid>,
     pub errors: Vec<String>,
-}
-
-impl Mids {
-    /// The result tree as CSV: a row `Name_ion (Mk)` per substance, fragment and isotopomer; per
-    /// column (a run, or the labelled group) the MID, then the CIs, then R², with the old
-    /// `outputMIDDataToStream` header labels `CI (…)` and `R2 (…)`. Cells without a value stay empty.
-    pub fn csv(&self, lib: &[LibraryCompound], columns: &[String]) -> String {
-        let mut s = String::from("Ion");
-        for (pre, post) in [("", ""), ("CI (", ")"), ("R2 (", ")")] {
-            columns
-                .iter()
-                .for_each(|c| _ = write!(s, "\t{pre}{c}{post}"));
-        }
-        s.push('\n');
-        let values: [fn(&MidFit, usize) -> Option<f64>; 3] = [
-            |x, k| x.mids.get(k).copied(),
-            |x, k| x.cis.get(k).copied().flatten(),
-            |x, _| x.r2,
-        ];
-        for c in &self.compounds {
-            for f in &c.fragments {
-                let n = (f.fits.iter().flatten())
-                    .map(|x| x.mids.len())
-                    .max()
-                    .unwrap_or(0);
-                for k in 0..n {
-                    _ = write!(s, "{}_{} (M{k})", lib[c.compound].name, f.lo as usize + k);
-                    for value in values {
-                        for fit in &f.fits {
-                            s.push('\t');
-                            if let Some(v) = fit.as_ref().and_then(|x| value(x, k)) {
-                                _ = write!(s, "{v}");
-                            }
-                        }
-                    }
-                    s.push('\n');
-                }
-            }
-        }
-        s
-    }
 }
 
 /// MIDs of every substance found in at least one run. `labelled` and `unlabelled` are indices into
@@ -180,6 +140,10 @@ pub fn determine(
                         .map(|fits| FragmentMid {
                             lo: f.lo,
                             hi: f.hi,
+                            isotopomers: match (method.per_run(), f.size) {
+                                (true, 1..) => f.size.min((f.hi - f.lo) as usize + 1),
+                                _ => (f.hi - f.lo) as usize + 1,
+                            },
                             fits,
                         })
                         .map_err(|e| format!("{} ({}-{}): {e}", c.name, f.lo, f.hi))
@@ -321,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn uncorrected_group_skips_empty_runs_and_writes_csv() {
+    fn uncorrected_group_skips_empty_runs_and_exports() {
         let mut c = LibraryCompound::new("Ala");
         c.formulas.push((11, 10, "C2".into()));
         let runs = [
@@ -349,10 +313,11 @@ mod tests {
         let ci = 1.96 * 0.125;
         assert!((fit.cis[0].unwrap() - ci).abs() < 1e-12);
         assert_eq!(
-            m.csv(&[c], &["labelled".into()]),
+            m.group_text(&[c]),
             format!(
-                "Ion\tlabelled\tCI (labelled)\tR2 (labelled)\nAla_10 (M0)\t0.625\t{ci}\t\nAla_11 (M1)\t0.375\t{}\t\n",
-                fit.cis[1].unwrap()
+                "Ala_10 (M0)\t0.625\t{}\t-1\nAla_11 (M1)\t0.375\t{}\t-1\n\n",
+                crate::mid::qt_g(ci),
+                crate::mid::qt_g(fit.cis[1].unwrap())
             )
         );
     }
