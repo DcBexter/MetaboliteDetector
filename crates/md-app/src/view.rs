@@ -29,6 +29,17 @@ impl Default for View {
     }
 }
 
+/// Large intensities compactly, the same in every chromatogram plot: `12 M`, `1.2 k`, `-3`.
+pub fn compact(v: f64) -> String {
+    let (n, suffix) = match v.abs() {
+        a if a >= 1e9 => (v / 1e9, " G"),
+        a if a >= 1e6 => (v / 1e6, " M"),
+        a if a >= 1e4 => (v / 1e3, " k"),
+        _ => return format!("{}", (v * 1e6).round() / 1e6),
+    };
+    format!("{}{suffix}", (n * 10.0).round() / 10.0)
+}
+
 impl View {
     /// Whether the old label switches let a name with this score through.
     pub fn shows(&self, score: f64) -> bool {
@@ -158,6 +169,15 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_values_are_compact() {
+        assert_eq!(compact(12_000_000.0), "12 M");
+        assert_eq!(compact(1_234_567.0), "1.2 M");
+        assert_eq!(compact(25_000.0), "25 k");
+        assert_eq!(compact(9_000.0), "9000");
+        assert_eq!(compact(-0.5), "-0.5");
+    }
 
     #[test]
     fn score_switches_pick_their_bands() {
