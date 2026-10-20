@@ -95,8 +95,9 @@ impl LibraryCompound {
         Self {
             spectrum: LibrarySpectrum {
                 scan: 0,
-                rt_ms: 0.0,
-                ri: 0.0,
+                // -1 is "unknown", what the old importers set when a record has no RT or RI.
+                rt_ms: -1.0,
+                ri: -1.0,
                 bin_width: 1.0,
                 masses: Vec::new(),
                 values: Vec::new(),
@@ -1534,6 +1535,27 @@ mod tests {
             a.spectrum.rt_ms = b.spectrum.rt_ms;
         }
         assert_eq!(again, lib);
+    }
+
+    /// The old `importMSL` leaves RT and RI at -1 (unknown) when a record has none; 0 stays 0.
+    /// Checked with the old binary (docs/reverse-engineering/tools/golden/make-msl-export.sh).
+    #[test]
+    fn missing_rt_and_ri_are_unknown() {
+        let text = "NAME: a
+NUM PEAKS: 1
+(73 1000)
+
+NAME: b
+RI: 0
+RT: 0
+NUM PEAKS: 1
+(73 1000)
+";
+        let lib = parse_msl(text).unwrap();
+        assert_eq!((lib[0].spectrum.ri, lib[0].spectrum.rt_ms), (-1.0, -1.0));
+        assert_eq!((lib[1].spectrum.ri, lib[1].spectrum.rt_ms), (0.0, 0.0));
+        let new = LibraryCompound::new("n");
+        assert_eq!((new.spectrum.ri, new.spectrum.rt_ms), (-1.0, -1.0));
     }
 
     #[test]

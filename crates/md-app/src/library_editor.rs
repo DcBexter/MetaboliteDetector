@@ -292,27 +292,49 @@ impl LibraryEditor {
                 changed |= ui.text_edit_singleline(&mut c.name).changed();
                 ui.end_row();
 
+                // The old program stores -1 for an unknown RT or RI; 0 is a real value.
                 ui.label("RT (min)");
-                let mut minutes = c.spectrum.rt_ms / 60_000.0;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut minutes)
-                            .speed(0.01)
-                            .range(0.0..=f64::MAX)
-                            .clamp_existing_to_range(false),
-                    )
-                    .changed()
-                {
-                    c.spectrum.rt_ms = minutes * 60_000.0;
-                    changed = true;
-                }
+                ui.horizontal(|ui| {
+                    let mut known = c.spectrum.rt_ms >= 0.0;
+                    if ui
+                        .checkbox(&mut known, "known")
+                        .on_hover_text(
+                            "Untick when the retention time is unknown. 0 is a real value.",
+                        )
+                        .changed()
+                    {
+                        c.spectrum.rt_ms = if known { 0.0 } else { -1.0 };
+                        changed = true;
+                    }
+                    if known {
+                        let mut minutes = c.spectrum.rt_ms / 60_000.0;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut minutes)
+                                    .speed(0.01)
+                                    .range(0.0..=f64::MAX)
+                                    .clamp_existing_to_range(false),
+                            )
+                            .changed()
+                        {
+                            c.spectrum.rt_ms = minutes * 60_000.0;
+                            changed = true;
+                        }
+                    }
+                });
                 ui.end_row();
 
                 // The search treats a negative RI as unknown.
                 ui.label("RI");
                 ui.horizontal(|ui| {
                     let mut known = c.spectrum.ri >= 0.0;
-                    if ui.checkbox(&mut known, "known").changed() {
+                    if ui
+                        .checkbox(&mut known, "known")
+                        .on_hover_text(
+                            "Untick when the retention index is unknown. 0 is a real value.",
+                        )
+                        .changed()
+                    {
                         c.spectrum.ri = if known { 0.0 } else { -1.0 };
                         changed = true;
                     }

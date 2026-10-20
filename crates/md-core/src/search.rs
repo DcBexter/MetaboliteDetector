@@ -665,6 +665,20 @@ mod tests {
         assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
     }
 
+    /// The old search takes `RI >= 0` as known (`getLibraryHits`): RI 0 is a value, -1 means unknown.
+    #[test]
+    fn ri_zero_is_known_and_minus_one_is_not() {
+        let peaks = [(57.0, 100), (71.0, 50)];
+        let s = all(SearchSettings::default());
+        let spectrum = as_comp(&peaks, 1);
+        let ri_sim = |ri| {
+            let lib = PreparedLibrary::new(&[entry("a", ri, &peaks)], &s);
+            library_hits(&spectrum, Some(0.0), &lib, &s)[0].ri_sim
+        };
+        assert_eq!(ri_sim(0.0), Some(1.0));
+        assert_eq!(ri_sim(-1.0), None);
+    }
+
     #[test]
     fn rt_only_compares_times_in_seconds() {
         let peaks = [(57.0, 100), (71.0, 50)];
