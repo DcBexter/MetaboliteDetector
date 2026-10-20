@@ -7,10 +7,12 @@
 //! (cheap) turns the result into the table, so filters and replicate groups can change without rescanning.
 //! Details of the old program: docs/reverse-engineering/batch-quantification.md.
 
+mod detail;
 mod edit;
 mod rescan;
 mod untargeted;
 
+pub use detail::{hit_list, ion_integrals, ions_path, settings_path};
 pub use rescan::rescan_runs;
 pub use untargeted::add_unknowns;
 
@@ -86,6 +88,9 @@ pub struct Found {
     pub rescanned: bool,
     /// Masses of the ions `rescan_runs` added to an identified component.
     pub rescued: Vec<u32>,
+    /// The other library hits of the component (library index, overall score), best first; the
+    /// assigned hit is `compound`/`score`. Empty after a rescan.
+    pub alternatives: Vec<(usize, f64)>,
 }
 
 /// A component without library hit, kept by an untargeted scan until `add_unknowns` pools it.
@@ -193,7 +198,7 @@ fn scan_components(
         .map(|cal| cal.component_ris(times, comps));
     let id = map_compounds_to_library(comps, ris.as_deref(), lib, &s.search);
     let (mut found, mut unknown) = (Vec::new(), Vec::new());
-    for (i, (k, hit)) in comps.iter().zip(id.assigned).enumerate() {
+    for (i, (k, hit)) in comps.iter().zip(&id.assigned).enumerate() {
         if hit.is_none() && !s.untargeted {
             continue;
         }
@@ -207,6 +212,10 @@ fn scan_components(
                 ions,
                 rescanned: false,
                 rescued: Vec::new(),
+                alternatives: (id.hits[i].iter())
+                    .filter(|o| o.compound != h.compound)
+                    .map(|o| (o.compound, o.overall))
+                    .collect(),
             }),
             None => unknown.push(Unknown {
                 rt_s,
@@ -565,10 +574,9 @@ fn compound_ions(
 
 /// The cell of one run: the summed integral of the quant ions found, if enough of them pass the filters.
 fn cell(f: &Found, ions: &[u32], need: usize, s: &TableSettings) -> Option<f64> {
-    // The largest peak of each quant ion; a duplicate peak (§4.5) counts once.
-    let hit: Vec<&IonPeak> = ions
-        .iter()
-        .filter_map(|m| (f.ions.iter()).find(|p| p.mass == *m && p.signal_to_noise >= s.min_sn))
+    let hit: Vec<&IonPeak> = detail::quant_peaks(f, ions, s.min_sn)
+        .into_iter()
+        .flatten()
         .collect();
     let discrepancy = hit.iter().map(|p| p.quality).sum::<f32>() / hit.len().max(1) as f32;
     (hit.len() >= need && discrepancy <= s.max_discrepancy)
@@ -813,6 +821,7 @@ mod tests {
             ions: ions.iter().map(|(m, i)| ion(*m, *i, 0.0)).collect(),
             rescanned: false,
             rescued: Vec::new(),
+            alternatives: Vec::new(),
         }
     }
 

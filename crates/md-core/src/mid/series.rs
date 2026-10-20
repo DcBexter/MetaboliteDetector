@@ -278,6 +278,7 @@ mod tests {
                     .collect(),
                 rescanned: false,
                 rescued: Vec::new(),
+                alternatives: Vec::new(),
             }],
             unknown: Vec::new(),
             calibration: None,

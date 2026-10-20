@@ -115,6 +115,7 @@ mod tests {
                     .into(),
                 rescanned: false,
                 rescued: Vec::new(),
+                alternatives: Vec::new(),
             }],
             ..Default::default()
         };
