@@ -724,7 +724,8 @@ pub fn table(
             .find_map(|m| m.get(&run_key(n))),
         pattern.captures(n),
     ) {
-        (Some(g), _) => g.clone(),
+        // Trimmed here: a field being typed keeps its blanks.
+        (Some(g), _) => g.trim().into(),
         // A run the table lacks is a group of its own, not part of "all runs".
         _ if s.replicates.is_empty() && !s.sample_groups.is_empty() => n.into(),
         _ if s.replicates.is_empty() => String::new(),
@@ -1079,7 +1080,7 @@ mod tests {
         assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 3);
         // A group set by hand wins over the table and the pattern; the other runs are not touched.
         let hand = TableSettings {
-            manual_groups: SampleGroups::from([(run_key("/x/RUN01.cdf"), "blank".into())]),
+            manual_groups: SampleGroups::from([(run_key("/x/RUN01.cdf"), "blank ".into())]),
             ..s
         };
         let t = table(&more, &[], &[], &hand).unwrap();

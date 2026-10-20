@@ -46,7 +46,9 @@ impl SampleTable {
         let text = text.trim_start_matches('\u{feff}');
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
         let head = lines.next().ok_or("the table is empty")?;
-        let sep = ['\t', ';', ','].into_iter().find(|c| head.contains(*c));
+        let sep = ['\t', ';', ',']
+            .into_iter()
+            .find(|c| split_cells(head, *c).len() > 1);
         let cells = |l: &str| split_cells(l, sep.unwrap_or('\t'));
         Ok(Self {
             columns: cells(head),
@@ -131,6 +133,9 @@ mod tests {
         let g = t.groups(0, 1).unwrap();
         assert_eq!(g["a,b"], "say \"hi\"");
         assert_eq!(g["c"], "y");
+        // A delimiter that only appears inside quotes does not split the table.
+        let t = SampleTable::parse("\"Run; file\",Group\na.cdf,x\n").unwrap();
+        assert_eq!(t.columns, ["Run; file", "Group"]);
     }
 
     #[test]
