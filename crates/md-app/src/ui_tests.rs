@@ -272,6 +272,7 @@ fn screenshots() {
                         .into(),
                     rescanned: false,
                     rescued: Vec::new(),
+                    alternatives: Vec::new(),
                 })
                 .collect(),
             ..Default::default()
