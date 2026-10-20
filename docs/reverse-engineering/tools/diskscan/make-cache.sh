@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Converts the example runs into the old MetaboliteDetector 3.3 .bin/.idx cache, for the test
-# old_cache_matches_cdf (src/md-core/tests/example_data.rs). Never commit the output.
+# old_cache_matches_cdf (crates/md-core/tests/example_data.rs). Never commit the output.
 # Run on Linux/WSL with the old binary installed (or MD_APP pointing to it), g++ and nm:
 #   docs/reverse-engineering/tools/diskscan/make-cache.sh OUT_DIR [CDF...]
 #   MD_OLD_CACHE=OUT_DIR cargo test -p md-core --test example_data old_cache

@@ -4,9 +4,10 @@ on:
   push:
     branches: [main]
     paths: &rust
-      - 'src/**'
+      - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/ci.yml'
   pull_request:
     # Draft pushes run nothing; ready_for_review starts the run for the head that counts.
