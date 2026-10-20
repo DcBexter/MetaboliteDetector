@@ -557,6 +557,23 @@ impl App {
         self.editor.start_rt_copy(ctx, &src);
     }
 
+    /// Ctrl+L: opens the editor and "Add component" for the selected component of the active run.
+    pub fn add_component_to_library(&mut self, ctx: &egui::Context) {
+        let Some(run) = self.runs.get(self.active) else {
+            return;
+        };
+        let source = Source {
+            run,
+            ri: self.ri.for_run(run),
+            quant: self.settings.applied.quant(),
+            search: self.settings.applied.search(),
+        };
+        if source.component().is_some() {
+            self.editor.open = true;
+            self.editor.start_add(ctx, &source);
+        }
+    }
+
     pub fn library_editor(&mut self, ctx: &egui::Context) {
         if !self.editor.open {
             return;
