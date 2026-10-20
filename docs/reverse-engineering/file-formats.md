@@ -187,18 +187,19 @@ Side effects of `addScan` (Observed, 0x6e6888), kept in memory and written to th
 
 ### 2.2 Compression
 
-- Type `COMPRESSED_PROFILE` (enum value not recovered): `analyzeBaseline(values, 100)` produces a
-  BaselineStatistics stored per scan, then `compressSpectrum` runs (Observed: 0x6e6888 -> 0x6e758c).
+- DataType 1 (`COMPRESSED_PROFILE`; addScan checks writer field +0x24 == 1): `analyzeBaseline(values, 100)`
+  produces a BaselineStatistics stored per scan, then `compressSpectrum` runs (Observed: 0x6e6888 -> 0x6e758c).
+  `determineNoiseFactor` later takes the median of the per-scan nf as the global noise factor (algorithms.md §2.3).
 - `compressSpectrum` (Observed, 0x6e758c): if fewer than 10000 masses, prints "Only N values..." to
   `std::cout` (debug). Calls `SpectrumFunctions::detectPeaks<int>(peaks, s_values, thresh_beg, thresh_end,
   base_dev, true, stat)`, then keeps only the intensities inside detected peaks and the corresponding masses
   (taken from `s_masses[begin + i]`), replacing both vectors. Thresholds come from
   `GCMSDiskScanWriter::setCompressionParameter(double, double, double)` 0x6e7164 (values not recovered).
   The record layout stays the same, so a reader needs no special case.
-- `CENTROID` type (Observed, 0x6e6888): stores a zeroed BaselineStatistics and writes the data unchanged.
-- Other profile types: data written unchanged (Observed, 0x6e6888: no branch).
+- DataType 2 (`CENTROID`, Observed, 0x6e6888): stores a zeroed BaselineStatistics and writes the data unchanged.
+- DataType 0 (profile): data written unchanged (Observed, 0x6e6888: no branch).
 - The CDF import (`DataType = 2`) writes the spectra unchanged with zeroed statistics (byte-verified:
-  the spectra equal the `.cdf`). Whether 2 is CENTROID is Inferred.
+  the spectra equal the `.cdf`).
 
 ### 2.3 Index file (.idx)
 
@@ -246,7 +247,7 @@ does that and checks each record header against its index entry.
 
 ### Unknowns (section 2)
 - `DataType` enum names for the values. 2 is what `CdfImporter` writes (nominal masses); `FastFlightImporter` writes 1 or 0 (exact masses), algorithms.md §4.1.
-- `setCompressionParameter` default thresholds and the meaning of the BaselineStatistics fields.
+- `setCompressionParameter` default thresholds. BaselineStatistics fields are (mean, sd, msd, nf, n), algorithms.md §2.1.
 - Whether `writeIndexFile` can write another magic or other type sizes (only the reader was disassembled).
 - None for the TOF polynomial: `FilteredDataProvider` maps `m/z = (f32) poly(bin as f64)`, which `md_core::diskscan` applies (section 4.3).
 

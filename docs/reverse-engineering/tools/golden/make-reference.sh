@@ -9,6 +9,9 @@
 # 7235eg04 (example-data/high-resolution/7235eg04-hr.cdf, git-ignored). When that file is missing it runs
 #   MD_HIGH_RESOLUTION_OUT=$PWD/example-data/high-resolution cargo test -p md-core --test golden_old_md -- --ignored write_high_resolution_run
 # (needs cargo; or run that command elsewhere first).
+# With --exact-masses it only writes old-md-3.3-exact-masses.tsv: the same run as a disk-scan cache with exact
+# masses and DataType 1, as FastFlight writes it with importData(.., true) (example-data/high-resolution/7235eg04-exact.bin + .idx, written by
+# the ignored test write_exact_mass_run the same way). The old program then keeps the exact masses and runs reorderPeaks.
 # With MD_RESULTS=DIR it also saves DIR/<run>.cmp per run, a known calibration as DIR/harness.calib
 # (text) and DIR/harness.calib.bin (binary), and the raw dump DIR/raw.tsv. These come from the old
 # program: keep them local (example-data/old-results/ is ignored by git).
@@ -81,6 +84,17 @@ if [[ "${1:-}" == --high-resolution ]]; then
   fi
   LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$hr/7235eg04-hr.cdf" > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
   python3 "$here/golden.py" "static default settings, high-resolution run made from 7235eg04" < "$work/raw.tsv" > "$out/old-md-3.3-high-resolution.tsv"
+  exit
+fi
+if [[ "${1:-}" == --exact-masses ]]; then
+  hr=$repo/example-data/high-resolution
+  if [[ ! -f "$hr/7235eg04-exact.bin" ]]; then
+    mkdir -p "$hr"
+    (cd "$repo" && MD_HIGH_RESOLUTION_OUT="$hr" cargo test -q -p md-core --test golden_old_md -- --ignored write_exact_mass_run)
+  fi
+  cp "$hr"/7235eg04-exact.bin "$hr"/7235eg04-exact.idx "$work"/  # reading it from a Windows mount is very slow
+  LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$work/7235eg04-exact.bin" > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
+  python3 "$here/golden.py" "static default settings, exact-mass cache (DataType 1) made from 7235eg04" < "$work/raw.tsv" > "$out/old-md-3.3-exact-masses.tsv"
   exit
 fi
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }

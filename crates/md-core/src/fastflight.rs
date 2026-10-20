@@ -127,8 +127,10 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
         mz.extend(bins.iter().map(|b| calibration.mz(*b)));
         intensity.extend(values.iter().map(|v| *v as f32));
     }
-    andi::build(times, &starts, &counts, mz, intensity)
-        .map_err(|e| FastFlightError::Corrupt(e.to_string()))
+    let mut run = andi::build(times, &starts, &counts, mz, intensity)
+        .map_err(|e| FastFlightError::Corrupt(e.to_string()))?;
+    run.exact_masses = true;
+    Ok(run)
 }
 
 struct Scan {

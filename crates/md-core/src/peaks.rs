@@ -86,6 +86,8 @@ pub struct IonTraces {
     /// Exact mass of each row, ascending: the distinct m/z of a high-resolution run, else the
     /// nominal mass.
     pub mz: Vec<f32>,
+    /// One trace per exact m/z (`IonTraces::exact`).
+    exact: bool,
     scans: usize,
     values: Vec<f32>,
 }
@@ -236,6 +238,7 @@ fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
         offsets,
         mz,
         intensity,
+        exact_masses: false,
     })
 }
 
@@ -252,8 +255,11 @@ pub struct TooLarge {
 
 impl IonTraces {
     /// One trace per nominal mass of the centroided scans (`centroided`); centroids of one nominal
-    /// mass in a scan are summed.
+    /// mass in a scan are summed. A run with exact masses (FastFlight) gets [`Self::exact`].
     pub fn new(c: &Chromatogram) -> Result<Self, TooLarge> {
+        if c.exact_masses {
+            return Self::exact(c);
+        }
         match centroided(c) {
             Some(cc) => Self::build(&cc, false),
             None => Self::build(c, false),
@@ -329,9 +335,20 @@ impl IonTraces {
         Ok(Self {
             masses,
             mz,
+            exact,
             scans,
             values,
         })
+    }
+
+    /// Old `GCMSAnalyzer::detectAllPeaks(true, 10, 0.05)` of the main window and the batch
+    /// (algorithms.md §4.0): [`Self::detect_peaks`], then on exact traces [`reorder_peaks`].
+    pub fn detect_all_peaks(&mut self, settings: &PeakSettings) -> Vec<Peak> {
+        let mut peaks = self.detect_peaks(settings);
+        if self.exact {
+            reorder_peaks(&mut peaks, self, 10.0, 0.05, settings.number_bins);
+        }
+        peaks
     }
 
     pub fn len(&self) -> usize {
@@ -633,8 +650,8 @@ fn peak(w: &[f32], first: usize, apex: usize, nf: f64, signal_to_noise: f32, bin
 /// Old `GCMSAnalyzer::reorderPeaks` (algorithms.md §4.2): peaks on neighbouring exact masses at most
 /// `ion_dist` apart whose apexes lie within `scan_dist` scans form one profile, and every member
 /// covering the apex of the summed profile takes that apex. Sorts `peaks` by row, then first scan.
-/// The old code runs it only for runs not imported from CDF (`DataType != 2`), so the CDF path
-/// here never calls it.
+/// The old code runs it only for runs not imported from CDF (`DataType != 2`), so
+/// [`IonTraces::detect_all_peaks`] calls it only on exact traces.
 pub fn reorder_peaks(
     peaks: &mut [Peak],
     traces: &IonTraces,
@@ -1020,6 +1037,7 @@ mod tests {
             offsets: (0..=v.len()).collect(),
             mz: vec![73.0; v.len()],
             intensity: v.clone(),
+            exact_masses: false,
         };
         let mut t = IonTraces::new(&c).unwrap();
         let s = PeakSettings {
@@ -1047,6 +1065,7 @@ mod tests {
             offsets: vec![0, 4],
             mz: vec![-0.5, 0.3, 0.5, f32::INFINITY],
             intensity: vec![1.0, 2.0, 4.0, 8.0],
+            exact_masses: false,
         };
         let t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
@@ -1077,6 +1096,7 @@ mod tests {
             offsets: vec![0, 3],
             mz: vec![73.047, 73.089, 74.0],
             intensity: vec![10.0, 2.0, 5.0],
+            exact_masses: false,
         };
         let t = IonTraces::new(&c).unwrap();
         assert_eq!((t.trace(0), t.trace(1)), (&[10.0][..], &[5.0][..]));
@@ -1098,6 +1118,7 @@ mod tests {
             intensity: (0..scans)
                 .flat_map(|s| [traces[0][s], traces[1][s], traces[2][s]])
                 .collect(),
+            exact_masses: false,
         };
         let mut t = IonTraces::exact(&c).unwrap();
         let mut p = t.detect_peaks(&PeakSettings::default());
@@ -1111,6 +1132,13 @@ mod tests {
         let mut q = t.detect_peaks(&PeakSettings::default());
         reorder_peaks(&mut q, &t, 0.2, 0.05, 10);
         assert_eq!(apexes(&q), vec![100, 103, 103]);
+        // detectAllPeaks(true, 10, 0.05) reorders exact traces only.
+        assert_eq!(t.detect_all_peaks(&PeakSettings::default()), p);
+        let mut nominal = IonTraces::new(&c).unwrap();
+        assert_eq!(
+            nominal.detect_all_peaks(&PeakSettings::default()),
+            nominal.detect_peaks(&PeakSettings::default())
+        );
     }
 
     #[test]
@@ -1129,6 +1157,7 @@ mod tests {
             intensity: (0..scans)
                 .flat_map(|s| [traces[0][s], traces[1][s]])
                 .collect(),
+            exact_masses: false,
         };
         let t = IonTraces::exact(&c).unwrap();
         let peak = |row, first, apex, last| Peak {
@@ -1167,6 +1196,7 @@ mod tests {
             intensity: (0..scans)
                 .flat_map(|s| [traces[0][s], traces[1][s]])
                 .collect(),
+            exact_masses: false,
         };
         let t = IonTraces::exact(&c).unwrap();
         let peak = |row, apex, precise| Peak {
@@ -1195,6 +1225,7 @@ mod tests {
             offsets: vec![0, 3, 5],
             mz: vec![73.047, 73.089, 147.0, 73.047, 147.0],
             intensity: vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            exact_masses: false,
         };
         assert_eq!(IonTraces::new(&c).unwrap().trace(0), &[3.0, 4.0][..]);
         let t = IonTraces::exact(&c).unwrap();
@@ -1203,6 +1234,12 @@ mod tests {
         assert_eq!(t.trace(0), &[1.0, 4.0][..]);
         assert_eq!(t.trace(1), &[2.0, 0.0][..]);
         assert_eq!(t.trace(2), &[3.0, 5.0][..]);
+        // A FastFlight run gets the exact traces from `new` too.
+        let ff = Chromatogram {
+            exact_masses: true,
+            ..c
+        };
+        assert_eq!(IonTraces::new(&ff).unwrap().mz, t.mz);
     }
 
     #[test]
@@ -1215,6 +1252,7 @@ mod tests {
             offsets: (0..=scans).map(|s| 3 * s).collect(),
             mz: (0..scans).flat_map(|_| [72.9f32, 73.2, 147.0]).collect(),
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
+            exact_masses: false,
         };
         let mut t = IonTraces::new(&c).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
@@ -1229,6 +1267,7 @@ mod tests {
             offsets: vec![0],
             mz: vec![],
             intensity: vec![],
+            exact_masses: false,
         };
         assert!(
             IonTraces::new(&empty)
@@ -1249,6 +1288,7 @@ mod tests {
             offsets,
             mz: (0..65_536).map(|m| m as f32).collect(),
             intensity: vec![1.0; 65_536],
+            exact_masses: false,
         };
         assert_eq!(
             IonTraces::new(&c),

@@ -306,6 +306,7 @@ mod tests {
                     980.0 + noise as f32 + peak
                 })
                 .collect(),
+            exact_masses: false,
         };
         std::fs::create_dir_all(dir).unwrap();
         md_core::andi::write(dir.join("ctrl_1.cdf"), &c).unwrap();
@@ -345,7 +346,7 @@ mod tests {
         let c = md_core::read_run(&dir.join("ctrl_1.cdf")).unwrap();
         let g = GcmsSettings::default();
         let mut traces = IonTraces::new(&c).unwrap();
-        let peaks = traces.detect_peaks(&g.peak());
+        let peaks = traces.detect_all_peaks(&g.peak());
         let comps = deconvolute(&traces, &peaks, &g.deconv());
         let masses: Vec<u32> = peaks
             .iter()

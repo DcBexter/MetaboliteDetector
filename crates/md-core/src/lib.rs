@@ -56,6 +56,9 @@ pub struct Chromatogram {
     /// m/z values, ascending within each scan.
     pub mz: Vec<f32>,
     pub intensity: Vec<f32>,
+    /// Exact masses as FastFlight writes them (old DataType 0/1): analysed with one trace per m/z
+    /// and `reorder_peaks`. Otherwise (CDF, DataType 2) the scans are centroided to nominal masses.
+    pub exact_masses: bool,
 }
 
 impl Chromatogram {
@@ -213,6 +216,7 @@ mod tests {
             offsets: vec![0, 2, 3, 5],
             mz: vec![73.0, 147.0, 73.0, 73.1, 200.0],
             intensity: vec![10.0, 5.0, 20.0, 1.0, 4.0],
+            exact_masses: false,
         };
         assert_eq!(c.tic(), vec![15.0, 20.0, 5.0]);
         assert_eq!(c.sic(73.0, 0.5), vec![10.0, 20.0, 1.0]);
