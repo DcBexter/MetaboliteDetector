@@ -190,7 +190,7 @@ while i < f.size:
 
 All of this is Observed from objdump. A region still above the threshold at the trace end gets `end == begin` and is dropped. The next region can start at `end + 1` at the earliest, and only if `f[end] < thr`.
 
-Filter (syms 0x64a5fd int, 0x64966d double; Observed): for x in [-d, d], u = 4x/d, kernel k(x) = (1.73/sqrt(d)) * (1 - u^2) * exp(-u^2/2), a negative 2nd-derivative Gaussian with sigma = d/4. Taps outside the signal count as 0; the int variant truncates the result (cvttsd2si). The golden comparison (docs/architecture.md, "Golden test") checks the edges.
+Filter (syms 0x64a5fd int, 0x64966d double; Observed): for x in [-d, d], u = 4x/d, kernel k(x) = (1.73/sqrt(d)) * (1 - u^2) * exp(-u^2/2), a negative 2nd-derivative Gaussian with sigma = d/4. Taps outside the signal count as 0; the int variant truncates the result (cvttsd2si). Both variants then overwrite the ends: `out[i] = out[d]` for i < d, then `out[i] = out[n-d-1]` for i >= n-d, or 0 everywhere if n <= d (0x64a901..0x64aa61 int, 0x64996d..0x649af7 double). So the zero taps never reach the result, and a filter without this step finds 333 extra peaks at the trace ends of 7235eg04 (matched golden comparison).
 
 GUI (Observed): the only ctor caller is `CalibrationSetter::threadFinished` (0x4947f4), the "Compound Detection" tab of the *Calibration Setter* window. Its combo box "Peak detection method" offers "Default" and "Matched Filtering"; the choice is not saved in the settings file.
 
@@ -204,7 +204,7 @@ Consequence (Observed): the deconvolution (Section 4) reads the peaks' own value
 ### 3.4 MatchedPeakDetector<int,float>::createPeak (MCP 0x6eed8e; syms 0x5eed8e)
 
 - apex = argmax over [begin, end] (strict >, starting at begin) on the supplied (filtered) values.
-- Peak(ion, begin, end, apex, values[begin..=end], nf = 0.5). No `checkPeak`, so S/N stays 0. Observed.
+- Peak(ion, begin, end, apex, values[begin..=end], nf = 0.5). No `checkPeak`, so S/N keeps the PeakEssential default -1 (Observed in the golden dump).
 
 ### 3.5 Peak<int,float>::Peak(ion, begin, end, maxScan, values, nf) (MCP 0x6f2754; syms 0x5f2754)
 
@@ -474,7 +474,7 @@ Plain sum over scans (no trapezoid, no baseline subtraction, no time scaling). O
 
 ### 4.11 Unknowns (deconvolution)
 
-- `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling (kernel: Section 3.3). This is needed to reproduce the threshold T = 5.0 exactly.
+- (resolved) `tools::Filter::matched2ndDerivativeGaussianFilter<double>` edge handling: Section 3.3.
 - Meaning of `getDataType() == 2`, and how `Compound(rt, ints, ions, res)` uses `res`.
 - `scan->vtbl[3]` (scan count) and `vtbl[4]/[5]` (ion count / EIC) identities are Inferred from usage.
 - Whether the duplicated bin peaks from 4.5 are intended. A port should reproduce them first to match golden output.
@@ -848,7 +848,7 @@ The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
-2. `tools::Filter::matched2ndDerivativeGaussianFilter` edge behaviour (kernel known, Section 3.3). It sets the component boundaries in 4.5 together with the fixed threshold 5.0. The matched golden comparison checks it at the trace ends.
+2. (resolved) `tools::Filter::matched2ndDerivativeGaussianFilter` edge behaviour: the ends hold the nearest inner value (Section 3.3).
 3. Spectrum binning and centroiding (`getBinnedSpectrum`, `getCentroidCompound`). Library scores depend on them when bin widths differ.
 4. DefaultPeakDetector details:
    - the C=0.2 tail rule (value read from rodata, not verified against output)

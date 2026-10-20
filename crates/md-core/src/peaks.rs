@@ -487,18 +487,37 @@ fn correlate<T: Copy + Into<f64>>(v: &[T], kernel: &[f64], i: usize) -> f64 {
         .sum()
 }
 
+/// The old filter's last step: the first and last `d` values, where the kernel reaches past the
+/// trace, take the value of the nearest scan that is not among them, or 0 if the trace is not longer
+/// than `d` (§3.3).
+fn hold_edges<T: Copy + Default>(f: &mut [T], d: usize) {
+    let n = f.len();
+    if d >= n {
+        f.fill(T::default());
+        return;
+    }
+    let first = f[d];
+    f[..d].fill(first);
+    let last = f[n - d - 1];
+    f[n - d..].fill(last);
+}
+
 /// Old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): correlation with a negative
-/// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace.
+/// second derivative of a Gaussian, sigma = `density / 4`, cut at ±`density`, zeros outside the trace,
+/// then the `density` values at each end held at the nearest inner value.
 /// It responds most to Gaussian peaks with sigma ≈ `density / 4` scans.
 pub fn matched_filter<T: Copy + Into<f64>>(v: &[T], density: usize) -> Vec<f64> {
     let kernel = matched_kernel(density);
-    (0..v.len()).map(|i| correlate(v, &kernel, i)).collect()
+    let mut f: Vec<f64> = (0..v.len()).map(|i| correlate(v, &kernel, i)).collect();
+    hold_edges(&mut f, kernel.len() / 2);
+    f
 }
 
 /// Old `MatchedPeakDetector<int,float>::detectPeaks` (§3.3–3.4) on one trace; the old
 /// `MatchedPeakDetector(width, …)` uses density `4 * width`. Regions where the filtered trace rises
 /// above `threshold`, more than 2 scans long. As in the old code, the peak metrics use the filtered
-/// values with noise factor 0.5, there is no baseline check, and `signal_to_noise` stays 0.
+/// values with noise factor 0.5, there is no baseline check, and `signal_to_noise` keeps the old
+/// default -1.
 pub fn detect_peaks_matched(v: &[f32], density: usize, threshold: i32, bins: u32) -> Vec<Peak> {
     let (mut f, mut peaks) = (vec![0.0; v.len()], Vec::new());
     matched_peaks(
@@ -525,6 +544,7 @@ fn matched_peaks(
     for (i, y) in f.iter_mut().enumerate() {
         *y = correlate(v, kernel, i).trunc() as f32;
     }
+    hold_edges(f, kernel.len() / 2);
     let thr = threshold as f32;
     let mut i = 1;
     while i < f.len() {
@@ -536,7 +556,7 @@ fn matched_peaks(
             };
             if end - i > 2 {
                 let w = &f[i..=end];
-                out.push(peak(w, i, argmax(w, 0), 0.5, 0.0, bins));
+                out.push(peak(w, i, argmax(w, 0), 0.5, -1.0, bins));
             }
             i = end;
         }
@@ -701,11 +721,12 @@ mod tests {
 
     #[test]
     fn matched_filter_finds_peaks_of_its_width() {
-        let mut impulse = [0.0; 9];
-        impulse[4] = 1.0;
+        // Impulse response away from the 8 held scans at each end: the mirrored kernel.
+        let mut impulse = [0.0; 33];
+        impulse[16] = 1.0;
         let k = matched_filter(&impulse, 8);
         assert!(
-            k[4] > 0.0 && k[0] < 0.0 && (k[0] - k[8]).abs() < 1e-12,
+            k[16] > 0.0 && k[8] < 0.0 && (k[8] - k[24]).abs() < 1e-12,
             "{k:?}"
         );
         let mut v = noisy(300);
@@ -734,13 +755,16 @@ mod tests {
         };
         let p = t.detect_peaks(&s);
         assert_eq!(p, detect_peaks_matched(&v, 40, 3, 10), "{p:?}");
-        // The zeros outside the trace cut the kernel's negative tails: the baseline rises at the edges.
         assert!(p.iter().any(|p| p.apex_scan.abs_diff(150) <= 1), "{p:?}");
         let f: Vec<f32> = matched_filter(&v, 40)
             .iter()
             .map(|x| x.trunc() as f32)
             .collect();
         assert_eq!(t.trace(0), &f[..]);
+        // The old filter holds the 40 scans at each end at the nearest inner value.
+        let (head, tail) = (&f[..40], &f[260..]);
+        assert!(head.iter().all(|y| *y == f[40]) && tail.iter().all(|y| *y == f[259]));
+        assert_eq!(matched_filter(&[5.0f32; 3], 3), vec![0.0; 3]);
     }
 
     #[test]
