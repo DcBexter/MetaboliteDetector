@@ -357,7 +357,7 @@ fn qr_step(d: &mut [f64; 3], e: &mut [f64; 2], a: usize, b: usize, u: &mut M3, v
     let f = if b >= a + 2 { e[b - 2] } else { 0.0 };
     let (p, g, q) = (d[b - 1], e[b - 1], d[b]);
     let (ta, tb, tab) = (p * p + f * f, q * q + g * g, p * g);
-    // The eigenvalue of T nearest tb: the larger one as tr + h, the smaller one as det(T) over the
+    // The eigenvalue of T nearest tb: the larger one as tr/2 + h, the smaller one as det(T) over the
     // larger, with det(T) as the sum of the squared 2×2 minors of the columns behind T. Found from
     // black-box outputs (issue 290); `tb - tab² / (dt ± h)` differs in the last bits.
     let l1 = (ta + tb) / 2.0 + hypot((ta - tb) / 2.0, tab);
@@ -417,7 +417,13 @@ mod tests {
     #[ignore]
     fn matches_the_old_fit_bit_for_bit() {
         let path = std::env::var("MD_QUADFIT_CASES").expect("MD_QUADFIT_CASES");
-        let text = std::fs::read_to_string(path).unwrap();
+        let (n, bad, large_x) = replay(&std::fs::read_to_string(path).unwrap());
+        eprintln!("{n} cases, {bad} differ, {large_x} known differences (x² ≥ 2^53)");
+        assert!(n > 0 && bad == 0, "{bad} of {n} cases differ");
+    }
+
+    /// Cases, mismatches and excused mismatches (`x² ≥ 2^53`) of the case lines in `text`.
+    fn replay(text: &str) -> (usize, usize, usize) {
         let (mut n, mut bad, mut large_x) = (0, 0, 0);
         for line in text.lines() {
             let v: Vec<f64> = line
@@ -437,8 +443,61 @@ mod tests {
                 }
             }
         }
-        eprintln!("{n} cases, {bad} differ, {large_x} known differences (x² ≥ 2^53)");
-        assert!(n > 0 && bad == 0, "{bad} of {n} cases differ");
+        (n, bad, large_x)
+    }
+
+    #[test]
+    fn replay_excuses_only_large_x() {
+        let line = |x: [f64; 3], c: [f64; 3]| {
+            let hex = |v: f64| format!("{:016x}", v.to_bits());
+            let y = [5.0, 7.0, 6.0];
+            x.iter()
+                .chain(&y)
+                .chain(&c)
+                .map(|v| hex(*v))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let small = [100.0, 110.0, 120.0];
+        let large = [1e8, 1.0001e8, 1.0002e8];
+        let text = [
+            line(small, quadratic(small, [5.0, 7.0, 6.0])),
+            line(small, [0.0; 3]),
+            line(large, [0.0; 3]),
+        ]
+        .join(
+            "
+",
+        );
+        assert_eq!(replay(&text), (3, 1, 1));
+    }
+
+    /// `B = U diag(S) Vᵀ` with orthogonal `U`, `V`, for blocks that take either eigenvalue as the
+    /// shift (`tb` above and below `ta`).
+    #[test]
+    fn bidiagonal_svd_reconstructs() {
+        for (d0, e0) in [([1.0, 0.3, 2.0], [0.7, 0.5]), ([3.0, 2.0, 0.1], [0.4, 0.9])] {
+            let (mut d, mut e, mut u, mut v) = (d0, e0, I3, I3);
+            bidiagonal_svd(&mut d, &mut e, &mut u, &mut v);
+            assert!(d[0] >= d[1] && d[1] >= d[2] && d[2] >= 0.0, "{d:?}");
+            for i in 0..3 {
+                for j in 0..3 {
+                    let b = (0..3).fold(0.0, |acc, k| acc + u[i][k] * d[k] * v[j][k]);
+                    let want = if i == j {
+                        d0[i]
+                    } else if j == i + 1 {
+                        e0[i]
+                    } else {
+                        0.0
+                    };
+                    assert!((b - want).abs() < 1e-14, "B[{i}][{j}] = {b}, want {want}");
+                    let uu = (0..3).fold(0.0, |acc, k| acc + u[k][i] * u[k][j]);
+                    let vv = (0..3).fold(0.0, |acc, k| acc + v[k][i] * v[k][j]);
+                    let id = if i == j { 1.0 } else { 0.0 };
+                    assert!((uu - id).abs() < 1e-14 && (vv - id).abs() < 1e-14);
+                }
+            }
+        }
     }
 
     #[test]
