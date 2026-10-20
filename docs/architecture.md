@@ -596,7 +596,11 @@ end
 The library editor (File → Library editor…, `crates/md-app/src/library_editor.rs`) edits a copy of
 the open library or a new one: create, delete and rename compounds, add the selected component of the
 active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
-comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
+comments and other features. Collapsed sections (`library_editor/extras.rs`) show the automatic quant ions
+("Use as quant ions", "Clear automatic ions"), the ion frequency with the spectrum count (read only), the resolution
+(`bin_width`, read only) and the v5 MID fragments as a table (start, end, sum formula checked with `isotope::parse_formula`, MID size:
+add, change, remove). That table is the list the MID wizard reads (`mid::series::fragments`); the `FRAG` feature is a separate list
+that only the FRAG export reads. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
 and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. "Export MSL" writes the library as AMDIS text in the three
 types of the old export dialog (Nominal, Profile, FWHM; `library::write_msl_as`, file-formats.md §6.2) and only to a
