@@ -9,6 +9,7 @@ eframe.workspace = true
 egui_extras.workspace = true
 egui_plot.workspace = true
 md-core.workspace = true
+png.workspace = true
 rfd.workspace = true
 
 [lints]

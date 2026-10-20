@@ -11,6 +11,7 @@ use md_core::{Chromatogram, decimate};
 
 mod batch;
 mod calibration;
+mod export;
 mod identify;
 mod isotopes;
 mod library_editor;
@@ -67,6 +68,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    export: export::Export,
 }
 
 impl Default for App {
@@ -90,6 +92,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            export: export::Export::default(),
         }
     }
 }
@@ -303,6 +306,7 @@ impl eframe::App for App {
             self.error = Some(e);
         }
         self.update_identification(ui.ctx());
+        self.poll_export();
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -328,6 +332,7 @@ impl eframe::App for App {
                             .err()
                             .map(|e| format!("{}: {e}", path.display()));
                     }
+                    self.export_menu(ui);
                     self.library_menu(ui);
                     if ui.button("Close all").clicked() {
                         (self.runs, self.active) = (Vec::new(), 0);
@@ -471,6 +476,7 @@ impl eframe::App for App {
             let plots = if self.trace == Trace::Both { 3.0 } else { 2.0 };
             let height = ui.available_height() / plots;
             let mut clicked = None;
+            let top = ui.cursor().min;
             if self.trace != Trace::Sic {
                 // Components of the active run as dots on its TIC.
                 let marks: Vec<[f64; 2]> = run
@@ -511,6 +517,8 @@ impl eframe::App for App {
                 );
                 clicked = clicked.or(sic);
             }
+            self.export.chromatograms =
+                egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
 
             let run = &mut self.runs[self.active];
             if let Some(s) = clicked.and_then(|x| run.data.scan_at(x * 60.0)) {
@@ -523,29 +531,21 @@ impl eframe::App for App {
                     .map_or(s, |k| run.components[k].apex_scan as usize);
             }
 
-            let (name, bars) = match run.component {
-                Some(k) => (
-                    "deconvoluted spectrum",
-                    run.components[k]
-                        .spectrum
-                        .iter()
-                        .map(|(m, h)| Bar::new(*m as f64, *h as f64).width(0.3))
-                        .collect(),
-                ),
-                None => {
-                    let (mz, intensity) = run.data.spectrum(run.scan);
-                    let bars = mz
-                        .iter()
-                        .zip(intensity)
-                        .map(|(m, i)| Bar::new(*m as f64, *i as f64).width(0.3))
-                        .collect();
-                    ("spectrum", bars)
-                }
+            export::norm_picker(ui, &mut self.export.norm);
+            let top = ui.cursor().min;
+            let (name, mz, y) = export::shown_spectrum(run, self.export.norm);
+            let bars = mz.iter().zip(&y).map(|(m, i)| Bar::new(*m, *i).width(0.3));
+            let label = match self.export.norm {
+                md_core::spectrum::Normalization::None => "Intensity",
+                _ => "Normalised intensity",
             };
             Plot::new("spectrum")
                 .x_axis_label("m/z")
-                .y_axis_label(format!("Intensity — {}", run.name))
-                .show(ui, |p| p.bar_chart(BarChart::new(name, bars)));
+                .y_axis_label(format!("{label} — {}", run.name))
+                .show(ui, |p| p.bar_chart(BarChart::new(name, bars.collect())));
+            // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
+            self.export.spectrum =
+                egui::Rect::from_min_max(top, egui::pos2(ui.max_rect().right(), ui.cursor().min.y));
         });
     }
 }

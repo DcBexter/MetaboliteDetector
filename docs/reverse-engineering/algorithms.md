@@ -795,6 +795,19 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 - Dialog defaults for the pool `count` and MEAN/MEDIAN mode, and the unit of `times`.
 - `ResultSeries::getTotalSampleIntensity` sums `getSummedIntegral`, which would apply the PoolNormalizer when one is set; the GUI never combines pool and sum.
 
+## 7d. Spectrum display normalisation (Observed)
+
+`SpectrumPlot::actNormalizationChanged` (nm 0x4156d2; Ghidra addresses are nm + 0x100000) maps four toolbar actions to `Normalization` = `NONE`, `SUM`, `SSUM`, `BP` and calls `setNormalizationMode`, which re-plots `getNormalizedData` (0x4177de) for the profile and the centroid spectrum. `getNormalizedData` divides every integer intensity by one `norm` (double division, no rounding):
+
+| Mode | `norm` |
+|------|--------|
+| `NONE` | 1 |
+| `BP` | `getBasePeakIntensity()` (0x601d22), the largest intensity |
+| `SSUM` | `getSpectrumVectorLength()` (0x601c32) = `sqrt(Σ i²)` (decompiled) |
+| `SUM` | `getTotalSignal()` (0x601b6e) = Σ i (name only, not decompiled) |
+
+The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of the total signal), `md_core::spectrum::normalize`. A zero norm is not guarded in the old code (division by zero); the rewrite leaves such a spectrum unchanged. The toolbar label strings were not read, so the names Unit/Relative are inferred from the issue. `SplitSpectrumPlot` and `LibrarySpectrumPlot` reuse the same mode.
+
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.
