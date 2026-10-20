@@ -195,6 +195,8 @@ mod tests {
 
     /// Controls that reach past the screen edge where nothing scrolls them back: there the screen
     /// clips them, not a scroll area inside it (a window wider or taller than the screen).
+    /// shortcut: a frameless scroll area right on the screen edge would count as the screen, and a
+    /// window with its own `constrain_to` rect escapes the check; neither exists in the app yet.
     fn off_screen(widgets: &[egui::WidgetRect], nodes: &Nodes, screen: egui::Rect) -> Vec<String> {
         let mut found = Vec::new();
         for w in widgets {
