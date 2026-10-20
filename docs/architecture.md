@@ -47,17 +47,19 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
   src/main.rs           entry point, `App` state and one call per UI area in `ui`
-  src/menu.rs           top menu bar (File, Analysis)
+  src/menu.rs           top menu bar (File, Analysis, View, Help)
   src/status.rs         bottom status bar
-  src/run_list.rs       left list of the open runs
-  src/central.rs        centre: TIC/SIC plots, scan cursor, spectrum
+  src/run_list.rs       left area: the open runs, the component list below them
+  src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp
+  src/central.rs        centre: TIC/SIC plots, scan cursor, scan/RT entry, spectrum
+  src/detected_peaks.rs Detected Peaks: ion traces of the selected component beside the spectrum
   src/loading.rs        opening files, load polling, SIC jobs
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
-  src/layout.rs         list/details split, side panels, where tool windows first open; a test opens every
+  src/layout.rs         list/details split, main-window areas (`Panels`, `dock`), where tool windows first open; a test opens every
                         window and checks no control covers another, is cut off or reaches past
                         the screen
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
@@ -435,7 +437,7 @@ to decode them from) only give a warning: the run opens with its own analysis. T
 become the run's `Peak` list (`cmp::SavedComponents`), so the component panel shows S/N, sharpness and
 discrepancy for loaded components too (#126); a saved peak has no ion-trace row (`Peak::row` is 0).
 
-**Save and load (#107).** The Results window writes the components of the active run
+**Save and load (#107).** The component list (left of the main window, #251) writes the components of the active run
 (`cmp::compounds_of_components`, `write_cmp`; default name `<run>.cmp` next to the run, where opening finds
 it again) and loads a `.cmp` in place of them (`cmp::components_from_file`; selection and hits are reset and
 the library search runs again). Like the old file, it keeps one ion peak per mass (the sharpest, as the panel

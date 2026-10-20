@@ -20,32 +20,75 @@ pub fn list_and_details<T>(
     egui::CentralPanel::default().show(ui, |ui| details(state, ui));
 }
 
-/// A panel beside the plots that grows to its content like a plain panel, but to at most 30 % of
-/// the width, so the plots and their controls keep room in a narrow window; the rest scrolls.
-pub fn side_panel(
-    ui: &mut egui::Ui,
-    panel: fn(&'static str) -> egui::Panel,
-    id: &'static str,
-    add: impl FnOnce(&mut egui::Ui),
-) {
-    // Width the content asked for in the last pass: a scroll area takes no more than it is given.
-    let key = egui::Id::unique(("side panel wanted width", id));
-    let wanted: f32 = ui.data(|d| d.get_temp(key)).unwrap_or_default();
-    let max = ui.available_width() * 0.3;
-    let shown = panel(id)
-        .max_size(max)
-        .min_size(wanted.min(max))
-        .show(ui, |ui| {
-            let content = egui::ScrollArea::both().show(ui, add).content_size.x;
-            (ui.max_rect().width(), content)
-        });
-    let (inner, content) = shown.inner;
-    // The panel is its content plus the frame margin.
-    let now = (content + shown.response.rect.width() - inner).ceil();
-    if (now - wanted).abs() > 0.5 {
-        ui.data_mut(|d| d.insert_temp(key, now));
-        ui.ctx().request_repaint();
+/// The areas of the main window; the View menu shows or hides each, egui keeps their sizes.
+/// The layout persistence (S4, #253) saves this together with the sizes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Panels {
+    pub runs: bool,
+    pub components: bool,
+    pub chromatogram: bool,
+    pub spectrum: bool,
+    pub detected_peaks: bool,
+    pub info: bool,
+}
+
+impl Default for Panels {
+    fn default() -> Self {
+        Self {
+            runs: true,
+            components: true,
+            chromatogram: true,
+            spectrum: true,
+            detected_peaks: true,
+            info: true,
+        }
     }
+}
+
+impl Panels {
+    /// Each area with its View menu name and hover text, in menu order.
+    pub fn toggles(&mut self) -> [(&mut bool, &'static str, &'static str); 6] {
+        [
+            (&mut self.runs, "Runs", "The open runs, left"),
+            (
+                &mut self.components,
+                "Component list",
+                "Every component of the active run with its library hit, left",
+            ),
+            (
+                &mut self.chromatogram,
+                "Chromatogram",
+                "TIC and SIC of the open runs, centre",
+            ),
+            (
+                &mut self.spectrum,
+                "Spectrum",
+                "Spectrum of the scan or component, below the chromatogram",
+            ),
+            (
+                &mut self.detected_peaks,
+                "Detected peaks",
+                "Ion traces of the selected component, beside the spectrum",
+            ),
+            (
+                &mut self.info,
+                "Component info",
+                "Values, peaks and library hits of the selected component, right",
+            ),
+        ]
+    }
+}
+
+/// A resizable area at the side of the main window. It starts at `default` px but at most 30 % of
+/// the width, where tool windows open (`ToolWindow`), and can be dragged to half the width.
+pub fn dock(panel: egui::Panel, ui: &egui::Ui, default: f32) -> egui::Panel {
+    // Of the window, not of the room left: the second side panel starts as wide as the first.
+    let w = ui.ctx().content_rect().width();
+    panel
+        .resizable(true)
+        .default_size(default.min(w * 0.3))
+        .min_size(120.0_f32.min(w * 0.3))
+        .max_size(w * 0.5)
 }
 
 /// Where a tool window opens the first time; egui keeps where the user moves it later.
@@ -93,7 +136,7 @@ mod tests {
         ) = (true, true, true, true);
         (app.editor.open, app.view.info_open, app.updater.open) = (true, true, true);
         app.tof = crate::tof_calibration::TofWindow::demo();
-        (app.results.open, app.statistics.open, app.mid.open) = (true, true, true);
+        (app.statistics.open, app.mid.open) = (true, true);
         let mut c = md_core::library::LibraryCompound::new("Phenylalanine 2TMS");
         (c.spectrum.masses, c.spectrum.values) = (vec![73.0, 218.0], vec![1000, 800]);
         app.editor.compounds = vec![c];
@@ -311,7 +354,8 @@ mod tests {
             "Library editor",
             "Add component to library",
             "Copy retention times",
-            "Results",
+            "Components",
+            "Detected peaks",
             "Biomarker statistics",
             "Substance 0",
             "Mass isotopomer distributions",
@@ -347,12 +391,18 @@ mod tests {
     fn windows_open_beside_the_run_list_and_apart() {
         for size in [[1200.0, 800.0], [1000.0, 700.0], [800.0, 600.0]] {
             let mut app = app_with_every_window();
-            let (ctx, _) = draw(&mut app, size);
-            let key = egui::Id::unique(("side panel wanted width", "runs"));
-            let list = ctx
-                .data(|d| d.get_temp::<f32>(key))
-                .unwrap()
-                .min(size[0] * 0.3);
+            let (ctx, nodes) = draw(&mut app, size);
+            // The right edge of the left panel: where its run names are clipped.
+            let list = ctx.viewport(|v| {
+                (v.prev_pass.widgets.layers())
+                    .flat_map(|(_, ws)| ws)
+                    .filter(|w| {
+                        (nodes.names.get(&w.id.accesskit_id())).is_some_and(|n| n.1 == "run_00")
+                    })
+                    .map(|w| w.interact_rect.max.x)
+                    .fold(0.0, f32::max)
+            });
+            assert!(list > 0.0, "{size:?}: no run list");
             let windows: Vec<egui::Rect> = ctx.memory(|m| {
                 (m.layer_ids().filter(|l| l.order == egui::Order::Middle))
                     .filter_map(|l| m.area_rect(l.id))
@@ -401,12 +451,7 @@ mod tests {
             app.batch.open,
             app.isotopes.open,
         ) = (false, false, false, false);
-        (
-            app.editor.open,
-            app.view.info_open,
-            app.results.open,
-            app.mid.open,
-        ) = (false, false, false, false);
+        (app.editor.open, app.view.info_open, app.mid.open) = (false, false, false);
         app.tof.open = false;
         let mut frame = eframe::Frame::_new_kittest();
         let mut step = |app: &mut App, events: Vec<egui::Event>| {

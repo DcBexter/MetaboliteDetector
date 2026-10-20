@@ -138,9 +138,11 @@ planned, so no sentence is assembled from fragments.
 
 ## Layout
 
-- Top: menu bar (`File`, `Analysis`). Bottom: one status line. Left: run list (when runs are open).
-  Right: hit list of the selected component (when a library is loaded). Centre: trace toggles, TIC
-  and/or SIC plot(s), normalisation toggles, spectrum plot.
+- Top: menu bar (`File`, `Analysis`, `View`, `Help`). Bottom: one status line. When runs are open:
+  left the runs and below them the component list; centre the trace toggles and TIC and/or SIC plot(s),
+  below them the spectrum (scan/RT entry, normalisation toggles) beside Detected Peaks; right the
+  component info, its peaks and library hits. Every split can be dragged and every area hidden from
+  `View` (`layout::Panels`); a 6 px gap on both sides of a split keeps its grab zone off the controls.
 - Chromatogram plots share the x axis (linked) and a fixed 90 px y-axis width so axes line up.
 - Spacing is egui's: 8 px between items in a row, 3 px between rows, 8 px (`add_space(8.0)`) between
   groups inside a window. Window margin 10 px, the corner resize grip, so no control sits under it;
@@ -148,8 +150,9 @@ planned, so no sentence is assembled from fragments.
 - Forms are two-column `egui::Grid`s: label left, control right. Tables are striped grids.
 - Default window size 1200 × 800; nothing may overlap, be cut off at the side or reach past the
   screen where nothing scrolls it back, down to 800 × 600 and at 520 px width (overlap test, #89). Rows of controls use `horizontal_wrapped`;
-  the run list and the component panel grow to their content up to 30 % of the width, then scroll
-  (`layout::side_panel`); wide tables scroll sideways.
+  the left and right areas start at most 30 % of the width wide (`layout::dock`, tool windows open
+  right of that) and scroll; wide tables scroll sideways. The spectrum's controls scroll in at most
+  40 % of its height, so the plot stays in view at 800 × 600.
 
 ## Elevation & Depth
 

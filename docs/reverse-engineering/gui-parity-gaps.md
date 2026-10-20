@@ -27,6 +27,11 @@ These are the views the old main window shows at all times.
 | Spectrum dock with scan spinbox and RT field | Scan only through click or ←/→ | Small gap: direct entry of scan/RT |
 | View menu: show/hide docks | Fixed panels | Replaced by a modern layout; a "View" menu with panel toggles is still useful |
 
+Status: #251 (spec S1) closed every gap of this table: the component list sits below the runs and works
+without a library, Detected Peaks is beside the spectrum, the component info shows detected and library
+values side by side, scan and RT can be typed in, and **View** hides each resizable area. Saving the layout
+is S4 (#253).
+
 ## 3. Menus, toolbar, shell
 
 | Old function | New | Gap |

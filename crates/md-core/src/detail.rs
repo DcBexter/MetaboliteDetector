@@ -4,6 +4,7 @@
 
 use std::io;
 
+use crate::Chromatogram;
 use crate::csv::write_columns;
 use crate::deconv::Component;
 use crate::library::LibrarySpectrum;
@@ -62,6 +63,48 @@ pub fn component_detail(c: &Component, all: &[Peak], masses: &[u32]) -> Detail {
         discrepancy: mean(|r| r.quality).unwrap_or(-1.0),
         peaks,
     }
+}
+
+/// One ion of the old "Detected Peaks" plot, over the scans `first_scan..=last_scan` of its component.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IonProfile {
+    pub mass: u32,
+    /// Summed intensity within ±0.5 of `mass` per scan.
+    pub measured: Vec<f64>,
+    /// Model share × model peak per scan (the fit's baseline is left out); empty without a model.
+    pub modelled: Vec<f64>,
+}
+
+/// The ions of `c` in the order of `component_detail` (one per mass, sharpest first). `masses[p]` is
+/// the ion mass of peak `p`, as in `component_detail`.
+pub fn ion_profiles(c: &Component, masses: &[u32], data: &Chromatogram) -> Vec<IonProfile> {
+    let scans =
+        c.first_scan as usize..=(c.last_scan as usize).min(data.scan_count().saturating_sub(1));
+    let mut out: Vec<IonProfile> = Vec::new();
+    for f in &c.peaks {
+        let Some(&mass) = masses.get(f.peak) else {
+            continue;
+        };
+        if out.iter().any(|p| p.mass == mass) {
+            continue;
+        }
+        let (lo, hi) = (mass as f32 - 0.5, mass as f32 + 0.5);
+        let measured = scans
+            .clone()
+            .map(|s| {
+                let (m, i) = data.spectrum(s);
+                let r = m.partition_point(|x| *x < lo)..m.partition_point(|x| *x < hi);
+                i[r].iter().map(|v| f64::from(*v)).sum()
+            })
+            .collect();
+        let modelled = c.model.iter().map(|y| y * f.model_share).collect();
+        out.push(IonProfile {
+            mass,
+            measured,
+            modelled,
+        });
+    }
+    out
 }
 
 /// The found and the library spectrum on a common mass axis, both normalised on their own.
@@ -201,6 +244,29 @@ mod tests {
             (d.mean_signal_to_noise, d.mean_sharpness, d.discrepancy),
             (0.0, 0.0, -1.0)
         );
+    }
+
+    #[test]
+    fn ion_profiles_sum_each_mass_over_the_component_scans() {
+        // Scan 0 is outside the component; scan 2 has a neighbour of 73 just outside its window.
+        let data = Chromatogram {
+            scan_times_s: vec![0.0, 1.0, 2.0, 3.0],
+            offsets: vec![0, 1, 3, 6, 7],
+            mz: vec![73.0, 72.6, 73.2, 73.4, 73.6, 116.0, 116.0],
+            intensity: vec![9.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            exact_masses: false,
+        };
+        let mut c = component(&[(0, 1.0), (1, 1.0), (2, 1.0)]);
+        (c.first_scan, c.last_scan, c.model) = (1, 3, vec![1.0, 2.0, 1.0]);
+        c.peaks[2].model_share = 0.5;
+        let p = ion_profiles(&c, &[73, 73, 116], &data);
+        assert_eq!(p.len(), 2, "one profile per mass");
+        assert_eq!(
+            (p[0].mass, p[0].measured.clone()),
+            (73, vec![3.0, 3.0, 0.0])
+        );
+        assert_eq!(p[1].measured, vec![0.0, 5.0, 6.0]);
+        assert_eq!(p[1].modelled, vec![0.5, 1.0, 0.5]);
     }
 
     fn library(masses: &[f32], values: &[i32]) -> LibrarySpectrum {

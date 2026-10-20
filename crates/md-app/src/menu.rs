@@ -1,4 +1,4 @@
-//! Top menu bar: File, Analysis and Help.
+//! Top menu bar: File, Analysis, View and Help.
 
 use eframe::egui;
 
@@ -10,6 +10,11 @@ impl App {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| self.file_menu(ui));
                 ui.menu_button("Analysis", |ui| self.analysis_menu(ui));
+                ui.menu_button("View", |ui| {
+                    for (on, name, hint) in self.panels.toggles() {
+                        ui.checkbox(on, name).on_hover_text(hint);
+                    }
+                });
                 ui.menu_button("Help", |ui| self.updater.menu(ui));
             });
         });
@@ -121,20 +126,12 @@ impl App {
                     false,
                 ),
             ],
-            &[
-                (
-                    "Run info…",
-                    "File, instrument and scan details of the active run",
-                    |a| &mut a.view.info_open,
-                    true,
-                ),
-                (
-                    "Results of the active run…",
-                    "Table of every component with its library hit; sortable, exportable as CSV",
-                    |a| &mut a.results.open,
-                    false,
-                ),
-            ],
+            &[(
+                "Run info…",
+                "File, instrument and scan details of the active run",
+                |a| &mut a.view.info_open,
+                true,
+            )],
             &[
                 (
                     "Batch quantification…",

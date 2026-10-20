@@ -169,11 +169,22 @@ fn screenshots() {
         shots.save(&mut h, &format!("01-start-{tag}"));
 
         open(&mut h, &paths[..3]);
+        shots.save(&mut h, &format!("02a-main-no-library-{tag}"));
         let lib = Arc::new(library(h.state()));
         h.state_mut().library = Some(lib);
         wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
         shots.save(&mut h, &format!("02-main-{tag}"));
     }
+    // The smallest window the layout is checked at: the spectrum must stay in view.
+    let mut h = Harness::builder()
+        .with_size([800.0, 600.0])
+        .with_accessibility_check(false)
+        .with_context_setup(crate::style::apply)
+        .build_eframe(|_| App::default());
+    open(&mut h, &paths[..3]);
+    h.state_mut().model_profile = true;
+    h.run_steps(4);
+    shots.save(&mut h, "02b-main-800x600");
 
     let mut h = harness(egui::Theme::Dark);
     open(&mut h, &paths);
@@ -205,13 +216,12 @@ fn screenshots() {
     wait(&mut h, |a| a.runs.iter().all(|r| r.ident.is_some()));
 
     type Toggle = fn(&mut App) -> &mut bool;
-    let windows: [(&str, Toggle); 7] = [
+    let windows: [(&str, Toggle); 6] = [
         ("07-settings", |a| &mut a.settings.open),
         ("08-calibration", |a| &mut a.ri.open),
         ("09-batch", |a| &mut a.batch.open),
         ("10-isotopes", |a| &mut a.isotopes.open),
         ("11-library-editor", |a| &mut a.editor.open),
-        ("12-results", |a| &mut a.results.open),
         ("13-run-info", |a| &mut a.view.info_open),
     ];
     for (name, open) in windows {
