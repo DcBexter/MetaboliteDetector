@@ -21,7 +21,11 @@ mod menu;
 mod results;
 mod run_list;
 mod settings;
+mod statistics;
 mod status;
+mod style;
+#[cfg(test)]
+mod ui_tests;
 mod view;
 
 use jobs::{poll_job, spawn};
@@ -37,6 +41,7 @@ fn main() -> eframe::Result {
         "MetaboliteDetector",
         options,
         Box::new(|cc| {
+            style::apply(&cc.egui_ctx);
             let mut app = App::default();
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
@@ -77,6 +82,7 @@ struct App {
     library_failed: Option<md_core::search::SearchSettings>,
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
+    statistics: statistics::Statistics,
     results: results::Results,
     export: export::Export,
     view: view::View,
@@ -103,6 +109,7 @@ impl Default for App {
             library_failed: None,
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
+            statistics: statistics::Statistics::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
@@ -183,6 +190,8 @@ impl App {
         let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
+        self.statistics
+            .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
         self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);

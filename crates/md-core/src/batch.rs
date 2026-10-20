@@ -142,7 +142,7 @@ pub fn scan_chromatogram(
     lib: &PreparedLibrary,
     s: &ScanSettings,
 ) -> Result<Scanned, TooLarge> {
-    let traces = IonTraces::new(&c)?;
+    let mut traces = IonTraces::new(&c)?;
     // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
     // peak memory per run.
     let times = c.scan_times_s.clone();

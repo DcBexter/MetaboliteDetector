@@ -360,6 +360,10 @@ mod tests {
             ris: Vec::new(),
             blocks: Vec::new(),
             sources: Vec::new(),
+            peaks: Vec::new(),
+            model: None,
+            formulas: Vec::new(),
+            mid_sizes: Vec::new(),
         }
     }
 

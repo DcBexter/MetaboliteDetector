@@ -178,7 +178,7 @@ fn plan(
 }
 
 fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
-    let traces = IonTraces::new(&c)?;
+    let mut traces = IonTraces::new(&c)?;
     let times = c.scan_times_s.clone();
     drop(c);
     let peaks = traces.detect_peaks(&s.peaks);
