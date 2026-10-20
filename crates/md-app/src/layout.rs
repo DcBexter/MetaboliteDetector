@@ -104,6 +104,8 @@ mod tests {
         for i in 0..80 {
             let mut more = results::tests::run();
             more.name = format!("run_{i:02}");
+            // Analysed with the settings in use, so no background re-analysis runs (#200).
+            more.analysis = settings::Analysis::new(app.settings.key());
             app.runs.push(more);
         }
         let found = |rt_s| md_core::batch::RunResult {
@@ -165,6 +167,11 @@ mod tests {
                 }
             }
         }
+        // A job finishing between frames changes the status line and other text late (#200).
+        assert!(
+            !app.runs.iter().any(|r| r.analysis.busy()),
+            "background analysis makes the drawn frames depend on timing"
+        );
         (ctx, nodes)
     }
 

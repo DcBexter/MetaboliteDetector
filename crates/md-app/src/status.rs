@@ -25,8 +25,14 @@ impl App {
                     ui.colored_label(ui.visuals().error_fg_color, e);
                 });
             } else if let Some(r) = self.runs.get(self.active) {
-                ui.label(self.run_status(r))
-                    .on_hover_text(r.path.display().to_string());
+                // One line: a wrapped status changes the bar's height, which egui applies a frame
+                // late, so the second line would hang below the window for that frame (#200).
+                let status = self.run_status(r);
+                let label = egui::Label::new(&status)
+                    .truncate()
+                    .show_tooltip_when_elided(false);
+                ui.add(label)
+                    .on_hover_text(format!("{status}\n{}", r.path.display()));
             } else {
                 ui.label("No runs open.");
             }
