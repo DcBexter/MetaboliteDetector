@@ -75,9 +75,11 @@ pub fn normalize(t: &Table, mode: &Normalization) -> Table {
 }
 
 /// For each column: `None` for a pool run (kept raw), else its `p.nearest` closest pool runs by
-/// acquisition time; a tie goes to the earlier column like the old multimap.
+/// acquisition time; a tie goes to the run scanned earlier like the old multimap, so moving
+/// columns does not change the result.
 fn nearest_pools(t: &Table, p: &Pool) -> Vec<Option<Vec<usize>>> {
     let at = |i: usize| p.times.get(i).copied().unwrap_or(0);
+    let scanned = |i: usize| t.sources.get(i).copied().unwrap_or(i);
     let pools: Vec<usize> = (0..t.runs.len())
         .filter(|c| t.groups[*c] == p.group)
         .collect();
@@ -87,7 +89,7 @@ fn nearest_pools(t: &Table, p: &Pool) -> Vec<Option<Vec<usize>>> {
                 return None;
             }
             let mut near = pools.clone();
-            near.sort_by_key(|i| (at(*i).abs_diff(at(c)), *i));
+            near.sort_by_key(|i| (at(*i).abs_diff(at(c)), scanned(*i)));
             near.truncate(p.nearest);
             Some(near)
         })
@@ -266,6 +268,26 @@ mod tests {
             values(&normalize(&t, &Normalization::Pool(p)), 0)[0],
             Some(10.0 / (140.0 / 3.0))
         );
+    }
+
+    #[test]
+    fn pool_ties_do_not_depend_on_the_column_order() {
+        let t = Table {
+            runs: ["p1", "p2", "x"].map(String::from).to_vec(),
+            sources: vec![0, 1, 2],
+            groups: ["$POOL", "$POOL", "A"].map(String::from).to_vec(),
+            rows: vec![row("s", &[Some(1.0), Some(2.0), Some(10.0)])],
+        };
+        let pool = Normalization::Pool(Pool {
+            group: POOL_GROUP.into(),
+            times: vec![0; 3],
+            nearest: 1,
+            median: false,
+        });
+        assert_eq!(values(&normalize(&t, &pool), 0)[2], Some(10.0));
+        // Pool runs swapped, as after the user moved a run: same result.
+        let moved = t.select_runs(&[1, 0, 2]);
+        assert_eq!(values(&normalize(&moved, &pool), 0)[2], Some(10.0));
     }
 
     #[test]
