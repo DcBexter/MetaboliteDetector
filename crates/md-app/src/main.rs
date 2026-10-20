@@ -31,6 +31,7 @@ mod plot_export;
 mod results;
 mod run_list;
 mod settings;
+mod shortcuts;
 mod statistics;
 mod status;
 mod style;
@@ -122,6 +123,7 @@ struct App {
     saved: persist::Saved,
     /// Detected Peaks also draws the modelled profile of each ion.
     model_profile: bool,
+    about_open: bool,
     /// Run whose TIC zoom is shown; another run starts unzoomed.
     plotted: Option<std::sync::Weak<md_core::Chromatogram>>,
 }
@@ -160,6 +162,7 @@ impl Default for App {
             panels: layout::Panels::default(),
             saved: persist::Saved::default(),
             model_profile: false,
+            about_open: false,
             plotted: None,
         }
     }
@@ -211,6 +214,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_jobs(ui.ctx());
         self.menu_bar(ui);
+        self.shortcuts(ui.ctx());
         self.windows(ui.ctx());
         self.status_bar(ui);
         self.left_panel(ui);
@@ -270,6 +274,7 @@ impl App {
         self.info_window(ctx);
         self.library_editor(ctx);
         self.updater.window(ctx);
+        self.about_window(ctx);
         self.export_all_window(ctx);
     }
 }
