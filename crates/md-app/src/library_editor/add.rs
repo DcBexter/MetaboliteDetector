@@ -87,6 +87,7 @@ impl AddDialog {
 
     /// Name, the old radio buttons for a name already in the library, and the comment.
     fn choices(&mut self, ui: &mut egui::Ui, library: &[LibraryCompound], exists: bool) {
+        let before = (self.name.clone(), self.choice);
         ui.horizontal(|ui| {
             ui.label("Name");
             ui.text_edit_singleline(&mut self.name);
@@ -117,6 +118,10 @@ impl AddDialog {
         }
         ui.label("Comment");
         ui.add(egui::TextEdit::multiline(&mut self.comment).desired_rows(2));
+        // The question was for the entry and choice it showed.
+        if (self.name.as_str(), self.choice) != (before.0.as_str(), before.1) {
+            self.confirm = false;
+        }
     }
 
     /// RT and RI of the component, the state of the quant ion search and the question.
@@ -160,7 +165,10 @@ impl AddDialog {
         ui.horizontal(|ui| {
             let ready = matches!(self.ions, Ions::Ready(_)) && !self.name.trim().is_empty();
             let label = if self.confirm { "Yes" } else { "OK" };
-            if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
+            let ok = ui
+                .add_enabled(ready, egui::Button::new(label))
+                .on_disabled_hover_text("Needs a name and the quantification ions.");
+            if ok.clicked() {
                 if exists && !self.confirm {
                     self.confirm = true;
                 } else {
@@ -176,7 +184,9 @@ impl AddDialog {
 impl LibraryEditor {
     /// Opens "Add component" for the selected component of the active run.
     pub(super) fn start_add(&mut self, ctx: &egui::Context, src: &Source) {
-        let (Some(comp), Some(key)) = (src.component(), src.run.analysis.key.clone()) else {
+        let Some(comp) = src.component() else { return };
+        let Some(key) = src.run.analysis.key.clone() else {
+            self.error = Some("The run has no finished analysis; analyse it again.".into());
             return;
         };
         let run = src.run;
@@ -285,7 +295,10 @@ impl LibraryEditor {
                     }
                 ));
                 if d.job.is_some() {
-                    ui.spinner();
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Searching the library…");
+                    });
                 } else if d.plan.is_empty() {
                     ui.label("No component was assigned to an entry.");
                 }
@@ -293,7 +306,14 @@ impl LibraryEditor {
                     .max_height(360.0)
                     .show(ui, |ui| {
                         egui::Grid::new("rt plan").striped(true).show(ui, |ui| {
-                            for h in ["Compound", "RT (min)", "Lib RT", "RI", "Lib RI", "Score"] {
+                            for h in [
+                                "Compound",
+                                "RT (min)",
+                                "Lib RT (min)",
+                                "RI",
+                                "Lib RI",
+                                "Score",
+                            ] {
                                 ui.strong(h);
                             }
                             ui.end_row();
@@ -316,7 +336,10 @@ impl LibraryEditor {
                         });
                     });
                 if ui
-                    .add_enabled(!d.plan.is_empty(), egui::Button::new("Copy"))
+                    .add_enabled(
+                        !d.plan.is_empty(),
+                        egui::Button::new(format!("Copy {} RTs", d.plan.len())),
+                    )
                     .on_hover_text("Replaces RT and RI of the entries; Save writes the library.")
                     .clicked()
                 {

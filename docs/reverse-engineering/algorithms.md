@@ -846,7 +846,8 @@ After a change the library is written with `toDisk()` ("Error saving compound li
 Deviations and gaps of the rewrite:
 
 - "Modify entry" (merge of spectra) is not ported; the combined-spectrum arithmetic (`LibraryCompound::addSpectrum`, virtual call from 0x61cde2) was not read.
-- With "Replace RT/Spec" the old code copies the old features over the new ones, which drops a comment typed in the dialog; the rewrite adds the typed comment on top.
+- With "Replace RT/Spec" the old code copies the old features over the new ones, which drops a comment typed in the dialog; the rewrite appends the typed comment (new line) to the old one.
+- The old "Replace RT/Spec" also copies the formulas of the old entry; `LibraryCompound` has no formula field, so they are not copied. "Replace entry" removes the entry and adds the new one at the end; the rewrite replaces it in place. Like the old dialog, the entry gets the source "no source"; the run name is only in the suggested entry name.
 - A found compound without RI (run not calibrated) is stored with RI -1 (no RI); copying RTs then leaves the RI of the entry alone.
 - The result is an entry in the rewrite's `.mdlib` (saved through the library editor), not an `.lbr`.
 - Source string "no source" and the `LibraryCompound(Compound, source)` constructor defaults for the combined spectrum are Inferred from the MSL importer.

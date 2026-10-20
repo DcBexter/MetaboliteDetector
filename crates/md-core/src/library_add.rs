@@ -148,7 +148,7 @@ pub fn add(
             found.name = entry(i, library)?;
             let old = &library[i];
             // The old dialog copies the entry's features over the new ones, which drops a comment typed
-            // in the dialog; here the typed comment is added on top.
+            // in the dialog; here the typed comment is appended to the old one.
             found.quant_ions.clone_from(&old.quant_ions);
             found.auto_quant_ions.clone_from(&old.auto_quant_ions);
             found.features.clone_from(&old.features);
@@ -166,7 +166,13 @@ pub fn add(
 
 fn set_comment(c: &mut LibraryCompound, comment: &str) {
     if !comment.is_empty() {
-        c.features.insert("COMMENT".into(), comment.into());
+        c.features
+            .entry("COMMENT".into())
+            .and_modify(|old| {
+                old.push('\n');
+                old.push_str(comment);
+            })
+            .or_insert_with(|| comment.into());
     }
 }
 
@@ -356,7 +362,7 @@ mod tests {
         assert_eq!(c.features["COMMENT"], "checked");
         assert_eq!(c.features["FRAG"], "(1/2)");
         add(&mut lib, found("x"), AddMode::KeepFeatures(0), "new note").unwrap();
-        assert_eq!(lib[0].features["COMMENT"], "new note");
+        assert_eq!(lib[0].features["COMMENT"], "checked\nnew note");
     }
 
     #[test]
