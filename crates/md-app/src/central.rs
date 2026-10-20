@@ -6,6 +6,49 @@ use md_core::decimate;
 
 use crate::{App, Run, Trace, color, export, identify, view::View};
 
+/// Visible x range in minutes (unbounded when auto-fitted); after a unit change it also moves the
+/// zoomed window into the new unit.
+fn visible_minutes(p: &mut egui_plot::PlotUi, view: &View) -> (f64, f64) {
+    if p.auto_bounds().x {
+        return (f64::NEG_INFINITY, f64::INFINITY);
+    }
+    let b = p.plot_bounds();
+    let old = view.bounds_in.unwrap_or(view.unit);
+    let to_min = |x: f64| old.to_seconds(x) / 60.0;
+    if old != view.unit {
+        let conv = |x: f64| view.time(to_min(x));
+        p.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+            [conv(b.min()[0]), b.min()[1]],
+            [conv(b.max()[0]), b.max()[1]],
+        ));
+    }
+    (to_min(b.min()[0]), to_min(b.max()[0]))
+}
+
+/// Points of one run in the view's unit: at most ~2 per pixel, optionally as the derivative.
+fn run_points(
+    run: &Run,
+    ys: &[f64],
+    view: &View,
+    (lo, hi): (f64, f64),
+    width: usize,
+) -> Vec<[f64; 2]> {
+    // shortcut: the derivative is recomputed every frame (O(scans)); cache per run past ~1M scans.
+    let d;
+    let ys = if view.derivative {
+        d = md_core::first_derivative(ys);
+        &d
+    } else {
+        ys
+    };
+    // Decimate in minutes, then convert: the scan arrays stay untouched.
+    let mut points = decimate(&run.minutes, ys, lo, hi, width);
+    for pt in &mut points {
+        pt[0] = view.time(pt[0]);
+    }
+    points
+}
+
 /// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
 /// time in the view's unit.
 #[allow(clippy::too_many_arguments)]
@@ -32,43 +75,17 @@ fn trace_plot(
         .y_axis_label(label)
         .show(ui, |p| {
             // Draw at most ~2 points per pixel of the visible range, whatever the file size.
-            let (lo, hi) = if p.auto_bounds().x {
-                (f64::NEG_INFINITY, f64::INFINITY)
-            } else {
-                let b = p.plot_bounds();
-                let old = view.bounds_in.unwrap_or(view.unit);
-                let to_min = |x: f64| old.to_seconds(x) / 60.0;
-                if old != view.unit {
-                    // Keep the zoomed window when the unit changes.
-                    let conv = |x: f64| view.time(to_min(x));
-                    p.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
-                        [conv(b.min()[0]), b.min()[1]],
-                        [conv(b.max()[0]), b.max()[1]],
-                    ));
-                }
-                (to_min(b.min()[0]), to_min(b.max()[0]))
-            };
+            let (lo, hi) = visible_minutes(p, view);
             let mut y_span: Option<(f64, f64)> = None;
             let width = p.response().rect.width().max(100.0) as usize;
             for (i, run) in runs.iter().enumerate() {
                 let ys = trace(run);
                 // A SIC is empty until its first job finishes.
                 if run.visible && ys.len() == run.minutes.len() {
-                    // shortcut: the derivative is recomputed every frame (O(scans)); cache per run if runs grow past ~1M scans.
-                    let d;
-                    let ys = if view.derivative {
-                        d = md_core::first_derivative(ys);
-                        &d
-                    } else {
-                        ys
-                    };
-                    // Decimate in minutes, then convert: the scan arrays stay untouched.
-                    let mut points = decimate(&run.minutes, ys, lo, hi, width);
-                    for pt in &mut points {
-                        pt[0] = view.time(pt[0]);
-                    }
-                    for (a, b) in points.iter().map(|q| (q[1], q[1])) {
-                        y_span = Some(y_span.map_or((a, b), |(l, h)| (l.min(a), h.max(b))));
+                    let points = run_points(run, ys, view, (lo, hi), width);
+                    for q in &points {
+                        let (l, h) = y_span.unwrap_or((q[1], q[1]));
+                        y_span = Some((l.min(q[1]), h.max(q[1])));
                     }
                     p.line(Line::new(run.name.as_str(), points).color(color(i)));
                 }
