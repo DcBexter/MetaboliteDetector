@@ -38,6 +38,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
+  src/layout.rs         shared style and list/details split; a test checks no control covers another
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/batch.rs          batch quantification window and result table
