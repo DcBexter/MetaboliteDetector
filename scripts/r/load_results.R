@@ -26,4 +26,24 @@ if (file.exists(groups_csv)) {
   groups <- setNames(unguard(g$Group), unguard(g$Run))[names(runs)]
 }
 
+# Settings used (`Setting,Value`, written next to every export) as the named character vector
+# `settings`, and the integral of every quant ion (exported with "Export quant ions" or
+# md-cli --ion-integrals; Substance, Quant_ion, then one column per run) as the data.frame `ions`.
+settings_csv <- paste0(tools::file_path_sans_ext(csv_path), ".settings.csv")
+settings <- NULL
+if (file.exists(settings_csv)) {
+  s <- read.csv(settings_csv, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+                colClasses = "character", na.strings = character(0))
+  settings <- setNames(unguard(s$Value), s$Setting)
+}
+ions_csv <- paste0(tools::file_path_sans_ext(csv_path), ".ions.csv")
+ions <- NULL
+if (file.exists(ions_csv)) {
+  ions <- read.csv(ions_csv, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+                   colClasses = c(Substance = "character"))
+  names(ions) <- unguard(names(ions))
+  ions$Substance <- unguard(ions$Substance)
+  ions[-(1:2)] <- lapply(ions[-(1:2)], as.numeric)
+}
+
 str(data)

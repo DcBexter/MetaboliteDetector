@@ -1,6 +1,7 @@
 //! Batch quantification window: scans many runs on a worker thread against the open library and
 //! shows the substance × run table (`md_core::batch`). Filters and groups apply without a rescan.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
@@ -44,6 +45,22 @@ struct Scan {
     rescanned: usize,
     errors: Vec<String>,
     took: Duration,
+    /// Per run: library index of a substance -> position in `RunResult::found`, so the details
+    /// behind a cell are found without searching every frame.
+    index: Vec<HashMap<usize, usize>>,
+}
+
+/// See `Scan::index`.
+fn hit_index(runs: &[RunResult]) -> Vec<HashMap<usize, usize>> {
+    (runs.iter())
+        .map(|r| {
+            r.found
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.compound, i))
+                .collect()
+        })
+        .collect()
 }
 
 /// Which normalisation (F13) the table shows; the table is derived again when this changes.
@@ -254,6 +271,7 @@ impl Batch {
     pub fn finished(&mut self, lib: Arc<Library>, runs: Vec<RunResult>) {
         self.scan = Some(Scan {
             lib,
+            index: hit_index(&runs),
             runs: Arc::new(runs),
             extra: Arc::default(),
             rescanned: 0,
@@ -295,6 +313,7 @@ impl Batch {
                 errors.extend(done.errors);
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
+                    index: hit_index(&runs),
                     runs: Arc::new(runs),
                     extra: Arc::new(done.extra),
                     rescanned: done.rescanned,
@@ -589,7 +608,11 @@ impl Batch {
                         let ex = Export {
                             scan,
                             settings: &self.settings,
-                            extra: shown_settings(&self.norm, shown, t.runs.len()),
+                            extra: [
+                                shown_settings(&self.norm, shown, t.runs.len()),
+                                scan_settings(scan),
+                            ]
+                            .concat(),
                             ions: self.view.export_ions,
                         };
                         if let Some(note) = export_button(ui, shown, &ex) {
@@ -722,6 +745,18 @@ fn shown_settings(n: &Norm, t: &Table, base_runs: usize) -> Vec<(&'static str, S
             (base_runs - t.runs.len().min(base_runs)).to_string(),
         ),
         ("REMOVED_SUBSTANCES", n.edits.rows.len().to_string()),
+    ]
+}
+
+/// How the runs were scanned, for the settings file next to an export.
+fn scan_settings(scan: &Scan) -> Vec<(&'static str, String)> {
+    vec![
+        ("LIBRARY", scan.lib.name.clone()),
+        ("RT_ONLY", scan.lib.prepared.is_rt_only().to_string()),
+        ("SEARCH_CUTOFF", scan.lib.settings.cutoff.to_string()),
+        ("RUNS_SCANNED", scan.runs.len().to_string()),
+        ("UNKNOWN_SUBSTANCES", scan.extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", scan.rescanned.to_string()),
     ]
 }
 
@@ -1010,8 +1045,9 @@ struct Detail<'a> {
 impl Detail<'_> {
     /// The hit of `compound` in the run behind column `col` of `t`.
     fn found(&self, t: &Table, col: usize, compound: usize) -> Option<&Found> {
-        let run = self.scan.runs.get(*t.sources.get(col)?)?;
-        run.found.iter().find(|f| f.compound == compound)
+        let run = *t.sources.get(col)?;
+        let hit = *self.scan.index.get(run)?.get(&compound)?;
+        self.scan.runs.get(run)?.found.get(hit)
     }
 
     /// The library hits of the component behind a cell: the assigned one first (red), then the
@@ -1582,6 +1618,7 @@ mod tests {
         };
         let scan = Scan {
             lib: Arc::new(lib),
+            index: hit_index(std::slice::from_ref(&run)),
             runs: Arc::new(vec![run]),
             extra: Arc::default(),
             rescanned: 0,
@@ -1636,14 +1673,16 @@ mod tests {
         let mut ex = Export {
             scan: &scan,
             settings: &settings,
-            extra: vec![("NORMALISATION", "none".into())],
+            extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
         };
         let note = save_results(&csv, &t, &ex).unwrap();
         assert!(note.contains("results.settings.csv"), "{note}");
         assert!(!dir.join("results.ions.csv").exists());
         let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
-        assert!(text.ends_with("NORMALISATION,none\n"), "{text}");
+        assert!(text.contains("\nNORMALISATION,none\n"), "{text}");
+        assert!(text.contains("\nRUNS_SCANNED,1\n"), "{text}");
+        assert!(text.contains("\nIONS_ADDED_BY_RESCAN,0\n"), "{text}");
 
         ex.ions = true;
         save_results(&csv, &t, &ex).unwrap();
