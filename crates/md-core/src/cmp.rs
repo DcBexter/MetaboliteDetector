@@ -60,7 +60,15 @@ pub fn saved_components(
     if !path.is_file() {
         return Ok(None);
     }
-    let compounds = read_cmp(&path)?;
+    components_from_file(&path, scan_times_s).map(Some)
+}
+
+/// The components of the `.cmp` file `path` for the run with `scan_times_s`; see [`saved_components`].
+pub fn components_from_file(
+    path: &Path,
+    scan_times_s: &[f64],
+) -> Result<SavedComponents, LibraryError> {
+    let compounds = read_cmp(path)?;
     if let Some(c) = compounds.iter().find(|c| {
         let s = &c.spectrum;
         // Both come from the same raw data; 1 ms leaves room for rounding only.
@@ -73,7 +81,7 @@ pub fn saved_components(
             c.spectrum.rt_ms
         )));
     }
-    components_of(&path, &compounds, scan_times_s.len()).map(Some)
+    components_of(path, &compounds, scan_times_s.len())
 }
 
 /// The components of a `.cmp` file without its run (batch input), and scan times that are right at

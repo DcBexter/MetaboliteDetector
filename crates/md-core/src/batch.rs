@@ -973,7 +973,15 @@ NUM PEAKS: 1
         let path = dir.join("run.cmp");
         crate::cmp::write_cmp(&path, &compounds).unwrap();
 
-        let (runs, errors) = scan_runs(&[path.clone()], &prepared, &s, 1, &done, &cancel).unwrap();
+        let (runs, errors) = scan_runs(
+            std::slice::from_ref(&path),
+            &prepared,
+            &s,
+            1,
+            &done,
+            &cancel,
+        )
+        .unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         let saved = &runs[0].found;
         assert_eq!(saved.len(), direct.found.len());

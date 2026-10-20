@@ -51,6 +51,7 @@ impl Results {
             ui.label("Open a chromatogram first.");
             return;
         };
+        self.saved_buttons(ui, run);
         let Some(((lib, ..), _, _)) = &run.ident else {
             ui.label("Open a library to identify the components of the run.");
             return;
@@ -108,6 +109,37 @@ impl Results {
             run.scan = run.components[k].apex_scan as usize;
         }
         self.cache = Some((stamp, rows));
+    }
+
+    /// Save the components of the run as a `.cmp` file the old program reads, or load such a file in
+    /// place of the run's components.
+    fn saved_buttons(&mut self, ui: &mut egui::Ui, run: &mut Run) {
+        ui.horizontal(|ui| {
+            if ui
+                .button("Save components…")
+                .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
+                .clicked()
+                && let Some(p) = dialog(run).save_file()
+            {
+                self.note = match save_components(run, &p) {
+                    Ok(n) => format!("Saved {n} components to {}", p.display()),
+                    Err(e) => format!("Save failed: {e}"),
+                };
+            }
+            let busy = run.analysis.busy();
+            if ui
+                .add_enabled(!busy, egui::Button::new("Load components…"))
+                .on_hover_text("Replaces the components with those of a .cmp file of this run")
+                .on_disabled_hover_text("Wait until the analysis has finished")
+                .clicked()
+                && let Some(p) = dialog(run).pick_file()
+            {
+                self.note = match load_components(run, &p) {
+                    Ok(n) => format!("Loaded {n} components from {}", p.display()),
+                    Err(e) => format!("Load failed: {e}"),
+                };
+            }
+        });
     }
 
     /// Library names that contain the search text; a click lists the components that have it as a hit.
@@ -309,6 +341,48 @@ fn hover(ui: &mut egui::Ui, r: &ResultRow, run: &Run, lib: &Library) {
     }
 }
 
+/// The file dialog for the saved components of `run`: `.cmp` next to the run, where it is found again.
+fn dialog(run: &Run) -> rfd::FileDialog {
+    let d = rfd::FileDialog::new()
+        .add_filter("Saved components", &["cmp"])
+        .set_file_name(format!("{}.cmp", run.name));
+    match run.path.parent() {
+        Some(dir) => d.set_directory(dir),
+        None => d,
+    }
+}
+
+/// Writes the components of `run` to `path`; returns how many.
+fn save_components(run: &Run, path: &std::path::Path) -> Result<usize, String> {
+    // The RI is that of the identification, so the old program lists it too.
+    let mut ris = vec![-1.0; run.components.len()];
+    for r in build_rows(run) {
+        ris[r.component] = r.ri.unwrap_or(-1.0);
+    }
+    let compounds = md_core::cmp::compounds_of_components(
+        &run.components,
+        &run.peak_masses,
+        &run.peaks,
+        &run.data.scan_times_s,
+        &ris,
+    );
+    md_core::cmp::write_cmp(path, &compounds).map_err(|e| e.to_string())?;
+    Ok(compounds.len())
+}
+
+/// Replaces the components of `run` by those in `path`, which must be of this run; returns how many.
+/// The selection and hits belong to the old components and go.
+fn load_components(run: &mut Run, path: &std::path::Path) -> Result<usize, String> {
+    let (components, masses, peaks) =
+        md_core::cmp::components_from_file(path, &run.data.scan_times_s)
+            .map_err(|e| e.to_string())?;
+    let n = components.len();
+    (run.components, run.peak_masses, run.peaks) = (components, masses, peaks);
+    (run.component, run.ident, run.ident_job) = (None, None, None);
+    run.rev += 1;
+    Ok(n)
+}
+
 /// Asks for a file and writes the table; returns the note to show.
 fn export(run: &str, rows: &[ResultRow]) -> String {
     let Some(p) = rfd::FileDialog::new()
@@ -422,6 +496,56 @@ pub(crate) mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "Alanine");
         assert_eq!(rows[0].area, Some(5.0));
+    }
+
+    #[test]
+    fn saved_components_load_again_with_their_peaks() {
+        use md_core::peaks::Peak;
+
+        let mut a = run();
+        for k in &mut a.components {
+            k.model = vec![1.0, 4.0, 1.0];
+        }
+        a.peaks = vec![Peak {
+            row: 3,
+            first_scan: 0,
+            apex_scan: 1,
+            last_scan: 2,
+            precise_apex: Some(1.25),
+            signal_to_noise: 12.0,
+            quality: 0.5,
+            sharpness: 3.0,
+        }];
+        let path = std::env::temp_dir().join(format!("md-app-save-{}.cmp", std::process::id()));
+        assert_eq!(save_components(&a, &path), Ok(2));
+
+        let mut b = run();
+        b.component = Some(1);
+        let rev = b.rev;
+        assert_eq!(load_components(&mut b, &path), Ok(2));
+        std::fs::remove_file(&path).ok();
+        // Both components shared one peak; the file gives each its own.
+        let mut want = a.components.clone();
+        want[1].peaks[0].peak = 1;
+        assert_eq!(b.components, want);
+        assert_eq!((b.peak_masses.clone(), b.peaks.len()), (vec![73, 73], 2));
+        assert_eq!(
+            (b.peaks[0].signal_to_noise, b.peaks[0].precise_apex),
+            (12.0, Some(1.25))
+        );
+        assert!(b.component.is_none() && b.ident.is_none() && b.rev == rev + 1);
+
+        // A file of another run is refused and leaves the run as it was.
+        let mut other = run();
+        other.data = std::sync::Arc::new(Chromatogram {
+            scan_times_s: vec![0.0, 61.0, 120.0],
+            ..(*other.data).clone()
+        });
+        let path = std::env::temp_dir().join(format!("md-app-save2-{}.cmp", std::process::id()));
+        save_components(&a, &path).unwrap();
+        assert!(load_components(&mut other, &path).is_err());
+        std::fs::remove_file(&path).ok();
+        assert_eq!(other.components.len(), 2);
     }
 
     #[test]
