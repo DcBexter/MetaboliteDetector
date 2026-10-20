@@ -55,7 +55,7 @@ pub struct LibraryCompound {
     /// Version 2 peak records (`PeakEssential<float>`, file-formats.md §1.3), kept verbatim.
     pub blocks: Vec<[u8; BLOCK_BYTES]>,
     pub sources: Vec<String>,
-    /// Peaks of the compound (version 4 and later), sorted by ion.
+    /// Peaks of the compound (version 4 and later); sorted by ion in `.lbr` files.
     pub peaks: Vec<LibraryPeak>,
     /// Model peak (version 4 and later).
     pub model: Option<LibraryModel>,
@@ -254,10 +254,16 @@ fn read_compound(r: &mut Reader, version: u32) -> Result<LibraryCompound, Librar
         sources: r.list(4, Reader::string)?,
         peaks,
         model,
-        // The old reader trims each formula (`trimFormulas`).
+        // The old reader trims each formula (`trimFormulas`, C `isspace`, which includes VT).
         formulas: if version >= 3 {
             r.list(12, |r| {
-                Ok((r.u32()?, r.u32()?, r.string()?.trim_ascii().to_string()))
+                Ok((
+                    r.u32()?,
+                    r.u32()?,
+                    r.string()?
+                        .trim_matches(|c: char| c.is_ascii_whitespace() || c == '\x0b')
+                        .to_string(),
+                ))
             })?
         } else {
             Vec::new()
@@ -712,7 +718,7 @@ pub fn parse_mdlib(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     let err = |line: usize, reason: String| LibraryError::Mdlib { line, reason };
     const PREFIX: &str = "MetaboliteDetector library ";
     match lines.next() {
-        // Version 1 is version 2 without peak, model, formula and mid_size lines.
+        // Version 2 only added keys (peak, model, formula, mid_size), so version 1 reads unchanged.
         Some((_, l)) if [MDLIB_HEADER, "MetaboliteDetector library 1"].contains(&l.trim_end()) => {}
         Some((_, l)) if l.starts_with(PREFIX) => {
             return Err(LibraryError::Unsupported(format!(
@@ -1017,7 +1023,7 @@ mod tests {
             u32(&mut b, 1);
             u32(&mut b, 73);
             u32(&mut b, 147);
-            string(&mut b, " C3H9Si ");
+            string(&mut b, "\x0b C3H9Si ");
         }
         if version >= 5 {
             u32(&mut b, 1);
