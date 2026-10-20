@@ -19,17 +19,19 @@ template <class F> F fn(uintptr_t addr) { return reinterpret_cast<F>(base + addr
 #include "syms.inc"
 #undef SYM
 
-// usage: LD_PRELOAD=old_msl_export.so metabolitedetector_app LIB.lbr OUT_PREFIX
+// usage: LD_PRELOAD=old_msl_export.so metabolitedetector_app LIB.lbr|LIB.msl OUT_PREFIX
 // writes OUT_PREFIX.profile.msl, OUT_PREFIX.nominal.msl and OUT_PREFIX.fwhm.msl (ExportType 0, 1, 2).
 int export_main(int argc, char** argv, char**) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s LIB.lbr OUT_PREFIX\n", argv[0]);
+        std::fprintf(stderr, "usage: %s LIB.lbr|LIB.msl OUT_PREFIX\n", argv[0]);
         return 2;
     }
-    // fromDisk is static and returns a new LibrarySearch.
+    // fromDisk and importMSL are static and return a new LibrarySearch.
+    const std::string input = argv[1];
+    const bool msl = input.size() > 4 && input.compare(input.size() - 4, 4, ".msl") == 0;
     const void* lib = nullptr;
     try {
-        lib = fn<const void* (*)(const char*)>(LIBRARY_SEARCH_FROM_DISK)(argv[1]);
+        lib = fn<const void* (*)(const char*)>(msl ? LIBRARY_SEARCH_IMPORT_MSL : LIBRARY_SEARCH_FROM_DISK)(argv[1]);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "fromDisk: %s\n", e.what());
         return 1;
