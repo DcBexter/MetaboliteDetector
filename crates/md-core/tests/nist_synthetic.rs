@@ -134,4 +134,22 @@ fn search_uses_the_old_fragment_prefilter() {
     low.extend(ALPHA);
     assert!(library_hits(&low, Some(1455.0), &prepared, &all).is_empty());
     assert!(!library_hits(&low, Some(1455.0), &plain, &all).is_empty());
+
+    // The settings steer the pre-filter: with "more than 2" iota's 3 shared fragments pass, and with
+    // only 3 compared fragments "more than 3" can never hold.
+    let hit_names = |s: &SearchSettings| -> Vec<String> {
+        let h = library_hits(&ALPHA, Some(1455.0), &prepared, s);
+        h.iter().map(|h| lib[h.compound].name.clone()).collect()
+    };
+    let loose = SearchSettings {
+        min_equal_fragments: 2,
+        ..all.clone()
+    };
+    assert!(hit_names(&loose).contains(&"Synthetic iota".to_string()));
+    assert!(!hit_names(&all).contains(&"Synthetic iota".to_string()));
+    let few = SearchSettings {
+        max_fragments: 3,
+        ..all.clone()
+    };
+    assert!(hit_names(&few).is_empty());
 }
