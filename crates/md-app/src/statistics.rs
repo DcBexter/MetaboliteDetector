@@ -368,6 +368,14 @@ impl Statistics {
         ui.separator();
         match self.tab {
             Tab::Pca => self.pca_tab(ui, generation, t),
+            // Without a regex every run sits in one group, and the picker could never be satisfied.
+            _ if all.len() < 2 => {
+                ui.label(
+                    "Two groups and Box plot compare replicate groups, but this batch has fewer than two. \
+                     Set \"Replicate groups (regex on file name)\" in the batch window; it applies \
+                     at once, without running the batch again.",
+                );
+            }
             _ => {
                 self.group_picker(ui, &all);
                 let c = TwoGroups {

@@ -423,10 +423,13 @@ impl Default for TableSettings {
 }
 
 /// Substance × run table; columns ordered by replicate group, then input order.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Table {
     /// File name of each column.
     pub runs: Vec<String>,
+    /// Index of each column's run in the list `table()` was called with: file names alone do not
+    /// tell `dir1/a.cdf` from `dir2/a.cdf`.
+    pub sources: Vec<usize>,
     pub groups: Vec<String>,
     /// Ordered by retention time.
     pub rows: Vec<Row>,
@@ -603,11 +606,12 @@ pub fn table(
         Some(c) => c.get(1).or(c.get(0)).map_or("", |m| m.as_str()).into(),
         None => n.into(),
     };
-    let mut cols: Vec<(String, String, &RunResult)> = runs
+    let mut cols: Vec<(String, String, usize, &RunResult)> = runs
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(i, r)| {
             let n = name(r);
-            (group(&n), n, r)
+            (group(&n), n, i, r)
         })
         .collect();
     cols.sort_by(|a, b| a.0.cmp(&b.0));
@@ -615,7 +619,7 @@ pub fn table(
     cols.iter()
         .for_each(|c| *sizes.entry(&c.0).or_default() += 1);
 
-    let ordered: Vec<&RunResult> = cols.iter().map(|c| c.2).collect();
+    let ordered: Vec<&RunResult> = cols.iter().map(|c| c.3).collect();
     let mut rows: Vec<Row> = hits_by_compound(&ordered)
         .into_iter()
         .filter_map(|(compound, found)| {
@@ -666,8 +670,14 @@ pub fn table(
         })
         .collect();
     rows.sort_by(|a, b| a.rt_s.total_cmp(&b.rt_s));
-    let (groups, runs) = cols.into_iter().map(|(g, n, _)| (g, n)).unzip();
-    Ok(Table { runs, groups, rows })
+    let sources = cols.iter().map(|c| c.2).collect();
+    let (groups, runs) = cols.into_iter().map(|(g, n, ..)| (g, n)).unzip();
+    Ok(Table {
+        runs,
+        sources,
+        groups,
+        rows,
+    })
 }
 
 #[cfg(test)]
@@ -697,6 +707,7 @@ mod tests {
                 values: vec![Some(1500.0), None],
                 rts_s: vec![Some(750.0), None],
             }],
+            ..Default::default()
         };
         let mut out = Vec::new();
         t.write_csv(&mut out).unwrap();
@@ -721,6 +732,7 @@ mod tests {
                 values: vec![Some(-2.0), None, None],
                 rts_s: vec![None; 3],
             }],
+            ..Default::default()
         };
         let (mut csv, mut groups) = (Vec::new(), Vec::new());
         t.write_csv(&mut csv).unwrap();
@@ -750,6 +762,7 @@ mod tests {
             runs: vec!["a.cdf".into()],
             groups: vec!["ctrl".into()],
             rows: vec![],
+            ..Default::default()
         };
         let written = t.write_groups_file(&csv).unwrap().unwrap();
         assert!(written.exists());
@@ -775,6 +788,7 @@ mod tests {
             runs: vec![],
             groups: vec![],
             rows: vec![],
+            ..Default::default()
         };
         assert!(t.write_csv(Full).is_err());
     }
