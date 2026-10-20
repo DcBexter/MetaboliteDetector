@@ -322,6 +322,8 @@ fn check_groups(cases_text: &str, old: &str, lib: Option<&[LibraryCompound]>) ->
             .flat_map(|c| &c.fragments)
             .map(|f| f.fits[0].as_ref())
             .collect();
+        // The port reports no errors for the group methods, so the old one must not either.
+        assert!(fields("gerror").is_empty(), "{}", k.name);
         if !fields("error").is_empty() {
             assert!(fits.iter().all(Option::is_none), "{}: {fits:?}", k.name);
             continue;
