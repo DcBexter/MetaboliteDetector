@@ -176,6 +176,10 @@ fn example_dir() -> std::path::PathBuf {
         .join("../../example-data/TargetSearchData/inst/gc-ms-data")
 }
 
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "a test of many cases: each assert counts, and Sonar skips tests"
+)]
 fn compare(text: &str, settings: &PeakSettings, known: Known) {
     let dir = example_dir();
     if !dir.is_dir() {

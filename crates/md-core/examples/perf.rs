@@ -5,9 +5,11 @@
 
 use std::time::Instant;
 
-use md_core::batch::{ScanSettings, scan_chromatogram};
+use md_core::batch::{Found, IonPeak, RunResult, ScanSettings, scan_chromatogram};
 use md_core::deconv::{DeconvSettings, deconvolute};
+use md_core::isotope::IsotopeTable;
 use md_core::library::{LibraryCompound, parse_msl};
+use md_core::mid::{Method, determine, frag_export};
 use md_core::peaks::{Detector, IonTraces, PeakSettings, reorder_peaks};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 use md_core::{Chromatogram, decimate};
@@ -198,6 +200,60 @@ fn main() {
         "batch untargeted, one run ({} substances, {} unknown): {:?}",
         both.found.len(),
         both.unknown.len(),
+        t.elapsed()
+    );
+
+    // MID of a labelling experiment: 1 000 substances with two fragments of 8 ions (sum formula
+    // C6H12O2 each), found in 200 runs, then the FRAG export of the same table.
+    let mut mids_lib: Vec<LibraryCompound> = lib[..1000].to_vec();
+    for c in &mut mids_lib {
+        for lo in [100, 200] {
+            c.formulas.push((lo, lo + 7, "C6H12O2".into()));
+            c.mid_sizes.push((lo, lo + 7, 6));
+        }
+        c.features.insert("FRAG".into(), "(100/8)(200/8)".into());
+    }
+    let mid_runs: Vec<RunResult> = (0..200)
+        .map(|r| RunResult {
+            path: format!("run{r}.bin").into(),
+            found: (0..mids_lib.len())
+                .map(|k| Found {
+                    compound: k,
+                    score: 1.0,
+                    rt_s: k as f64,
+                    ions: (100..108)
+                        .chain(200..208)
+                        .map(|m| IonPeak {
+                            mass: m,
+                            integral: 1000.0 / (1 + (m + r + k as u32) % 8) as f64,
+                            quality: 0.0,
+                            signal_to_noise: 0.0,
+                        })
+                        .collect(),
+                    rescanned: false,
+                    rescued: Vec::new(),
+                })
+                .collect(),
+            unknown: Vec::new(),
+            calibration: None,
+        })
+        .collect();
+    let table = IsotopeTable::standard();
+    let t = Instant::now();
+    let m = determine(&mid_runs, &mids_lib, &[], &[], Method::Formula, "C", &table);
+    println!(
+        "MID by sum formula, {} substances x {} runs ({} errors): {:?}",
+        m.compounds.len(),
+        mid_runs.len(),
+        m.errors.len(),
+        t.elapsed()
+    );
+    let refs: Vec<(usize, &LibraryCompound)> = mids_lib.iter().enumerate().collect();
+    let t = Instant::now();
+    let e = frag_export(&mid_runs, &refs);
+    println!(
+        "FRAG export ({} KiB): {:?}",
+        e.csv.len() / 1024,
         t.elapsed()
     );
 }

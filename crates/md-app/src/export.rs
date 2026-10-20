@@ -33,12 +33,12 @@ impl Default for Export {
 
 /// The spectrum on screen: title, m/z and (normalised) intensities. The deconvoluted spectrum of a
 /// selected component replaces the raw scan.
-pub fn shown_spectrum(run: &Run, norm: Normalization) -> (&'static str, Vec<f64>, Vec<f64>) {
+pub fn shown_spectrum(run: &Run, norm: Normalization) -> (String, Vec<f64>, Vec<f64>) {
     let (title, mz, intensity): (_, Vec<f64>, Vec<f64>) = match run.component {
         Some(k) => {
             let s = &run.components[k].spectrum;
             (
-                "deconvoluted spectrum",
+                format!("Component {} (deconvoluted)", k + 1),
                 s.iter().map(|(m, _)| f64::from(*m)).collect(),
                 s.iter().map(|(_, h)| f64::from(*h)).collect(),
             )
@@ -46,7 +46,7 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (&'static str, Vec<f64>
         None => {
             let (mz, i) = run.data.spectrum(run.scan);
             (
-                "spectrum",
+                format!("Scan {}", run.scan + 1),
                 mz.iter().map(|m| f64::from(*m)).collect(),
                 i.iter().map(|v| f64::from(*v)).collect(),
             )
@@ -154,12 +154,18 @@ impl App {
                 .save_file()
         };
         let mut result = None;
-        if ui.button("Export chromatogram as CSV…").clicked()
+        if ui
+            .button("Export chromatogram as CSV…")
+            .on_hover_text("Save the plotted chromatogram traces as a table")
+            .clicked()
             && let Some(p) = save("chromatogram", "CSV", "csv")
         {
             result = Some(self.chromatogram_csv(&p));
         }
-        if ui.button("Export spectrum as CSV…").clicked()
+        if ui
+            .button("Export spectrum as CSV…")
+            .on_hover_text("Save the shown spectrum (m/z and intensity) as a table")
+            .clicked()
             && let Some(p) = save("spectrum", "CSV", "csv")
         {
             result = Some(self.spectrum_csv(&p));
@@ -172,7 +178,10 @@ impl App {
             ),
             ("Export spectrum as PNG…", "spectrum", self.export.spectrum),
         ] {
-            if ui.button(label).clicked()
+            if ui
+                .button(label)
+                .on_hover_text("Save the plot as it is shown on screen")
+                .clicked()
                 && let Some(path) = save(what, "PNG image", "png")
             {
                 // The screenshot is read after the next frame, so the dialog is gone from it.

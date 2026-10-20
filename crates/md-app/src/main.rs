@@ -7,10 +7,12 @@ use std::time::Instant;
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::deconv::Component;
+use md_core::peaks::Peak;
 
 mod batch;
 mod calibration;
 mod central;
+mod detail;
 mod export;
 mod identify;
 mod isotopes;
@@ -19,6 +21,7 @@ mod layout;
 mod library_editor;
 mod loading;
 mod menu;
+mod mid;
 mod results;
 mod run_list;
 mod settings;
@@ -84,9 +87,11 @@ struct App {
     editor: library_editor::LibraryEditor,
     batch: batch::Batch,
     statistics: statistics::Statistics,
+    mid: mid::MidWindow,
     results: results::Results,
     export: export::Export,
     view: view::View,
+    spectrum_mode: detail::Mode,
 }
 
 impl Default for App {
@@ -111,9 +116,11 @@ impl Default for App {
             editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
             statistics: statistics::Statistics::default(),
+            mid: mid::MidWindow::default(),
             results: results::Results::default(),
             export: export::Export::default(),
             view: view::View::default(),
+            spectrum_mode: detail::Mode::default(),
         }
     }
 }
@@ -139,6 +146,8 @@ struct Run {
     components: Vec<Component>,
     /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
     peak_masses: Vec<u32>,
+    /// The peaks themselves (S/N, quality, sharpness), indexed like `peak_masses`.
+    peaks: Vec<Peak>,
     /// Calibration saved with the run by the old program, handed to the calibration window on load.
     saved_calibration: Option<md_core::ri::RiCalibration>,
     analysis: settings::Analysis,
@@ -166,7 +175,7 @@ impl eframe::App for App {
         self.status_bar(ui);
         self.run_list(ui);
         if let Some(run) = self.runs.get(self.active) {
-            identify::hits_panel(ui, run);
+            detail::panel(ui, run, &mut self.mz, &mut self.trace);
         }
         self.central_panel(ui);
     }
@@ -188,7 +197,7 @@ impl App {
         self.ri
             .window(ctx, &self.runs, self.active, self.library.as_deref());
         self.settings.window(ctx);
-        self.batch.analysis = self.settings.key();
+        self.batch.use_settings(&self.settings.applied);
         // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
@@ -196,6 +205,8 @@ impl App {
         let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
+        self.mid.applied.clone_from(&self.settings.applied);
+        self.mid.window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);

@@ -50,7 +50,7 @@ fn score_color(score: f64) -> egui::Color32 {
 /// Libraries are recognised by extension; everything else opens as a run.
 pub fn is_library(path: &Path) -> bool {
     path.extension().is_some_and(|e| {
-        ["lbr", "msl", "mdlib"]
+        ["lbr", "msl", "msp", "sdf", "mdlib"]
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     })
@@ -65,23 +65,29 @@ fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
             .unwrap_or_default()
             .to_string_lossy()
             .into(),
-        prepared: PreparedLibrary::new(&compounds, &s),
+        prepared: PreparedLibrary::new(&compounds, &s)
+            .with_fragment_filter(md_core::library::is_nist(path)),
         settings: s,
         compounds,
     })
 }
 
 impl App {
-    pub fn library_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Open library (.mdlib, .lbr, .msl)…").clicked()
+    pub fn open_library_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf)…")
+            .on_hover_text(
+                "Load a mass spectral library; components are then identified against it",
+            )
+            .clicked()
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("Library", &["mdlib", "lbr", "msl", "MSL"])
+                .add_filter(
+                    "Library",
+                    &["mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF"],
+                )
                 .pick_file()
         {
             self.open_library(ui.ctx(), path);
-        }
-        if ui.button("Library editor…").clicked() {
-            self.editor.open = true;
         }
     }
 
@@ -122,7 +128,8 @@ impl App {
                         prepared: match rt_only {
                             true => PreparedLibrary::new_rt_only(&lib.compounds, &wanted),
                             false => PreparedLibrary::new(&lib.compounds, &wanted),
-                        },
+                        }
+                        .with_fragment_filter(md_core::library::is_nist(&lib.path)),
                         compounds: lib.compounds.clone(),
                         settings: wanted,
                     }))
@@ -205,44 +212,41 @@ pub fn labels(run: &Run, show: impl Fn(f64) -> bool) -> Vec<Label> {
 }
 
 /// Best hits of the selected component, the assigned one marked.
-pub fn hits_panel(ui: &mut egui::Ui, run: &Run) {
+pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
     let (Some(((lib, ..), id, _)), Some(k)) = (&run.ident, run.component) else {
         return;
     };
-    egui::Panel::right("hits").show(ui, |ui| {
-        ui.strong(format!("Library hits ({})", lib.name));
-        // A new search runs after a library or calibration change; until then these scores are old.
-        if run.ident_job.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Searching again…");
-            });
-        }
-        let assigned = id.assigned[k].map(|h| h.compound);
-        egui::Grid::new("hit table").striped(true).show(ui, |ui| {
-            ui.label("Score");
-            ui.label("Spectrum");
-            ui.label("RI");
-            ui.label("Name");
-            ui.end_row();
-            for h in id.hits[k].iter().take(15) {
-                ui.colored_label(score_color(h.overall), format!("{:.3}", h.overall));
-                ui.label(format!("{:.3}", h.spec_sim));
-                // Without calibration (or library RI) the overall score is the spectrum score alone.
-                ui.label(h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")));
-                let name = &lib.compounds[h.compound].name;
-                if assigned == Some(h.compound) {
-                    ui.strong(name).on_hover_text("Assigned to this component");
-                } else {
-                    ui.label(name);
-                }
-                ui.end_row();
-            }
+    ui.strong(format!("Library hits ({})", lib.name));
+    // A new search runs after a library or calibration change; until then these scores are old.
+    if run.ident_job.is_some() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Searching again…");
         });
-        if id.hits[k].is_empty() {
-            ui.label("No hit.");
+    }
+    let assigned = id.assigned[k].map(|h| h.compound);
+    egui::Grid::new("hit table").striped(true).show(ui, |ui| {
+        for head in ["Score", "Spectrum", "RI", "Name"] {
+            ui.strong(head);
+        }
+        ui.end_row();
+        for h in id.hits[k].iter().take(15) {
+            ui.colored_label(score_color(h.overall), format!("{:.3}", h.overall));
+            ui.label(format!("{:.3}", h.spec_sim));
+            // Without calibration (or library RI) the overall score is the spectrum score alone.
+            ui.label(h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")));
+            let name = &lib.compounds[h.compound].name;
+            if assigned == Some(h.compound) {
+                ui.strong(name).on_hover_text("Assigned to this component");
+            } else {
+                ui.label(name);
+            }
+            ui.end_row();
         }
     });
+    if id.hits[k].is_empty() {
+        ui.label("No hit.");
+    }
 }
 
 pub type LibraryJob = mpsc::Receiver<Result<Arc<Library>, String>>;

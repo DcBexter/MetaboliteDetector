@@ -34,6 +34,10 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/cmp.rs            saved components of the old version (.cmp): read and write
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
+  src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
+  src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
+  src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, CSV) and the
+                        FRAG "Export MIDs" of the batch table
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
@@ -50,8 +54,10 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
+  src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, CSV
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
-  src/layout.rs         list/details split; a test checks no control covers another or is cut off
+  src/layout.rs         list/details split, side panels; a test opens every window and checks no control
+                        covers another or is cut off
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
@@ -65,7 +71,6 @@ crates/md-cli/          headless batch quantification (binary `md-cli`), depends
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: modules in `md-core` for normalisation and MID.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
@@ -268,9 +273,12 @@ Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_
 components in parallel and then assigns library compounds greedily by best overall score, each library compound
 and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
-spectrum, so no fragment pre-filter is needed (table above).
+spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
+`library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
+(`PreparedLibrary::with_fragment_filter`, file-formats.md §6.3): only entries that share at least 4 of the 5
+strongest fragments of the component are scored, as in the old NIST search.
 
-The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl` path on the command line), identifies every
+The app opens a library with File → Open library (or a `.mdlib`/`.lbr`/`.msl`/`.msp`/`.sdf` path on the command line), identifies every
 open run on worker threads, writes the assigned name at each component on the TIC (green above 0.9, orange
 above 0.7, red otherwise, like the old app) and lists the best hits of the selected component with overall,
 spectrum and RI score. With an RI calibration the component RIs (`component_ris`) go into the search; setting,
@@ -287,7 +295,8 @@ Conscious deviations:
   times / 1000 with the same sigma instead (§5.6), and with `LS_USE_RI` on it drops every entry more than 60 s
   away. That is not ported: times of different instruments and temperature programs are not comparable. The
   sample library `lib_aa.lbr` lists Glycine 3TMS at 418 s, the example runs elute it at 313 s, so the old rule
-  would remove the correct hit there.
+  would remove the correct hit there. The old NIST search drops entries without RI and finds nothing for a
+  component without RI; here those are scored by spectrum as well.
 - **Nominal mass.** Library spectra are rounded to nominal mass and intensities of one mass are summed, because
   the old `getBinnedCentroidCompound` is not decoded (§5.9) and components are unit-mass. Matching is then exact,
   which makes the old 0.01 m/z tolerance and its double-match quirk (§5.3) irrelevant. Negative intensities
@@ -296,8 +305,10 @@ Conscious deviations:
   no hits. The cutoff is applied during the search; the app searches with 0 like the old GUI. A higher cutoff
   yields the same assignments above it, because the greedy assignment takes pairs in descending score.
 - **Ties are deterministic**: lower library index, then lower component index (old: pointer order).
-- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM`, the Wave score variants and the SQL fragment pre-filter are
-  not ported (semantics unknown, §5.9).
+- `LS_USE_SCALED_LIB`, `LS_IDENTIFICATION_ALGORITHM` and the Wave score variants are not ported (semantics
+  unknown, §5.9). The NIST pre-filter uses the old defaults `SQL_MAX_NUMBER_FRAGMENTS` 5 and
+  `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS` 3 as constants. A NIST file is opened like any other library; the old
+  separate NIST path and "NIST search..." action for one component are not ported.
 
 ## Batch quantification
 
@@ -317,9 +328,11 @@ rescan:
   minimum S/N of an ion and maximum discrepancy index (mean peak quality of the ions of a cell). A
   substance without any value left drops out of the table.
 - **Untargeted** (`ScanSettings::untargeted`, then `add_unknowns`): components without library hit are kept
-  per run and pooled over all runs into a temporary library (`Unknown n`); `table` takes it as `extra`.
-- **Rescan** (`rescan_runs`): a substance found in at least half of the runs gets its missing quant ions
-  from the ion traces of the other runs' files, near the expected retention time (old `ResultSeries::scanIons`).
+  per run and pooled over all runs into a temporary library (`Unknown n`, the mean spectrum of its members);
+  `table` takes it as `extra`.
+- **Rescan** (`rescan_runs`): a substance found in at least a quarter of the runs gets its missing quant ions
+  from the ion traces of the runs' files, within ΔRI (`SearchSettings::ri_diff`) around the expected
+  position (old `ResultSeries::scanIons`).
   `complete_scan` runs both passes for the app and `md-cli`.
 - **RT shift** (`ScanSettings::shift`): the calibration is shifted per run onto a reference substance.
 
@@ -329,9 +342,9 @@ All 15 example runs against the TargetSearchData library (12 entries, converted 
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
 (90 MiB), 0.10 s with 15 (189 MiB). 150 runs (the 15 ten times) with 4 take 2.6 s and stay at 82 MiB, so
 memory depends on the runs in memory, not on the study size (`examples/batch.rs`). Reading the file
-(~27 ms per run) is the largest share. Untargeted, the 15 runs give 89 unknown substances besides the 5
-library substances (245 of 1410 cells filled, 185 ms scan, 2 ms pooling, 90 MiB peak); with the rescan 274
-cells are filled (194 ms more, 96 ions added, 87 MiB), measured 2026-10-20 with `examples/batch.rs`.
+(~27 ms per run) is the largest share. Untargeted, the 15 runs give 97 unknown substances besides the 5
+library substances; with the rescan 380 of 1530 cells of 102 substances are filled (435 ions added, 2 ms
+pooling, 1.1 s rescan with 4 in parallel), measured 2026-10-20 with `examples/batch.rs` after #110.
 
 ### Command line (`md-cli`)
 
@@ -346,7 +359,7 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 (`GcmsSettings::from_bytes`): its `AN_*`/`LS_*` values drive peak detection, deconvolution and search, its
 `QUANT_*` values are the quant defaults, which `--ions`, `--min-dist` and `--quality-cutoff` override.
 `--replicates`, `--min-reproducibility`, `--min-ions`, `--min-sn`, `--max-discrepancy` and `--exclude-ions`
-(`QUANT_EXCL_IONS`) are the batch window's filters; `--untargeted`, `--rescan` (`--rescan-window`) and
+(`QUANT_EXCL_IONS`) are the batch window's filters; `--untargeted`, `--rescan` and
 `--shift-reference` (needs `-c`; `--shift-cutoff`) switch on the passes above. The CSV is
 `Table::write_csv` (`Substance,RT_s,Quant_ions,<run>...`, empty cell = not quantified); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
@@ -444,7 +457,9 @@ The golden test found three porting errors in peak detection, now fixed:
 ## Libraries
 
 `md_core::library` reads the old binary `.lbr` libraries (gzip or raw, versions 2 to 5, layout in
-[file-formats.md](reverse-engineering/file-formats.md) §1) and imports and exports AMDIS MSL (§6).
+[file-formats.md](reverse-engineering/file-formats.md) §1), imports and exports AMDIS MSL (§6), and imports
+NIST text (`.sdf`, §6.3) and NIST MSP text (`.msp`, §6.4). NIST data is licensed and never committed; the
+tests use the synthetic `tests/data/synthetic-nist.sdf`.
 Library files come from users, so reading is a trust boundary: every length is checked against the
 remaining bytes before anything is allocated, check values are verified, gzip output is capped at 1 GiB,
 and errors are returned instead of panics. Versions 4 and 5 carry peaks and a model peak per compound
@@ -572,6 +587,17 @@ chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plo
 egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
 renamed.
 
+## Component panel and spectrum comparison
+
+`md_core::detail` holds the values of the old component panel (mean S/N, mean sharpness, peak discrepancy
+index, the peak list with one row per ion) and `compare`, which puts the found and the library spectrum on
+one mass axis, normalised with `spectrum::normalize` ([algorithms.md](reverse-engineering/algorithms.md)
+§7g). `crates/md-app/src/detail.rs` draws the right panel of the selected component and the mode picker
+above the spectrum plot: found only, split (library mirrored below) and difference (found minus library).
+A click on an ion in the peak list or on the spectrum sets the SIC to that mass. The compared library hit is
+the assigned one, else the best. "Copy both" and "Save both as CSV…" export both spectra and their difference.
+`Run` keeps the `Peak` list of the analysis so the panel can read S/N, quality and sharpness.
+
 ## Biomarker statistics and PCA
 
 `md_core::stats` works on the batch table as shown (after normalisation, so the same numbers as the
@@ -587,6 +613,19 @@ non-targeted tables. The sign of a component is chosen so its largest loading is
 tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
 [algorithms.md](reverse-engineering/algorithms.md) §7f. The window
 (`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
+
+## Mass isotopomer distributions (MID)
+
+`md_core::mid` follows the old MID wizard (algorithms.md §7g). `mid_library` keeps the library substances
+with fragments (sum formula per ion range) and makes every fragment ion a quant ion; the app scans the
+chosen runs against it like a batch, with the rescan filling fragment ions that were not deconvoluted,
+and `determine` turns the integrals into MIDs. Uncorrected and reference correction give one MID per
+fragment over the labelled (and unlabelled) runs; library spectrum and sum formula give one per run.
+Substances are solved in parallel (rayon); `examples/perf.rs` times 1 000 substances × 200 runs. The batch
+window's "Export MIDs (FRAG)" writes the old export of the `FRAG` feature, e.g. `(174/8)(261/5)`, from the
+shown table (`mid::frag_export`). Methods 2 and 3 are tested against the old `MIDCompoundSeries`
+(`tests/mid_series.rs`, harness `docs/reverse-engineering/tools/isotopes/make-midseries.sh`), the solver
+against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0 ≈ 1).
 
 ## Settings
 

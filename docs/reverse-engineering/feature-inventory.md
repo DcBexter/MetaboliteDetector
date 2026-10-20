@@ -23,7 +23,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 2 | FastFlight import | `&FastFlight Import...`, `gcms::FastFlightImporter`, `MsData.FFT` | Raw TOF data; needs `.mzcalib` TOF calibration; can write `_centroid/_profile/_nominal.cdf`. | #29 |
 | 3 | TOF m/z calibration | `TOFCalibrationWindow`, `TOFCalibrationCalculator` | Polynomial fit of calibration pairs from a reference spectrum; saved as `.mzcalib`. | #29 |
 | 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, run info, score filter, auto-Y done; export #9 |
-| 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison, centroid, component panel #77 |
+| 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison and component panel #77 (done, no profile mode) |
 | 6 | Chromatogram overlay | `ChromatogramOverlayDialog`, `MultiChromatogramPlot` | Overlay TIC or SIC of several runs. | done (#8) |
 | 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` read/write done (#13), save/load in the app #107 |
 | 8 | Library identification | `gcms::LibrarySearch`, `SpectrumFunctions`, settings `LS_*` | Score = spectrum similarity, RI similarity or combined; pure/impure factors, cutoff, max ΔRI, mass filter ranges, scaled library, fragment pre-filter (`SQL_*`). | done (scaled library always on); `SQL_*` pre-filter and `LS_IDENTIFICATION_ALGORITHM` #21 |
@@ -34,10 +34,10 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | #23 |
 | 14 | Statistics | `BiomarkerDialog`, `tools::Statistics`, `BoxPlot`, `HistogramPlot` | Two-group biomarker table (means, ratio, p-value, hits), independent/paired samples, box plots. | #24 |
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | #24 |
-| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | #28 |
+| 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | done (#28): four corrections, M1, tracer, result tree with CSV, FRAG export; plots and group statistics #141 |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
-| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), MSL export as nominal / profile / FWHM done (#84, centroiding and Nominal merging: #114); editor #12; add compound / copy RTs done (#80, "Modify entry" spectrum merge not ported) |
-| 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | #21 |
+| 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), MSL export as nominal / profile / FWHM done (#84, #114); editor #12; add compound / copy RTs done (#80, "Modify entry" spectrum merge not ported) |
+| 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | NIST text `.sdf` with the old fragment pre-filter and NIST MSP `.msp` read and searched (PR #123); live test with a real NIST file open (#21) |
 | 20 | R console | `RConsole`, `MDRConsole`, RInside | Results as R `data.frame data`, scripts, SVG/PDF plots, `.RData` export. | CSV + R template #26 (embedded R not ported on purpose) |
 | 21 | Exports | `NetCDFExporter`, `CSVChromatogramExporter`, `CompoundExporter` | Chromatogram to NetCDF/CSV, compound tables to CSV, plots to PDF/PNG. | NetCDF done (#30); CSV/PNG/PDF/SVG/clipboard #9; compound CSV done (#78) |
 
@@ -53,18 +53,17 @@ by exactly one issue.
 | 2, 3 | FastFlight `.FFT`/`.FFC` import, centroiding (`SF_*`), TOF calibration window, `.mzcalib`, Calibration Setter | #29 |
 | 4 | First derivative, time unit (ms/s/min), run info dialog, label filter by score, auto-scale Y | done (#79); the global noise standard deviation and TOF calibration are not in the new data model and are left out of Run info |
 | 4, 21 | Copy data/image, CSV, PNG/PDF/SVG, image size dialog | #9 |
-| 5 | Split/difference/normal comparison with the library spectrum, centroid toggle, spectrum export | #77 |
-| 5 | Component panel: S/N, sharpness, discrepancy index, scores, ion counts, peak list | #77 |
+| 5 | Profile (centroid toggle): the rewrite reads centroid spectra only | not planned |
 | 7 | Matched-filter peak detection for components | #82 |
 | 7 | Result list: table, find compound, CSV done (#78); save/load `.cmp` and `.cmp` as batch input | #107 |
-| 8, 19 | NIST import into SQLite, fragment pre-filter (`SQL_*`), `LS_IDENTIFICATION_ALGORITHM`, NIST path | #21 |
+| 8, 19 | NIST import, fragment pre-filter (`SQL_*` defaults) | done (PR #123); live test #21 |
+| 8, 19 | `SQL_*` and `LS_IDENTIFICATION_ALGORITHM` in the settings, NIST path, "NIST search..." for one component | #131 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |
-| 18 | MSL export: merge peaks for Nominal, centroiding of profile spectra, FWHM edge cases | #114 |
 | 13 | Internal standard, summed signal, pool (with pool mapping export), z-score | #23 |
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
-| 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots | #28 |
+| 16 | MID wizard: MID plots, group statistics with StdErr, clipboard | #141 |
 | 20 | CSV results + R template instead of the embedded R console | #26 |
 | files | `.cmp` versions 1 to 3 (older releases, no sample) | — |
 | files | High-resolution runs (`getDataType() == 2`) | #34 |

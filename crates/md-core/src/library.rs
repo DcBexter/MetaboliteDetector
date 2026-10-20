@@ -425,15 +425,106 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
-/// Opens a library by extension: `.lbr`, `.mdlib`, else AMDIS `.msl`.
+/// Opens a library by extension: `.lbr`, `.mdlib`, NIST text (`.sdf`, see [`is_nist`]), else AMDIS
+/// `.msl` or NIST MSP text.
 pub fn open(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
     let path = path.as_ref();
     let ext = path.extension().unwrap_or_default().to_ascii_lowercase();
     match ext.to_str() {
         Some("lbr") => read_lbr(path),
         Some("mdlib") => read_mdlib(path),
+        Some("sdf") => import_nist(path),
         _ => import_msl(path),
     }
+}
+
+/// True for the NIST text the old `SQLLibrary::importNIST` reads; the old search over it used the
+/// fragment pre-filter (`PreparedLibrary::with_fragment_filter`).
+pub fn is_nist(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("sdf"))
+}
+
+/// Imports NIST text (see [`parse_nist`]); each compound records the file as its source.
+pub fn import_nist(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let path = path.as_ref();
+    let mut compounds = parse_nist(&text(&std::fs::read(path)?))?;
+    for c in &mut compounds {
+        c.sources
+            .push(format!("Initial import from{}", path.display()));
+    }
+    Ok(compounds)
+}
+
+/// Parses the NIST text of the old `gcms::NISTParser` (file-formats.md §6.3): records end with a
+/// `$$$$` line; a field starts with a `> <FIELD NAME>` line and its value is the following lines,
+/// trimmed and joined with `\n`. Lines before the first field (an SDF mol block) are ignored. Like the
+/// old `SQLLibrary::importNIST`, only peaks with m/z > 69 and intensity > 0 are kept and records without
+/// such a peak are skipped. A file without any kept record is an error (e.g. a chemistry SDF file).
+pub fn parse_nist(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let mut out = Vec::new();
+    let mut fields: Vec<(&str, String)> = Vec::new();
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    for line in text.lines().chain(["$$$$"]) {
+        let line = line.trim_matches([' ', '\n', '\r', '\t']);
+        if line == "$$$$" {
+            out.extend(nist_record(&fields));
+            fields.clear();
+        } else if let Some(name) = line
+            .strip_prefix('>')
+            .and_then(|r| r.trim_start().strip_prefix('<'))
+            .and_then(|r| r.strip_suffix('>'))
+        {
+            fields.push((name, String::new()));
+        } else if let Some((_, v)) = fields.last_mut().filter(|_| !line.is_empty()) {
+            if !v.is_empty() {
+                v.push('\n');
+            }
+            v.push_str(line);
+        }
+    }
+    if out.is_empty() {
+        return Err(LibraryError::Unsupported(
+            "no NIST record with a peak above m/z 69".into(),
+        ));
+    }
+    Ok(out)
+}
+
+fn nist_record(fields: &[(&str, String)]) -> Option<LibraryCompound> {
+    let get = |k: &str| fields.iter().find(|f| f.0 == k).map(|f| f.1.as_str());
+    let mut c = LibraryCompound::new(get("NAME").unwrap_or_default());
+    let s = &mut c.spectrum;
+    s.ri = get("ESTIMATED KOVATS RI")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(-1.0);
+    s.rt_ms = -1.0;
+    // The old importer reads m/z with strtol (truncates) and the intensity with strtod.
+    for line in get("MASS SPECTRAL PEAKS").unwrap_or_default().lines() {
+        let mut it = line.split_whitespace().map(str::parse::<f64>);
+        if let (Some(Ok(mz)), Some(Ok(v))) = (it.next(), it.next())
+            && mz.trunc() > 69.0
+            && mz < 1e6
+            && v > 0.0
+        {
+            s.masses.push(mz.trunc() as f32);
+            s.values.push(v.min(i32::MAX as f64) as i32);
+        }
+    }
+    if s.masses.is_empty() {
+        return None;
+    }
+    for (k, v) in fields {
+        if !matches!(
+            *k,
+            "NAME" | "ESTIMATED KOVATS RI" | "MASS SPECTRAL PEAKS" | "NUM PEAKS"
+        ) {
+            c.features.insert(k.to_string(), v.clone());
+        }
+    }
+    copy_to_combined(&mut c);
+    Some(c)
 }
 
 /// Imports an AMDIS `.msl` file; each compound records the file as its source like the old app.
@@ -447,8 +538,10 @@ pub fn import_msl(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, Librar
     Ok(compounds)
 }
 
-/// Parses AMDIS MSL text. `RT:` is in minutes; keys without a field of their own become features.
-/// Fields MSL has no key for keep the defaults the old importer left (sample library).
+/// Parses AMDIS MSL text, and NIST MSP text (peak lines `m/z intensity` separated by `;` or spaces,
+/// quoted annotations ignored). `RT:` is in minutes; keys without a field of their own become features,
+/// repeated keys (MSP `Synon:`) joined with `\n`. Fields MSL has no key for keep the defaults the old
+/// importer left (sample library).
 pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
     let mut out = Vec::new();
     // Record in progress, its NAME line and its NUM PEAKS value.
@@ -467,6 +560,12 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
                 return Err(err("peak list before NAME: and NUM PEAKS:"));
             };
             parse_peaks(line, &mut c.spectrum).map_err(err)?;
+            continue;
+        }
+        if line.starts_with(|c: char| c.is_ascii_digit())
+            && let Some((c, _, Some(_))) = cur.as_mut()
+        {
+            parse_msp_peaks(line, &mut c.spectrum).map_err(err)?;
             continue;
         }
         let Some((key, value)) = line.split_once(':') else {
@@ -499,7 +598,13 @@ pub fn parse_msl(text: &str) -> Result<Vec<LibraryCompound>, LibraryError> {
                 c.quant_ions = ions;
             }
             _ => {
-                c.features.insert(key, value.to_string());
+                c.features
+                    .entry(key)
+                    .and_modify(|v| {
+                        v.push('\n');
+                        v.push_str(value);
+                    })
+                    .or_insert_with(|| value.to_string());
             }
         }
     }
@@ -518,14 +623,41 @@ fn parse_peaks(line: &str, s: &mut LibrarySpectrum) -> Result<(), &'static str> 
         let (Some(mz), Some(v), None) = (it.next(), it.next(), it.next()) else {
             return Err("expected `(m/z intensity)`");
         };
-        let mz: f32 = mz.parse().map_err(|_| "invalid m/z")?;
-        let v: f64 = v.parse().map_err(|_| "invalid intensity")?;
-        if !mz.is_finite() || !(0.0..=i32::MAX as f64).contains(&v) {
-            return Err("m/z or intensity out of range");
-        }
-        s.masses.push(mz);
-        s.values.push(v.round() as i32);
+        push_peak(s, mz, v)?;
     }
+    Ok(())
+}
+
+/// Appends the MSP pairs of one peak line: `m/z intensity` pairs separated by `;` or spaces, each pair
+/// optionally followed by a quoted annotation (`71 100 "C5H11+"`).
+fn parse_msp_peaks(line: &str, s: &mut LibrarySpectrum) -> Result<(), &'static str> {
+    if !line.matches('"').count().is_multiple_of(2) {
+        return Err("unclosed `\"` annotation");
+    }
+    // Every second `"`-separated piece is an annotation.
+    let numbers: Vec<_> = line
+        .split('"')
+        .step_by(2)
+        .flat_map(|p| p.split(|c: char| c == ';' || c.is_whitespace()))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !numbers.len().is_multiple_of(2) {
+        return Err("expected `m/z intensity` pairs");
+    }
+    for pair in numbers.chunks(2) {
+        push_peak(s, pair[0], pair[1])?;
+    }
+    Ok(())
+}
+
+fn push_peak(s: &mut LibrarySpectrum, mz: &str, v: &str) -> Result<(), &'static str> {
+    let mz: f32 = mz.parse().map_err(|_| "invalid m/z")?;
+    let v: f64 = v.parse().map_err(|_| "invalid intensity")?;
+    if !mz.is_finite() || !(0.0..=i32::MAX as f64).contains(&v) {
+        return Err("m/z or intensity out of range");
+    }
+    s.masses.push(mz);
+    s.values.push(v.round() as i32);
     Ok(())
 }
 
@@ -544,7 +676,12 @@ fn finish_msl(
             ),
         });
     }
-    // The old importer copies the spectrum into the combined spectrum (sample library).
+    copy_to_combined(&mut c);
+    Ok(Some(c))
+}
+
+/// The old MSL importer copies the spectrum into the combined spectrum (sample library).
+fn copy_to_combined(c: &mut LibraryCompound) {
     let s = &c.spectrum;
     c.comb_spec = s
         .masses
@@ -553,7 +690,6 @@ fn finish_msl(
         .zip(s.values.iter().copied())
         .collect();
     c.ion_freq = s.masses.iter().map(|&m| (m, 1)).collect();
-    Ok(Some(c))
 }
 
 /// Writes compounds as AMDIS MSL text that [`parse_msl`] reads back with identical spectra.
@@ -601,6 +737,114 @@ pub enum MslType {
     Fwhm,
 }
 
+/// `Compound::getNormalizedIntensities`: the base peak becomes 1000, the rest is rounded, and a peak
+/// never drops to 0.
+fn normalized_intensities(values: &[i32]) -> Vec<i32> {
+    let base = f64::from(values.iter().copied().max().unwrap_or(0));
+    // shortcut: the old program's result for a base peak of 0 or less is not known, keep the values.
+    if base <= 0.0 {
+        return values.to_vec();
+    }
+    values
+        .iter()
+        .map(|&v| match (f64::from(v) / base * 1000.0).round() as i32 {
+            0 => 1,
+            n => n,
+        })
+        .collect()
+}
+
+/// `Spectrum::getBinnedSpectrum` of the old program with bin width 1: the peaks of one whole mass
+/// become one peak with the largest intensity. A bin starts at `trunc((mass + 0.5) / 1)`, so x.5 rounds
+/// up, and the masses must be sorted.
+fn bin_to_whole_masses(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>) {
+    let bin = |m: f32| ((f64::from(m) + 0.5) as i32) as f32;
+    let (mut out_m, mut out_v) = (Vec::new(), Vec::new());
+    let (Some(&first), Some(&first_v)) = (masses.first(), values.first()) else {
+        return (out_m, out_v);
+    };
+    let (mut bin_mass, mut best) = (bin(first), first_v);
+    for (i, (&m, &v)) in masses.iter().zip(values).enumerate() {
+        if f64::from(m) >= f64::from(bin_mass) + 0.5 {
+            out_m.push(bin_mass);
+            out_v.push(best);
+            (bin_mass, best) = (bin(m), v);
+        } else if v > best {
+            best = v;
+        }
+        if i == masses.len() - 1 {
+            out_m.push(bin_mass);
+            out_v.push(best);
+        }
+    }
+    (out_m, out_v)
+}
+
+/// `Compound::getCentroidCompound` of the old program for a compound without FWHM list. Points whose
+/// neighbours are at most 0.01 apart form one profile peak (rising to the apex, then falling to the
+/// valley). Its mass is the intensity-weighted mean of the points at or above half the group maximum,
+/// its intensity their sum and its FWHM their count; a lone point stays as it is with FWHM 1.
+/// Returns masses, intensities and FWHMs.
+fn centroid(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
+    let n = masses.len().min(values.len());
+    let (mut out_m, mut out_v, mut out_w) = (Vec::new(), Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < n {
+        let (j, max) = group_end(&masses[..n], &values[..n], i);
+        let end = if j >= n { j - 1 } else { j };
+        let peak = if i == end {
+            Some((masses[i], values[i], 1.0))
+        } else {
+            weighted_peak(&masses[i..=end], &values[i..=end], max)
+        };
+        if let Some((m, v, w)) = peak {
+            out_m.push(m);
+            out_v.push(v);
+            out_w.push(w);
+        }
+        i = j + 1;
+    }
+    (out_m, out_v, out_w)
+}
+
+/// Where the profile peak starting at `start` ends (`n` when it runs to the end) and its largest value.
+fn group_end(masses: &[f32], values: &[i32], start: usize) -> (usize, f64) {
+    let n = masses.len();
+    // The old code reads past the end as "the same as the last point".
+    let at = |k: usize| values[k.min(n - 1)];
+    let mass_at = |k: usize| masses[k.min(n - 1)];
+    let (mut j, mut max, mut rising) = (start, f64::MIN, true);
+    while j < n {
+        let (v0, v1, v2) = (at(j), at(j + 1), at(j + 2));
+        max = max.max(f64::from(v0));
+        if f64::from(mass_at(j + 1) - mass_at(j)) > 0.01 {
+            break;
+        }
+        // Climb to the apex (two falling steps in a row end the climb), then fall to the valley
+        // (a clear rise ends the peak).
+        if rising && v1 < v0 && v2 < v1 {
+            rising = false;
+        } else if !rising && v1 > v0 && v2 > v1 {
+            break;
+        } else {
+            j += 1;
+        }
+    }
+    (j, max)
+}
+
+/// Mass, intensity and FWHM of several points; the old code drops a peak without weight.
+fn weighted_peak(ms: &[f32], vs: &[i32], max: f64) -> Option<(f32, i32, f64)> {
+    let half = max / 2.0;
+    let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (&m, &v) in ms.iter().zip(vs).filter(|&(_, &v)| f64::from(v) >= half) {
+        weighted += f64::from(m * v as f32);
+        sum += f64::from(v);
+        width += 1.0;
+    }
+    (sum != 0.0 && weighted != 0.0).then(|| ((weighted / sum) as f32, sum as i32, width))
+}
+
 /// Writes compounds as the old program does for `kind`, byte for byte. Unlike [`write_msl`] this is for
 /// other programs (AMDIS): it rounds RT, RI and quantification ions to four decimals, so reading it
 /// back is not exact, and a `;` inside a feature value starts a new `KEY:` line.
@@ -626,25 +870,49 @@ pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
             let _ = write!(s, "{q:.4}\t");
         }
         if kind != MslType::Fwhm {
-            let _ = write!(s, "\nRESOLUTION:{:.4}", sp.bin_width);
+            // Binning to whole masses sets the bin width of the exported compound to 1.
+            let width = if kind == MslType::Nominal {
+                1.0
+            } else {
+                sp.bin_width
+            };
+            let _ = write!(s, "\nRESOLUTION:{width:.4}");
         }
-        let _ = write!(s, "\nNUM PEAKS:{}", sp.masses.len());
-        for (i, (m, v)) in sp.masses.iter().zip(&sp.values).enumerate() {
+        // The old program keeps the peaks in a map, so they always come out sorted by mass.
+        let mut order: Vec<usize> = (0..sp.masses.len().min(sp.values.len())).collect();
+        order.sort_by(|&x, &y| sp.masses[x].total_cmp(&sp.masses[y]));
+        let sorted_m: Vec<f32> = order.iter().map(|&i| sp.masses[i]).collect();
+        let sorted_v: Vec<i32> = order.iter().map(|&i| sp.values[i]).collect();
+        let (masses, values, fwhm) = match kind {
+            MslType::Profile => (sorted_m, sorted_v, Vec::new()),
+            // The old program centroids first unless the compound already has a FWHM list.
+            _ => match &c.fwhm {
+                Some(f) => {
+                    let f = order
+                        .iter()
+                        .map(|&i| f.get(i).copied().unwrap_or(1.0))
+                        .collect();
+                    (sorted_m, sorted_v, f)
+                }
+                None => centroid(&sorted_m, &sorted_v),
+            },
+        };
+        let (masses, values) = if kind == MslType::Nominal {
+            bin_to_whole_masses(&masses, &values)
+        } else {
+            (masses, values)
+        };
+        let values = normalized_intensities(&values);
+        let _ = write!(s, "\nNUM PEAKS:{}", masses.len());
+        for (i, (m, v)) in masses.iter().zip(&values).enumerate() {
             if i % 5 == 0 {
                 s.push('\n');
             }
             let _ = match kind {
                 MslType::Nominal => write!(s, "({m:>4.0} {v:>4}) "),
                 MslType::Profile => write!(s, "({m:>10.6} {v:>4}) "),
-                // shortcut: no FWHM list means 1.0 like the old program on the sample library; upgrade
-                // when a library with another bin width and no FWHM turns up.
                 MslType::Fwhm => {
-                    let w = c
-                        .fwhm
-                        .as_ref()
-                        .and_then(|f| f.get(i))
-                        .copied()
-                        .unwrap_or(1.0);
+                    let w = fwhm.get(i).copied().unwrap_or(1.0);
                     write!(s, "({m:>10.6} {w:>5.2}{v:>4}) ")
                 }
             };
@@ -1303,20 +1571,79 @@ mod tests {
         let out = |c: &LibraryCompound, k| write_msl_as(std::slice::from_ref(c), k);
         assert_eq!(
             out(&c, MslType::Nominal),
-            format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73  999) ( 148    1) {end}")
+            format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73 1000) ( 148    1) {end}")
         );
         assert_eq!(
             out(&c, MslType::Profile),
             format!(
-                "{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n( 73.000000  999) (147.500000    1) {end}"
+                "{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n( 73.000000 1000) (147.500000    1) {end}"
             )
         );
         c.fwhm = Some(vec![0.5]);
         assert_eq!(
             out(&c, MslType::Fwhm),
-            format!("{head}\nNUM PEAKS:2\n( 73.000000  0.50 999) (147.500000  1.00   1) {end}")
+            format!("{head}\nNUM PEAKS:2\n( 73.000000  0.501000) (147.500000  1.00   1) {end}")
         );
         assert_eq!(write_msl_as(&[], MslType::Nominal), "\n\n");
+    }
+
+    /// The old program keeps peaks sorted by mass, whatever order the file has.
+    #[test]
+    fn old_msl_export_sorts_the_peaks_by_mass() {
+        let c = parse_msl(
+            "NAME: u
+NUM PEAKS: 3
+(100 10) (50 1000) (73 20)
+",
+        )
+        .unwrap();
+        for (kind, peaks) in [
+            (MslType::Nominal, "(  50 1000) (  73   20) ( 100   10)"),
+            (
+                MslType::Profile,
+                "( 50.000000 1000) ( 73.000000   20) (100.000000   10)",
+            ),
+        ] {
+            assert!(write_msl_as(&c, kind).contains(peaks), "{kind:?}");
+        }
+    }
+
+    /// The expected peaks are what the old program wrote for the same spectra
+    /// (docs/reverse-engineering/tools/golden/make-msl-export.sh with a `.msl` input).
+    #[test]
+    fn old_msl_export_bins_and_centroids_like_the_old_program() {
+        let text = "NAME: f\nNUM PEAKS: 9\n(41.1 80) (73.2 500) (73.4 300) (74 20) (99.9 10)\n\
+                    (100.004 200) (100.008 100) (100.5 1000) (147.5 50)\n\n\
+                    NAME: c\nNUM PEAKS: 4\n(56.995 111) (57 1000) (57.004 333) (58 11)\n";
+        let lib = parse_msl(text).unwrap();
+        let peaks = |c: &LibraryCompound, k| {
+            let out = write_msl_as(std::slice::from_ref(c), k);
+            out.split("NUM PEAKS:")
+                .nth(1)
+                .unwrap()
+                .split_once('\n')
+                .unwrap()
+                .1
+                .replace('\n', "|")
+        };
+        assert_eq!(
+            peaks(&lib[0], MslType::Nominal),
+            "(  41   80) (  73  500) (  74   20) ( 100  300) ( 101 1000) |( 148   50) ||||"
+        );
+        assert_eq!(
+            peaks(&lib[0], MslType::Fwhm),
+            "( 41.099998  1.00  80) ( 73.199997  1.00 500) ( 73.400002  1.00 300) ( 74.000000  1.00  20) ( 99.900002  1.00  10) \
+             |(100.005333  2.00 300) (100.500000  1.001000) (147.500000  1.00  50) ||||"
+        );
+        assert!(peaks(&lib[0], MslType::Profile).contains("(100.003998  200) (100.008003  100)"));
+        assert_eq!(
+            peaks(&lib[1], MslType::Nominal),
+            "(  57 1000) (  58   11) ||||"
+        );
+        assert_eq!(
+            peaks(&lib[1], MslType::Fwhm),
+            "( 57.000000  1.001000) ( 58.000000  1.00  11) ||||"
+        );
     }
 
     #[test]
@@ -1380,6 +1707,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "a test of many cases: each assert counts, and Sonar skips tests"
+    )]
     fn mdlib_rejects_broken_files() {
         let h = "MetaboliteDetector library 1\n";
         let line = |body: &str| match parse_mdlib(&format!("{h}{body}")) {
@@ -1430,5 +1761,49 @@ mod tests {
         let mut want = LibraryCompound::new("a");
         want.quant_ions = vec![7.0, 9.0];
         assert_eq!(lib, [want]);
+    }
+
+    #[test]
+    fn nist_text_fields_and_import_rules() {
+        let text = "mol block line\r\n  > <NAME> \r\n Two\r\n\r\n  lines \n> <SYNONYMS>\nsyn a\nsyn b\n\
+            > <MASS SPECTRAL PEAKS>\n69 100\n70 0\n71.9 5\n80 7.5\nbroken\n$$$$\n\
+            > <NAME>\nno peaks\n> <MASS SPECTRAL PEAKS>\n50 1\n$$$$\n> <NAME>\nlast\n\
+            > <MASS SPECTRAL PEAKS>\n100 1\n";
+        let lib = parse_nist(text).unwrap();
+        let [a, b] = &lib[..] else { panic!("{lib:?}") };
+        assert_eq!(a.name, "Two\nlines");
+        assert_eq!(a.features["SYNONYMS"], "syn a\nsyn b");
+        assert_eq!(a.spectrum.masses, [71.0, 80.0]);
+        assert_eq!(a.spectrum.values, [5, 7]);
+        assert_eq!(a.comb_spec, [(71.0, 5), (80.0, 7)]);
+        assert_eq!((a.spectrum.ri, a.spectrum.rt_ms), (-1.0, -1.0));
+        // The last record needs no `$$$$`.
+        assert_eq!(b.name, "last");
+        let bom = parse_nist("\u{feff}> <NAME>\nx\n> <MASS SPECTRAL PEAKS>\n71 1\n").unwrap();
+        assert_eq!(bom[0].name, "x");
+        assert!(matches!(
+            parse_nist("> <NAME>\nx\n$$$$\n"),
+            Err(LibraryError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn msp_peak_lines_and_repeated_keys() {
+        let msp = "Name: Synthetic msp\nSynon: one\nSynon: two\nCAS#: 0-00-0\nNum Peaks: 5\n\
+            71 100; 72 12;\n91\t80 \"C7H7+; x\"\n92 15\n105 60.4\n\nName: Next\nNum Peaks: 0\n";
+        let lib = parse_msl(msp).unwrap();
+        let [c, _] = &lib[..] else { panic!() };
+        assert_eq!(c.spectrum.masses, [71.0, 72.0, 91.0, 92.0, 105.0]);
+        assert_eq!(c.spectrum.values, [100, 12, 80, 15, 60]);
+        assert_eq!(c.features["SYNON"], "one\ntwo");
+        assert_eq!(c.features["CAS#"], "0-00-0");
+        let line = |text: &str| match parse_msl(text) {
+            Err(LibraryError::Msl { line, .. }) => line,
+            r => panic!("{text:?} gave {r:?}"),
+        };
+        assert_eq!(line("Name: a\nNum Peaks: 1\n71\n"), 3);
+        assert_eq!(line("Name: a\nNum Peaks: 1\n71 1 \"open\n"), 3);
+        // Peak lines before NUM PEAKS are no peaks.
+        assert_eq!(line("Name: a\n71 1\n"), 2);
     }
 }

@@ -8,9 +8,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
-use md_core::batch::{
-    RescanSettings, ShiftReference, TableSettings, complete_scan, scan_runs, table,
-};
+use md_core::batch::{ShiftReference, TableSettings, complete_scan, scan_runs, table};
 use md_core::library;
 use md_core::ri::RiCalibration;
 use md_core::search::{PreparedLibrary, SearchSettings};
@@ -19,8 +17,8 @@ use md_core::settings::GcmsSettings;
 const USAGE: &str = "\
 Usage: md-cli --library FILE [options] RUN...
 
-Finds the substances of a library (.mdlib, .lbr or .msl) in many runs (.cdf, .nc or old .bin) and writes the
-substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
+Finds the substances of a library (.mdlib, .lbr, .msl, NIST .msp or .sdf) in many runs (.cdf, .nc or
+old .bin) and writes the substance x run table as CSV. Exit code 2: the table is written, but some runs could not be read.
 
 Options:
   -l, --library FILE          library (required)
@@ -39,7 +37,6 @@ Options:
       --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
-      --rescan-window S       width of that search window in seconds (default 6)
       --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
       --shift-cutoff F        min. score of the reference in a run (default: the library search cutoff)
   -h, --help                  this text";
@@ -61,7 +58,6 @@ struct Args {
     max_discrepancy: Option<f32>,
     untargeted: bool,
     rescan: bool,
-    rescan_window: Option<f64>,
     shift_reference: Option<String>,
     shift_cutoff: Option<f64>,
     runs: Vec<PathBuf>,
@@ -106,7 +102,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         max_discrepancy: None,
         untargeted: false,
         rescan: false,
-        rescan_window: None,
         shift_reference: None,
         shift_cutoff: None,
         runs: Vec::new(),
@@ -151,7 +146,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
-            "--rescan-window" => a.rescan_window = Some(num(0.0, 1e4)?),
             "--shift-reference" => a.shift_reference = Some(text()?),
             "--shift-cutoff" => a.shift_cutoff = Some(num(0.0, 1.0)?),
             _ => return Err(format!("unknown option {name}")),
@@ -182,7 +176,8 @@ fn run(a: Args) -> Result<bool, String> {
         .transpose()?;
     let compounds =
         library::open(&a.library).map_err(|e| format!("{}: {e}", a.library.display()))?;
-    let prepared = PreparedLibrary::new(&compounds, &settings.search());
+    let prepared = PreparedLibrary::new(&compounds, &settings.search())
+        .with_fragment_filter(library::is_nist(&a.library));
 
     let mut ts = TableSettings {
         quant: settings.quant(),
@@ -209,12 +204,7 @@ fn run(a: Args) -> Result<bool, String> {
                 .ok_or_else(|| format!("--shift-reference: no substance with RI named {name}"))?,
         );
     }
-    let rescan = a.rescan.then(|| RescanSettings {
-        window_s: a
-            .rescan_window
-            .unwrap_or(RescanSettings::default().window_s),
-        ..Default::default()
-    });
+    let rescan = a.rescan;
 
     // Open the output first: a wrong path must not cost a whole scan.
     let mut out: Box<dyn Write> = match &a.output {
@@ -228,13 +218,7 @@ fn run(a: Args) -> Result<bool, String> {
     let (mut runs, mut errors) =
         scan_runs(&a.runs, &prepared, &scan, a.parallel, &done, &cancel).ok_or("cancelled")?;
     let more = complete_scan(
-        &mut runs,
-        &compounds,
-        &scan,
-        &ts.quant,
-        rescan.as_ref(),
-        a.parallel,
-        &cancel,
+        &mut runs, &compounds, &scan, &ts.quant, rescan, a.parallel, &cancel,
     )
     .ok_or("cancelled")?;
     errors.extend(more.errors);
@@ -409,7 +393,7 @@ NUM PEAKS: 12
         };
         assert_eq!(table("").lines().count(), 2, "header and early");
         let csv = table(
-            "--untargeted --rescan --rescan-window 4 --exclude-ions 73,147-149 --min-sn 1 --max-discrepancy 1000",
+            "--untargeted --rescan --exclude-ions 73,147-149 --min-sn 1 --max-discrepancy 1000",
         );
         let names: Vec<&str> = csv
             .lines()
