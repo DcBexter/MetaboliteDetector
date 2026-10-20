@@ -29,6 +29,25 @@ impl Default for View {
     }
 }
 
+/// Large intensities compactly, the same in every chromatogram plot: `12 M`, `1.2 k`, `-3`.
+/// `step` is the tick spacing, so neighbouring ticks never share a label.
+pub fn compact(v: f64, step: f64) -> String {
+    let units = [(1e9, " G"), (1e6, " M"), (1e3, " k")];
+    // Values below 10 000 stay plain; a value that rounds up to 1000 of its unit moves to the next one.
+    let mut unit = units
+        .iter()
+        .find(|(d, _)| v.abs() >= d * if *d == 1e3 { 10.0 } else { 1.0 });
+    if let Some((d, _)) = unit
+        && (v / d).abs() >= 999.5
+        && *d < 1e9
+    {
+        unit = units.iter().rev().find(|(u, _)| *u == d * 1000.0);
+    }
+    let (div, suffix) = unit.copied().unwrap_or((1.0, ""));
+    let decimals = (-(step.abs() / div).log10()).ceil().clamp(0.0, 6.0) as usize;
+    format!("{:.*}{suffix}", decimals, v / div)
+}
+
 impl View {
     /// Whether the old label switches let a name with this score through.
     pub fn shows(&self, score: f64) -> bool {
@@ -158,6 +177,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_values_are_compact() {
+        assert_eq!(compact(12_000_000.0, 2e6), "12 M");
+        assert_eq!(compact(1_200_000.0, 2e5), "1.2 M");
+        assert_eq!(compact(25_000.0, 5e3), "25 k");
+        assert_eq!(compact(9_000.0, 1e3), "9000");
+        assert_eq!(compact(-0.5, 0.1), "-0.5");
+        // Fine ticks keep distinct labels; no "1000 k".
+        assert_eq!(compact(1_220_000.0, 2e4), "1.22 M");
+        assert_ne!(compact(1_200_000.0, 2e4), compact(1_220_000.0, 2e4));
+        assert_eq!(compact(999_999.0, 1e5), "1.0 M");
+    }
 
     #[test]
     fn score_switches_pick_their_bands() {
