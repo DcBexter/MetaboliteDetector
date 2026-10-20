@@ -92,7 +92,7 @@ impl App {
     pub fn central_panel(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             self.trace_controls(ui);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 self.view.controls(ui);
                 if ui.button("Run info").clicked() {
                     self.view.info_open = true;

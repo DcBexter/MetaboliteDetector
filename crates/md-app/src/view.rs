@@ -56,13 +56,14 @@ impl View {
                     ui.selectable_value(&mut self.unit, u, u.label());
                 }
             });
-        ui.label("Names:");
+        ui.label("Show names with score");
         for (on, text) in self
             .score_filter
             .iter_mut()
             .zip(["≤ 0.7", "> 0.7", "> 0.9"])
         {
-            ui.checkbox(on, text);
+            ui.checkbox(on, text)
+                .on_hover_text("A name is shown if any switch matching its library score is on");
         }
     }
 }
@@ -75,6 +76,7 @@ impl App {
         let mut open = self.view.info_open;
         egui::Window::new("Run info")
             .open(&mut open)
+            .default_width(420.0)
             .show(ctx, |ui| self.run_info(ui, run));
         self.view.info_open = open;
     }
@@ -87,6 +89,7 @@ impl App {
         let last = (0..d.scan_count()).filter_map(|s| d.spectrum(s).0.last().copied());
         let lowest = first.fold(f32::INFINITY, f32::min);
         let highest = last.fold(f32::NEG_INFINITY, f32::max);
+        let peak = self.settings.key().0;
         let yes = |b: bool| if b { "yes" } else { "no" };
         let rows = [
             ("Source file", r.path.display().to_string()),
@@ -117,12 +120,21 @@ impl App {
                 "RT correction",
                 yes(r.ident.as_ref().is_some_and(|i| i.2.is_some())).into(),
             ),
-            ("Detection settings", format!("{:?}", self.settings.key())),
+            (
+                "Peak detection",
+                format!(
+                    "slope begin {} / end {}, min height {} noise units, {} bins",
+                    peak.threshold_begin,
+                    peak.threshold_end,
+                    peak.min_peak_height,
+                    peak.number_bins
+                ),
+            ),
         ];
         egui::Grid::new("run info").striped(true).show(ui, |ui| {
             for (k, v) in rows {
                 ui.strong(k);
-                ui.label(v);
+                ui.add(egui::Label::new(v).wrap());
                 ui.end_row();
             }
         });
