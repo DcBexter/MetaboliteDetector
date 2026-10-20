@@ -3,7 +3,10 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <!-- Keep the UpgradeCode forever: it lets a new version replace the installed one. -->
   <Package Name="MetaboliteDetector" Manufacturer="MetaboliteDetector" Version="$(Version)"
-           UpgradeCode="2E75E840-1C36-4010-9049-025727FAE50E" Scope="perMachine">
+           UpgradeCode="2E75E840-1C36-4010-9049-025727FAE50E" Scope="perUserOrMachine">
+    <!-- Installs per user without admin rights by default (ALLUSERS=2, MSIINSTALLPERUSER=1): Windows maps
+         ProgramFiles64Folder to %LocalAppData%\Programs and the shortcut folders to the user's own.
+         An admin can install for all users with: msiexec /i <msi> ALLUSERS=1 -->
     <!-- vX.Y.Z-rc1 and vX.Y.Z share MSI version X.Y.Z; same-version upgrades replace the rc. -->
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of MetaboliteDetector is already installed." />
     <MediaTemplate EmbedCab="yes" />
@@ -27,7 +30,7 @@
       <Component Directory="INSTALLFOLDER">
         <File Source="LICENSE" Name="LICENSE.txt" />
       </Component>
-      <!-- Shortcuts need a registry key path; HKMU is HKLM for this per-machine install. -->
+      <!-- Shortcuts need a registry key path; HKMU is HKCU per user and HKLM per machine. -->
       <Component Directory="ProgramMenuFolder">
         <Shortcut Name="MetaboliteDetector" Target="[#AppExe]" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKMU" Key="Software\MetaboliteDetector" Name="StartMenuShortcut"
