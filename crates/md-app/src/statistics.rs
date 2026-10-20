@@ -113,7 +113,13 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
                 ui.label(*g);
                 for side in 0..2 {
                     let mut on = sides[side].iter().any(|s| s == g);
-                    if ui.checkbox(&mut on, "").changed() {
+                    // The column title is not a label of the box, so name each one for screen readers.
+                    let name = format!("{g} in group {}", side + 1);
+                    let r = ui.add(egui::Checkbox::without_text(&mut on));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name)
+                    });
+                    if r.changed() {
                         sides.iter_mut().for_each(|s| s.retain(|s| s != g));
                         if on {
                             sides[side].push((*g).into());
@@ -128,8 +134,9 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
 /// Text field to paste group names and the buttons that fill a side from it.
 fn paste_box(ui: &mut egui::Ui, paste: &mut String, sides: &mut [Vec<String>; 2], all: &[&str]) {
     ui.vertical(|ui| {
-        ui.label("Paste group names (one per line), then fill a side:");
-        ui.add(egui::TextEdit::multiline(paste).desired_rows(4));
+        let label = ui.label("Paste group names (one per line), then fill a side:");
+        ui.add(egui::TextEdit::multiline(paste).desired_rows(4))
+            .labelled_by(label.id);
         ui.horizontal(|ui| {
             for side in 0..2 {
                 if ui.button(format!("Fill group {}", side + 1)).clicked() {
@@ -273,41 +280,44 @@ fn biomarker_table(
         "p-value",
     ];
     let mut clicked = None;
-    TableBuilder::new(ui)
-        .id_salt("biomarker table")
-        .striped(true)
-        .sense(egui::Sense::click())
-        .column(Column::auto().at_least(160.0))
-        .columns(Column::auto().at_least(60.0), 9)
-        .header(20.0, |mut h| {
-            for title in TITLES {
-                h.col(|ui| {
-                    ui.strong(title);
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(18.0, shown.len(), |mut row| {
-                let r = shown[row.index()];
-                row.set_selected(selected == Some(r.row));
-                for (i, c) in cells_of(t, r).into_iter().enumerate() {
-                    row.col(|ui| {
-                        // Numbers right-aligned so the digits line up.
-                        let align = if i == 0 {
-                            egui::Layout::left_to_right(egui::Align::Center)
-                        } else {
-                            egui::Layout::right_to_left(egui::Align::Center)
-                        };
-                        ui.with_layout(align, |ui| {
-                            ui.add(egui::Label::new(c).selectable(false));
-                        });
+    // Scrolls sideways in a narrow window instead of widening it.
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        TableBuilder::new(ui)
+            .id_salt("biomarker table")
+            .striped(true)
+            .sense(egui::Sense::click())
+            .column(Column::auto().at_least(160.0))
+            .columns(Column::auto().at_least(60.0), 9)
+            .header(20.0, |mut h| {
+                for title in TITLES {
+                    h.col(|ui| {
+                        ui.strong(title);
                     });
                 }
-                if row.response().clicked() {
-                    clicked = Some(r.row);
-                }
+            })
+            .body(|body| {
+                body.rows(18.0, shown.len(), |mut row| {
+                    let r = shown[row.index()];
+                    row.set_selected(selected == Some(r.row));
+                    for (i, c) in cells_of(t, r).into_iter().enumerate() {
+                        row.col(|ui| {
+                            // Numbers right-aligned so the digits line up.
+                            let align = if i == 0 {
+                                egui::Layout::left_to_right(egui::Align::Center)
+                            } else {
+                                egui::Layout::right_to_left(egui::Align::Center)
+                            };
+                            ui.with_layout(align, |ui| {
+                                ui.add(egui::Label::new(c).selectable(false));
+                            });
+                        });
+                    }
+                    if row.response().clicked() {
+                        clicked = Some(r.row);
+                    }
+                });
             });
-        });
+    });
     clicked
 }
 
