@@ -251,16 +251,22 @@ mod tests {
         let controls: Vec<_> = (widgets.iter())
             .filter_map(|w| {
                 let id = w.id.accesskit_id();
-                Some((id, nodes.names.get(&id)?, w.interact_rect))
+                Some((id, nodes.names.get(&id)?, w.interact_rect, w.rect))
             })
-            .filter(|(_, (role, _), r)| !CONTAINERS.contains(&role.as_str()) && r.is_positive())
+            .filter(|(_, (role, _), r, _)| !CONTAINERS.contains(&role.as_str()) && r.is_positive())
             .collect();
         let mut found = Vec::new();
-        for (i, (ia, a, ra)) in controls.iter().enumerate() {
-            for (ib, b, rb) in &controls[i + 1..] {
+        for (i, (ia, a, ra, fa)) in controls.iter().enumerate() {
+            for (ib, b, rb, fb) in &controls[i + 1..] {
                 let own_label = nodes.combo_labels.contains(&(*ia, *ib))
                     || nodes.combo_labels.contains(&(*ib, *ia));
-                if !own_label && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
+                // A bar floats over the edge of the scroll area, so it lies over a row that the
+                // area clips; that row is half hidden by design, not covered by mistake.
+                let clipped = |bar: &(String, String), other: &egui::Rect, full: &egui::Rect| {
+                    bar.0 == "ScrollBar" && other != full
+                };
+                let under_bar = clipped(a, rb, fb) || clipped(b, ra, fa);
+                if !own_label && !under_bar && ra.shrink(0.5).intersects(rb.shrink(0.5)) {
                     found.push(format!("{a:?} {ra:?} overlaps {b:?} {rb:?}"));
                 }
             }
