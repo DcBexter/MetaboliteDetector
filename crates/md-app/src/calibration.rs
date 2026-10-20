@@ -94,9 +94,10 @@ impl Default for Calibration {
 }
 
 impl Calibration {
-    /// The calibration of the run before any shift: its own, else the global one.
+    /// The calibration of the run before any shift: its own, else the global one (RT only: the identity).
     pub fn base(&self, run: &Run) -> Option<&Arc<RiCalibration>> {
-        self.own.get(&run.path).or(self.cal.as_ref())
+        let own = self.own.get(&run.path).filter(|_| !self.rt_only);
+        own.or(self.cal.as_ref())
     }
 
     /// The run's calibration: shifted onto the reference when it was found there, else `base`.
@@ -161,6 +162,7 @@ impl Calibration {
     fn clear(&mut self) {
         (self.cal, self.job, self.mix_job) = (None, None, None);
         (self.rows, self.applied, self.rt_only) = (Vec::new(), Vec::new(), false);
+        self.own.clear();
     }
 
     pub fn window(
@@ -531,6 +533,12 @@ fn find_mix(
     s: &SearchSettings,
 ) -> Vec<Row> {
     mix.sort_by(|a, b| a.spectrum.ri.total_cmp(&b.spectrum.ri));
+    // The mix is found by its spectra alone, whatever the search settings say about RI.
+    let s = &SearchSettings {
+        use_ri: false,
+        use_spec: true,
+        ..s.clone()
+    };
     let id = map_compounds_to_library(comps, None, &PreparedLibrary::new(&mix, s), s);
     let rts: Vec<f64> = (comps.iter())
         .map(|c| scan_times_s[c.apex_scan as usize])
@@ -596,7 +604,13 @@ mod tests {
         ];
         let comps = [component(1, 40), component(3, 60)];
         let times = [0.0, 60.0, 90.0, 120.0];
-        let rows = find_mix(mix, &comps, &times, &SearchSettings::default());
+        // Whatever the settings say about RI and spectra, the mix is found by its spectra.
+        let odd = SearchSettings {
+            use_ri: true,
+            use_spec: false,
+            ..SearchSettings::default()
+        };
+        let rows = find_mix(mix, &comps, &times, &odd);
         let rows: Vec<_> = rows
             .iter()
             .map(|r| (&*r.name, r.ri, r.rt_min, r.used))
