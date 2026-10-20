@@ -50,38 +50,45 @@ fn write_rows(
 pub fn to_excel_de(csv: &str, text_cols: usize) -> String {
     let (mut out, mut cell) = (String::with_capacity(csv.len()), String::new());
     let (mut quoted, mut header, mut col) = (false, true, 0);
-    let flush = |cell: &mut String, end: Option<char>, numeric: bool, out: &mut String| {
-        let text = std::mem::take(cell);
+    let flush = |cell: &mut String, end: &str, header: bool, col: usize, out: &mut String| {
+        let (text, numeric) = (std::mem::take(cell), !header && col >= text_cols);
+        // A name like `01` is quoted: Calc then keeps it as text if "Quoted field as text" is on.
+        let zero_name = !header
+            && !numeric
+            && text.len() > 1
+            && text.starts_with('0')
+            && text.bytes().all(|b| b.is_ascii_digit());
         if text.starts_with('"') {
             out.push_str(&text);
         } else if numeric && text.parse::<f64>().is_ok() {
             out.push_str(&text.replace('.', ","));
-        } else if text.contains(';') {
+        } else if text.contains(';') || zero_name {
             out.push_str(&format!("\"{text}\""));
         } else {
             out.push_str(&text);
         }
-        out.extend(end);
+        out.push_str(end);
     };
     for c in csv.chars() {
-        let numeric = !header && col >= text_cols;
         match c {
             '"' => {
                 quoted = !quoted;
                 cell.push(c);
             }
             ',' if !quoted => {
-                flush(&mut cell, Some(';'), numeric, &mut out);
+                flush(&mut cell, ";", header, col, &mut out);
                 col += 1;
             }
             '\n' if !quoted => {
-                flush(&mut cell, Some('\n'), numeric, &mut out);
+                let end = if cell.ends_with('\r') { "\r\n" } else { "\n" };
+                cell.truncate(cell.trim_end_matches('\r').len());
+                flush(&mut cell, end, header, col, &mut out);
                 (header, col) = (false, 0);
             }
             _ => cell.push(c),
         }
     }
-    flush(&mut cell, None, !header && col >= text_cols, &mut out);
+    flush(&mut cell, "", header, col, &mut out);
     out
 }
 
@@ -124,6 +131,11 @@ mod tests {
         assert_eq!(
             to_excel_de("Run,Group\nr1.cdf,0.5\n", 2),
             "Run;Group\nr1.cdf;0.5\n"
+        );
+        // A group `01` is quoted (Calc keeps it text with "Quoted field as text"); CRLF stays CRLF.
+        assert_eq!(
+            to_excel_de("Run,Group,v\r\nr1.cdf,01,1.5\r\nr2.cdf,0,2.5\r\n", 2),
+            "Run;Group;v\r\nr1.cdf;\"01\";1,5\r\nr2.cdf;0;2,5\r\n"
         );
     }
 

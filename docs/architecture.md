@@ -430,7 +430,7 @@ locale reads `.` as thousands mark (`293.808` becomes 293808, #249). `--excel-de
 rewrites every file of the export with `csv::to_excel_de`: `;` separators and decimal commas in the number
 columns; header lines, name columns (so a group `0.5` stays) and the values of `FILE.settings.csv` (text for
 `load_results.R`) keep their text, quoting as before. `load_results.R` reads both. A group name like `01` is still
-read as a number by a spreadsheet.
+quoted (`"01"`): Calc (de-DE) keeps it text only with "Quoted field as text" in the import dialog, else it reads 1; CRLF files keep CRLF. Checked in LibreOffice Calc headless (numbers stay numbers, names text); `load_results.R` was not run (no R installed).
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 
