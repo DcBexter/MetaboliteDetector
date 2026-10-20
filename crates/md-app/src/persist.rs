@@ -571,7 +571,21 @@ pub fn guard(file: Option<PathBuf>) -> (Option<PathBuf>, Option<Note>) {
         return (Some(file), None);
     }
     let bak = file.with_extension("ron.bak");
-    let bytes = std::fs::read(&file).unwrap_or_default();
+    let lost = "The saved settings could not be read.";
+    // eframe gets another name, so nothing is written over `app.ron`.
+    let aside = |e: std::io::Error| {
+        let other = file.with_extension("ron.new");
+        let msg = format!(
+            "{lost} It could not be kept aside ({e}), so this session saves to {} instead.",
+            other.display()
+        );
+        (Some(other), Some(Err(msg)))
+    };
+    // A file we cannot read (locked by a scanner) is not a damaged one.
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(e) => return aside(e),
+    };
     if parse(&bytes).is_some() {
         // A failed copy loses nothing: the file itself is fine.
         if std::fs::read(&bak).ok().as_deref() != Some(&bytes[..]) {
@@ -579,26 +593,25 @@ pub fn guard(file: Option<PathBuf>) -> (Option<PathBuf>, Option<Note>) {
         }
         return (Some(file), None);
     }
-    let lost = "The saved settings could not be read.";
     let kept = match std::fs::read(&bak).ok().filter(|b| parse(b).is_some()) {
         Some(good) => write_atomic(&file, &good).map(|()| "The last good copy is used.".to_owned()),
-        None => std::fs::rename(&file, &bak).map(|()| {
-            format!(
-                "The defaults are used; the old file is kept as {}.",
-                bak.display()
-            )
-        }),
+        // Gone already: the other window got there first.
+        None => std::fs::rename(&file, &bak)
+            .or_else(|e| {
+                (e.kind() == std::io::ErrorKind::NotFound)
+                    .then_some(())
+                    .ok_or(e)
+            })
+            .map(|()| {
+                format!(
+                    "The defaults are used; the old file is kept as {} until the next start.",
+                    bak.display()
+                )
+            }),
     };
     match kept {
-        Ok(what) => (Some(file), Some(Err(format!("{lost} {what}")))),
-        Err(e) => {
-            let other = file.with_extension("ron.new");
-            let msg = format!(
-                "{lost} It could not be kept aside ({e}), so this session saves to {} instead.",
-                other.display()
-            );
-            (Some(other), Some(Err(msg)))
-        }
+        Ok(what) => (Some(file.clone()), Some(Err(format!("{lost} {what}")))),
+        Err(e) => aside(e),
     }
 }
 
@@ -625,6 +638,8 @@ pub fn restore(
                 ))
             })
         }
+        // A damaged file says why on its own; the old settings are no stand-in for it.
+        None if guarded.is_some() => None,
         None => old_entries().map(|(source, entries)| {
             let bad = apply(app, ctx, entries);
             let done = format!("Imported the settings of MetaboliteDetector 3.3 from {source}.");
@@ -890,6 +905,20 @@ size=@Size(1591 800)
         assert_eq!(used, Some(file.with_extension("ron.new")));
         assert!(note.is_some_and(|n| n.is_err()));
         assert_eq!(kept.unwrap(), b"not ron {");
+    }
+
+    /// A file that cannot be read is not called damaged: the good copy must not replace it.
+    #[test]
+    fn unreadable_file_is_left_alone() {
+        let (dir, file) = state_dir("locked", &[]);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        std::fs::write(file.with_extension("ron.bak"), "{}").unwrap();
+        let (used, note) = guard(Some(file.clone()));
+        let still_dir = file.is_dir();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(used, Some(file.with_extension("ron.new")));
+        assert!(note.is_some_and(|n| n.is_err()) && still_dir);
     }
 
     /// Two windows save one after the other: the settings of the last win, the recent files merge.
