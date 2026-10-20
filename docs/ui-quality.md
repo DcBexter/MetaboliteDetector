@@ -13,7 +13,8 @@ This test needs the example data (`example-data/fetch.*`) and a GPU. It writes `
   window at 800 × 600, 15-run overlay, TIC + SIC, both menus,
   settings, calibration, batch, isotopes, library editor with a selected compound, run info,
   MID settings and results, and a batch table and statistics (group 0 against group 2) from made-up
-  quantities (`Batch::finished`);
+  quantities (`Batch::finished`); the first-start mode question in dark and light, and in Guided mode
+  (dark and light) the Settings window with "Advanced" closed and one step of each of the four step flows;
 - one `*.unnamed.txt` per PNG, listing the inputs a screen reader cannot name.
 
 Pixels differ between GPUs and operating systems, so the images are never committed, except the copies the

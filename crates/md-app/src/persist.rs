@@ -2,7 +2,8 @@
 //! memory (panel sizes, tool window positions), the window geometry and, under [`KEY`], our own
 //! `KEY=value` lines: the analysis settings under the old QSettings names, the shown panels, the
 //! libraries and the recent files. Unknown keys are kept as they are, so a newer version's values
-//! survive; `mode` (S7) and `language` (S8) are reserved for those. The first start imports the old
+//! survive; `language` (S8) is reserved for that. `mode` is the guided or expert mode (S7); without it
+//! the start asks for it. The first start imports the old
 //! 3.3 settings once (`~/.config/TU-Braunschweig/MetaboliteDetector.conf`, on Windows the registry).
 //! Every value is checked; a bad one keeps its default.
 //!
@@ -435,6 +436,9 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     app.saved.nist = path(&v);
                     true
                 }
+                ("", "mode") => crate::guided::Mode::from_key(&v)
+                    .map(|m| (app.guided.mode, app.guided.ask) = (m, false))
+                    .is_some(),
                 (_, "recent" | "rc_open_file") => {
                     recent.extend(path(&v));
                     true
@@ -505,6 +509,10 @@ pub fn text(app: &App) -> String {
         ("axes_labels".to_owned(), a.axes_labels.to_string()),
         ("peak_labels".to_owned(), a.peak_labels.to_string()),
     ]);
+    // Not answered yet: the next start asks again.
+    if !app.guided.ask {
+        lines.push(("mode".into(), app.guided.mode.key().into()));
+    }
     let library = (app.library.as_ref()).map(|l| l.path.clone());
     let nist = (app.nist.lib.as_ref()).map(|l| l.path.clone());
     let paths = [
@@ -605,6 +613,8 @@ pub fn restore(
 ) {
     app.saved.file = file;
     let saved = storage.and_then(|s| s.get_string(KEY));
+    // Asked with Guided preselected unless a saved `mode` answers it.
+    (app.guided.mode, app.guided.ask) = (crate::guided::Mode::Guided, true);
     let note = match saved {
         Some(text) => {
             let bad = apply(app, ctx, own_entries(&text));
@@ -767,9 +777,14 @@ size=@Size(1591 800)
         // Absolute on every platform, with a '=' the line format must keep.
         app.saved.remember(std::env::temp_dir().join("a=b.cdf"));
         app.saved.extra.push(("language".into(), "de".into()));
+        app.guided.mode = crate::guided::Mode::Guided;
         let text = text(&app);
-        let (back, bad) = apply_text(&text, own_entries);
+        let (mut back, bad) = apply_text(&text, own_entries);
         assert!(bad.is_empty(), "{bad:?}");
+        assert_eq!(back.guided.mode, app.guided.mode);
+        // An unanswered first-start question is not saved, so the next start asks again.
+        back.guided.ask = true;
+        assert!(!super::text(&back).contains("mode="));
         assert_eq!(back.settings.applied, app.settings.applied);
         assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);

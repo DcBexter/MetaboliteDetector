@@ -105,9 +105,7 @@ impl App {
         }
         self.updater.menu(ui);
         ui.separator();
-        // Seam for #256: the guided mode switches on here once it exists.
-        ui.add_enabled(false, egui::Button::new("Guided mode"))
-            .on_disabled_hover_text("Comes with the guided mode");
+        crate::guided::switch(ui, &mut self.guided.mode);
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
@@ -292,10 +290,9 @@ impl App {
                 ),
             ],
         ];
-        for (i, group) in groups.into_iter().enumerate() {
-            if i > 0 {
-                ui.separator();
-            }
+        self.flows_menu(ui);
+        for group in groups {
+            ui.separator();
             for (name, hint, open, needs_run) in group {
                 // Run info shows nothing without a run; the others explain their empty state.
                 if ui

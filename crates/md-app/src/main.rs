@@ -18,6 +18,7 @@ mod detail;
 mod detected_peaks;
 mod export;
 mod export_all;
+mod guided;
 mod identify;
 mod isotopes;
 mod jobs;
@@ -124,6 +125,7 @@ struct App {
     updater: update::Updater,
     panels: layout::Panels,
     saved: persist::Saved,
+    guided: guided::Guided,
     /// Detected Peaks also draws the modelled profile of each ion.
     model_profile: bool,
     about_open: bool,
@@ -164,6 +166,7 @@ impl Default for App {
             updater: update::Updater::default(),
             panels: layout::Panels::default(),
             saved: persist::Saved::default(),
+            guided: guided::Guided::default(),
             model_profile: false,
             about_open: false,
             plotted: None,
@@ -216,6 +219,7 @@ fn color(i: usize) -> egui::Color32 {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_jobs(ui.ctx());
+        guided::publish(ui.ctx(), self.guided.mode);
         self.menu_bar(ui);
         self.shortcuts(ui.ctx());
         self.windows(ui.ctx());
@@ -263,16 +267,12 @@ impl App {
             (self.library.as_ref()).map(|l| l.path.as_path()),
             (self.nist.lib.as_ref()).map(|l| l.path.as_path()),
         ];
-        if let Some(which) = self.settings.window(ctx, libraries) {
+        if let Some(which) = self.settings.window(ctx, libraries, &mut self.guided.mode) {
             self.pick_library(ctx, which);
         }
         self.batch
             .use_settings(&self.settings.applied, self.ri.rt_only);
-        // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
-        let cal = (self.ri.cal.as_deref()).filter(|_| {
-            (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
-        });
-        let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
+        let (cal, reference) = self.ri.for_search(self.library.as_deref());
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
         self.mid.applied.clone_from(&self.settings.applied);
@@ -286,5 +286,6 @@ impl App {
         self.updater.window(ctx);
         self.about_window(ctx);
         self.export_all_window(ctx);
+        self.guided_windows(ctx);
     }
 }
