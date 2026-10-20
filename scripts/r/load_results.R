@@ -7,8 +7,14 @@ if (!exists("csv_path")) csv_path <- if (length(args)) args[1] else "results.csv
 # Columns: Substance, RT_s, Quant_ions, then one column per run (peak area sum; NA = not found).
 # The file starts with a byte order mark (for Excel); text that a spreadsheet would read as a
 # formula (starting with = + - @) has a leading ' that is taken off again here.
+# The "Excel (German)" export (md-cli --excel-de) has `;` separators and decimal commas: the header
+# line then has a `;` before any `,` or quote.
+read_csv <- function(path, ...) {
+  first <- readLines(path, n = 1, warn = FALSE)
+  if (grepl("^[^,\"]*;", first)) read.csv2(path, ...) else read.csv(path, ...)
+}
 unguard <- function(x) sub("^'(?=[=+@\t\r-])", "", x, perl = TRUE)
-data <- read.csv(csv_path, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+data <- read_csv(csv_path, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
                  colClasses = c(Substance = "character", Quant_ions = "character"))
 names(data) <- unguard(names(data))
 data$Substance <- unguard(data$Substance)
@@ -21,7 +27,7 @@ runs <- data[, -(1:3), drop = FALSE]
 groups_csv <- paste0(tools::file_path_sans_ext(csv_path), ".groups.csv")
 groups <- NULL
 if (file.exists(groups_csv)) {
-  g <- read.csv(groups_csv, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+  g <- read_csv(groups_csv, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
                colClasses = "character", na.strings = character(0))
   groups <- setNames(unguard(g$Group), unguard(g$Run))[names(runs)]
 }
@@ -32,7 +38,7 @@ if (file.exists(groups_csv)) {
 groupstats_csv <- paste0(tools::file_path_sans_ext(csv_path), ".groupstats.csv")
 groupstats <- NULL
 if (file.exists(groupstats_csv)) {
-  groupstats <- read.csv(groupstats_csv, check.names = FALSE, stringsAsFactors = FALSE,
+  groupstats <- read_csv(groupstats_csv, check.names = FALSE, stringsAsFactors = FALSE,
                          fileEncoding = "UTF-8-BOM",
                          colClasses = c(Substance = "character", Quant_ions = "character"))
   names(groupstats) <- unguard(names(groupstats))
@@ -45,14 +51,14 @@ if (file.exists(groupstats_csv)) {
 settings_csv <- paste0(tools::file_path_sans_ext(csv_path), ".settings.csv")
 settings <- NULL
 if (file.exists(settings_csv)) {
-  s <- read.csv(settings_csv, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+  s <- read_csv(settings_csv, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
                 colClasses = "character", na.strings = character(0))
   settings <- setNames(unguard(s$Value), s$Setting)
 }
 ions_csv <- paste0(tools::file_path_sans_ext(csv_path), ".ions.csv")
 ions <- NULL
 if (file.exists(ions_csv)) {
-  ions <- read.csv(ions_csv, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
+  ions <- read_csv(ions_csv, check.names = FALSE, stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM",
                    colClasses = c(Substance = "character"))
   names(ions) <- unguard(names(ions))
   ions$Substance <- unguard(ions$Substance)
