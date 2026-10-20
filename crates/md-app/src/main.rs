@@ -1,4 +1,6 @@
 //! MetaboliteDetector desktop app (egui). Analysis lives in `md-core`; this crate only draws.
+// Release builds on Windows open no console window next to the app (shortcuts, double-click).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};

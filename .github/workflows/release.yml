@@ -61,6 +61,7 @@ jobs:
           dotnet tool install --global wix --version 6.0.2
           wix build -arch x64 -d Version="$MSI_VERSION" -d BinDir=target/release \
             installer/metabolite-detector.wxs -o "dist/$name.msi"
+          rm dist/*.wixpdb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}

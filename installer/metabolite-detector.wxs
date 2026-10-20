@@ -4,7 +4,8 @@
   <!-- Keep the UpgradeCode forever: it lets a new version replace the installed one. -->
   <Package Name="MetaboliteDetector" Manufacturer="MetaboliteDetector" Version="$(Version)"
            UpgradeCode="2E75E840-1C36-4010-9049-025727FAE50E" Scope="perMachine">
-    <MajorUpgrade DowngradeErrorMessage="A newer version of MetaboliteDetector is already installed." />
+    <!-- vX.Y.Z-rc1 and vX.Y.Z share MSI version X.Y.Z; same-version upgrades replace the rc. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of MetaboliteDetector is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
