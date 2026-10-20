@@ -28,6 +28,7 @@ mod settings;
 mod statistics;
 mod status;
 mod style;
+mod tof_calibration;
 #[cfg(test)]
 mod ui_tests;
 mod view;
@@ -80,6 +81,7 @@ struct App {
     ri: calibration::Calibration,
     settings: settings::Settings,
     isotopes: isotopes::Isotopes,
+    tof: tof_calibration::TofWindow,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
     /// Search settings whose library preparation crashed; not retried until they change.
@@ -110,6 +112,7 @@ impl Default for App {
             ri: calibration::Calibration::default(),
             settings: settings::Settings::default(),
             isotopes: isotopes::Isotopes::default(),
+            tof: tof_calibration::TofWindow::default(),
             library: None,
             library_job: None,
             library_failed: None,
@@ -210,6 +213,7 @@ impl App {
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
+        self.tof.window(ctx);
         self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);
         self.library_editor(ctx);

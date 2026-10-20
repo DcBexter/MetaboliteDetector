@@ -63,6 +63,16 @@ pub fn read(path: impl AsRef<Path>) -> Result<Chromatogram, AndiError> {
 
 /// Writes the variables `read` needs, which is the core of ANDI-MS (raw data group).
 pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> {
+    write_with_tic(path, c, &c.tic())
+}
+
+/// Like [`write`], with the total intensity of each scan given: a centroided export keeps the
+/// TIC of the profile scans it came from.
+pub fn write_with_tic(
+    path: impl AsRef<Path>,
+    c: &Chromatogram,
+    tic: &[f64],
+) -> Result<(), AndiError> {
     let invalid = |e| AndiError::Inconsistent(format!("{e:?}"));
     let i32s = |v: Vec<usize>| -> Result<Vec<i32>, AndiError> {
         v.into_iter()
@@ -73,6 +83,9 @@ pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> 
             .collect()
     };
     let scans = c.scan_count();
+    if tic.len() != scans {
+        return Err(AndiError::Inconsistent("one TIC per scan needed".into()));
+    }
     // NetCDF-3 forbids fixed dimensions of size 0.
     if scans == 0 || c.mz.is_empty() {
         return Err(AndiError::Inconsistent("the run has no data points".into()));
@@ -100,7 +113,7 @@ pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> 
     w.set_def(&ds, Version::Offset64Bit, 0)
         .map_err(AndiError::Write)?;
     w.write_var_f64("scan_acquisition_time", &c.scan_times_s)
-        .and_then(|_| w.write_var_f64("total_intensity", &c.tic()))
+        .and_then(|_| w.write_var_f64("total_intensity", tic))
         .and_then(|_| w.write_var_i32("scan_index", &index))
         .and_then(|_| w.write_var_i32("point_count", &count))
         .and_then(|_| w.write_var_f32("mass_values", &c.mz))

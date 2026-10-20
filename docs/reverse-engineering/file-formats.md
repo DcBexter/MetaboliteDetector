@@ -390,6 +390,12 @@ Regression: `TOFCalibrationCalculator::regress` 0x6db8a2 needs at least `degree 
 "ERROR: Not enough values for polynomial regression."), then GSL `multifit_linear` (SVD) with
 `X[i][j] = bin_i^j`, `y = m/z_i` (Observed). Ported as `TofCalibration::fit` (nalgebra SVD).
 
+The window of the rewrite (`crates/md-app/src/tof_calibration.rs`, #148) sums a run per TOF bin
+(`fastflight::bin_spectrum`), takes the TOF bin of a clicked peak as the intensity-weighted centre of the points
+at or above half the local maximum (`tof::peak_bin`), asks for the reference m/z by hand, fits with
+`TofCalibration::fit` and saves with `TofCalibration::to_text`. The old window's automatic calibration is not
+ported (below), so a calibration needs reference ions chosen by hand.
+
 `TOFCalibrationWindow::saveSettings()` 0x6c077e is **not** the .mzcalib writer. It stores only the window
 size in `QSettings("TU-Braunschweig", "TOFCalib")`, group "GUI", key "size" (Observed).
 
