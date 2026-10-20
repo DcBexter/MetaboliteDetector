@@ -188,7 +188,8 @@ fn ranges(v: &str) -> Option<Vec<(f32, f32)>> {
     if v.is_empty() || v == "@Invalid()" {
         return Some(Vec::new());
     }
-    // shortcut: a non-empty old list (a QVariantList, never seen) is not decoded and keeps the default.
+    // shortcut: a non-empty old list (a QVariantList, never seen) is not decoded and keeps the
+    // default; decode it once a user's old file has one.
     (v.split(';'))
         .map(|r| {
             let (a, b) = r.split_once(':')?;
@@ -431,12 +432,32 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
     for p in recent.into_iter().rev() {
         app.saved.remember(p);
     }
-    if let Err(e) = s.validate() {
-        bad.push(e);
-        s = GcmsSettings::default();
-    }
-    app.settings.restore(s);
+    app.settings.restore(valid(s, &mut bad));
     bad
+}
+
+/// Resets only the field `validate` names, until the settings pass; all of them if it names none.
+fn valid(mut s: GcmsSettings, bad: &mut Vec<String>) -> GcmsSettings {
+    // Each round resets one field, so this ends; the bound only guards against a field whose
+    // default does not pass.
+    for _ in 0..=FIELDS.len() {
+        let Err(e) = s.validate() else {
+            return s;
+        };
+        // The matched detector's errors name its parts, not its key.
+        let key = if e.starts_with("Peak ") {
+            "PEAK_DETECTOR"
+        } else {
+            e.split(':').next().unwrap_or_default()
+        };
+        bad.push(e.clone());
+        let Some((_, field)) = FIELDS.iter().find(|(k, _)| *k == key) else {
+            break;
+        };
+        let default = field(&mut GcmsSettings::default()).text();
+        field(&mut s).parse(&default);
+    }
+    GcmsSettings::default()
 }
 
 /// The lines saved under [`KEY`].
@@ -456,9 +477,11 @@ pub fn text(app: &App) -> String {
     let paths = paths.into_iter().filter_map(|(k, p)| Some((k, p?)));
     let recent = app.saved.recent.iter().map(|p| ("recent", p.clone()));
     // shortcut: a path that is not UTF-8 is not saved; store it as bytes if that ever matters.
-    lines.extend(
-        (paths.chain(recent)).filter_map(|(k, p)| Some((k.to_owned(), p.to_str()?.to_owned()))),
-    );
+    // Absolute, so a path given on the command line still points to the same file from elsewhere.
+    lines.extend((paths.chain(recent)).filter_map(|(k, p)| {
+        let p = std::path::absolute(&p).unwrap_or(p);
+        Some((k.to_owned(), p.to_str()?.to_owned()))
+    }));
     lines.extend(app.saved.extra.iter().cloned());
     // A line break would split a value into a second, wrong line.
     (lines.into_iter())
@@ -521,16 +544,13 @@ pub fn restore(
     if let Some(note) = note {
         app.settings.show_note(note);
     }
-    // A library that is gone is forgotten without a message; one that fails to load says so.
+    // A library that is missing now (a drive not mounted) is kept for the next start without a
+    // message; one that fails to load says so.
     if let Some(p) = app.saved.library.clone().filter(|p| p.exists()) {
         app.open_library(ctx, p);
-    } else {
-        app.saved.library = None;
     }
     if let Some(p) = app.saved.nist.clone().filter(|p| p.exists()) {
         app.open_nist(ctx, p);
-    } else {
-        app.saved.nist = None;
     }
 }
 
@@ -547,11 +567,14 @@ impl App {
                         .on_hover_text(p.display().to_string())
                         .clicked()
                     {
+                        // Loading it again puts it back on top; a file that is gone leaves the list.
+                        self.saved.recent.retain(|q| q != &p);
                         self.open(ui.ctx(), p);
                     }
                 }
             })
             .response
+            .on_hover_text("Open one of the last runs again")
             .on_disabled_hover_text("No runs opened yet");
         });
     }
@@ -567,7 +590,7 @@ mod tests {
         (app, bad)
     }
 
-    /// Lines in the form the old 3.3 wrote them (`[Algorithm]` of a real file, `[GUI]` shortened).
+    /// Hand-written lines in the form the old 3.3 writes them (Qt INI quoting and escapes).
     const OLD: &str = r#"[Algorithm]
 AN_BP_HEIGHT=0
 AN_DECONVOLUTION_WIDTH=1
@@ -647,7 +670,8 @@ size=@Size(1591 800)
             threshold: -3,
         };
         app.panels.info = false;
-        app.saved.remember("C:\\runs\\a=b.cdf".into());
+        // Absolute on every platform, with a '=' the line format must keep.
+        app.saved.remember(std::env::temp_dir().join("a=b.cdf"));
         app.saved.extra.push(("language".into(), "de".into()));
         let text = text(&app);
         let (back, bad) = apply_text(&text, own_entries);
@@ -661,7 +685,8 @@ size=@Size(1591 800)
     #[test]
     fn bad_values_keep_defaults() {
         let (app, bad) = apply_text(
-            "LS_RI_DIFF=abc\nAN_NUMBER_BINS=0\npanel.runs=yes\n",
+            "LS_RI_DIFF=abc\nAN_NUMBER_BINS=0\nLS_PURE_FACTOR=0.7\npanel.runs=yes\n\
+             PEAK_DETECTOR=matched 0 5\n",
             own_entries,
         );
         assert_eq!(
@@ -669,10 +694,16 @@ size=@Size(1591 800)
             [
                 "LS_RI_DIFF",
                 "panel.runs",
-                "AN_NUMBER_BINS: must be between 1 and 100"
+                "AN_NUMBER_BINS: must be between 1 and 100",
+                "Peak width: must be between 1 and 1000"
             ]
         );
-        assert_eq!(app.settings.applied, GcmsSettings::default());
+        // Only the bad fields fall back; the good one stays.
+        let expected = GcmsSettings {
+            ls_pure_factor: 0.7,
+            ..GcmsSettings::default()
+        };
+        assert_eq!(app.settings.applied, expected);
         assert!(app.panels.runs);
     }
 

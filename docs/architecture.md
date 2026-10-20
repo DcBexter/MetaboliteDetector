@@ -757,10 +757,11 @@ field under its old key (`LS_RI_DIFF=10`, ranges as `73:75;147:148`, `PEAK_DETEC
 (newest first, at most 10; File → Open recent). Keys the version does not know are written back unchanged;
 `mode` (S7) and `language` (S8) are reserved for those features.
 
-Every value is checked at start: a bad value keeps its default and `GcmsSettings::validate` must pass, else
-all settings fall back to the defaults. Then, or when eframe could not parse `app.ron` (our key is missing
-from an existing file), the file is copied to `app.ron.<unix s>.bak` and the Settings window opens with the
-message. Libraries that no longer exist are forgotten silently.
+Every value is checked at start: a bad value keeps its default, and each field `GcmsSettings::validate`
+names falls back to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
+key is missing from an existing file), the file is copied to `app.ron.<unix s>.bak` and the Settings window
+opens with the message. A library that is missing at start (a drive not mounted) is not opened but kept.
+Paths are saved absolute; a recent run that is clicked leaves the list until it loads again.
 
 First start (no `app.ron`): the old 3.3 settings are imported once and the Settings window says so. Sources:
 `HKCU\Software\TU-Braunschweig\MetaboliteDetector` (through `reg query`) on Windows, else

@@ -50,7 +50,7 @@ is S4 (#253).
 | Settings: Identification: Compound Lib path, NIST path, Cutoff score (0.85), Similarity-score radio (combined / spectrum / RI), Use scaled lib | RI tolerance, pure/impure, use-RI/use-spec checkboxes; scaled lib and the SF_* values are "stored, not used" | Gap: cutoff, score-mode choice, persisted library paths, scaled lib; check against #242 first |
 | Settings: Max. RI difference shown as 10.0 in the old dialog | New RI tolerance 20 | Check: same key `LS_RI_DIFF`? The RI wizard sets it to 20 during calibration |
 | Settings: Centroid (SF_*), baseline adjustment | SF_* "stored, not used"; baseline toggle missing | Gap if the centroid path is part of the detector |
-| QSettings: window size/position, dock state, recent files, library path persist | Settings, panels, sizes, window, recent runs and library paths persist; 3.3 values are imported once (#253) | Fine |
+| QSettings: window size/position, dock state, recent files, library path persist | Settings, panels, panel sizes, window, recent runs and library paths persist (not the Qt dock blobs); 3.3 values are imported once (#253) | Fine |
 | Help button (F1) in Settings | Hover texts | Fine |
 | Context menus, drag and drop | None | Modern additions, not parity |
 | Language: English only | English only | New request: DE/EN switch |
