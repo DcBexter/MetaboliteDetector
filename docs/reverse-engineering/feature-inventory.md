@@ -31,7 +31,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 10 | Batch compound detection wizard | `Compound Detection Wizard...` | Runs #7 for many files after RI calibration. | done: single run (#78, #107), many runs to `.cmp` in the batch (#205) |
 | 11 | Batch quantification | `BatchQuantificationWizard`, `BatchQuantificator` | Targeted (reference library only) or non-targeted (temporary library collecting all spectra); replicate groups via regex; compound filter (reproducibility, discrepancy index, min ions); extended SIC rescan for missing quant ions; result table export. | done: targeted + groups (#22), non-targeted, rescan, S/N and discrepancy filters (#58, [batch-quantification.md](batch-quantification.md)), result views (#83, #160); ANOVA column #203 |
 | 12 | Quantification ions | `Compound::assignQuantificationIons`, `QuantIonChecker`, `QUANT_*` | N ions per compound, min distance, quality cut-off, excluded ions; manual/automatic ions in the library. | done: automatic ions in batch, store in library (#80), editor (#12); automatic ions in the editor #208 |
-| 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | done (#23); pool mapping export #206 |
+| 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | done (#23, #206) |
 | 14 | Statistics | `BiomarkerDialog`, `tools::Statistics`, `BoxPlot`, `HistogramPlot` | Two-group biomarker table (means, ratio, p-value, hits), independent/paired samples, box plots. | done (#24, #189); ANOVA column #203 |
 | 15 | PCA | `tools::PCA`, `PCAPlot` | Score plot with selectable PCs, loadings ("impact of metabolites"), cumulative variance. | done (#24) |
 | 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | done (#28, #141, #156): four corrections, M1, tracer, result tree, bar plots, group statistics with StdErr, text exports with clipboard copy, FRAG export; column/diagram order #207; live test with labelled runs #147 |
@@ -67,7 +67,6 @@ open issue that owns the rest. Sub-features come from the binary's menus, dialog
 | 18 | Editor: compounds, RI, quant ions, features dialog, `FRAG` | done (#12) |
 | 18 | Editor: automatic quant ions, ion frequency, resolution, v5 MID fragments (`formulas`, `mid_sizes`) | #208 |
 | 13 | Internal standard, summed signal, pool, z-score | done (#23, #188) |
-| 13 | Export pool mapping (`Sample<TAB>Pools`) | #206 |
 | 14, 15 | Group assignment, paste sample list, p-value filter, box plots, PCA axes/loadings/variance, PNG | done (#24, #187, #189) |
 | 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots, group statistics | done (#28, #141, #156, #183) |
 | 16 | Change column order, change order of diagrams | #207 |

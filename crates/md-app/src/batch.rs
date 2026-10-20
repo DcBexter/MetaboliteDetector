@@ -18,7 +18,7 @@ use md_core::batch::{
 use md_core::batch::{cell_ions, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
-use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
+use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
 use md_core::stats::{group_values, student, summary};
@@ -643,7 +643,7 @@ impl Batch {
                     self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let ex = Export {
                             scan,
                             settings: &self.settings,
@@ -657,6 +657,8 @@ impl Batch {
                         if let Some(note) = export_button(ui, shown, &ex) {
                             self.note = note;
                         }
+                        let times = self.times.as_ref().map(|t| t.0.as_slice());
+                        pool_mapping_button(ui, t, &self.norm, times, &mut self.note);
                         if self.frag_job.is_none()
                             && let Some(rx) = frag_button(ui, shown, scan)
                         {
@@ -860,14 +862,17 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     Ok(text)
 }
 
-/// The table as the user's edits and the normalisation leave it: runs are removed and moved
-/// first, substances are removed last.
-fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
+/// The runs as the user left them (removed and moved), with their file dates.
+fn edited_runs<'a>(
+    t: &'a Table,
+    n: &Norm,
+    times: Option<&[i64]>,
+) -> (std::borrow::Cow<'a, Table>, Vec<i64>) {
+    use std::borrow::Cow;
     let cols = n.edits.cols.as_deref();
-    let edited = cols.map(|c| t.select_runs(c));
-    let base = edited.as_ref().unwrap_or(t);
+    let base = cols.map_or(Cow::Borrowed(t), |c| Cow::Owned(t.select_runs(c)));
     // The file dates follow the runs that are left.
-    let times: Vec<i64> = match (times, cols) {
+    let times = match (times, cols) {
         (Some(ts), Some(cols)) => cols
             .iter()
             .map(|c| ts.get(*c).copied().unwrap_or(0))
@@ -875,7 +880,46 @@ fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
         (Some(ts), None) => ts.to_vec(),
         (None, _) => Vec::new(),
     };
-    apply(base, &mode(n, base, &times), n.z_score).without_rows(&n.edits.rows)
+    (base, times)
+}
+
+/// The table as the user's edits and the normalisation leave it: runs are removed and moved
+/// first, substances are removed last.
+fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
+    let (base, times) = edited_runs(t, n, times);
+    apply(&base, &mode(n, &base, &times), n.z_score).without_rows(&n.edits.rows)
+}
+
+/// The old program's "Export pool mapping": which pool runs each run was divided by, for the runs
+/// the table shows. A save attempt leaves a note.
+fn pool_mapping_button(
+    ui: &mut egui::Ui,
+    t: &Table,
+    n: &Norm,
+    times: Option<&[i64]>,
+    note: &mut String,
+) {
+    if n.kind != Kind::Pool || !ui.button("Export pool mapping…").clicked() {
+        return;
+    }
+    let (base, times) = edited_runs(t, n, times);
+    let Normalization::Pool(p) = mode(n, &base, &times) else {
+        return;
+    };
+    let Some(mut path) = rfd::FileDialog::new()
+        .add_filter("Text", &["txt"])
+        .set_file_name("pool_mapping.txt")
+        .save_file()
+    else {
+        return;
+    };
+    if path.extension().is_none_or(|e| e != "txt") {
+        path.as_mut_os_string().push(".txt");
+    }
+    *note = match std::fs::write(&path, pool_mapping_text(&base, &p)) {
+        Ok(()) => format!("Saved {}", path.display()),
+        Err(e) => format!("Export failed: {e}"),
+    };
 }
 
 /// With `z_scored` there are no group statistics: the old program computes them on the normalised
