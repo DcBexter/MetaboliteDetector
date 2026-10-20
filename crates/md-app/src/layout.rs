@@ -67,6 +67,7 @@ mod tests {
             visible: true,
             ident: None,
             ident_job: None,
+            saved_calibration: None,
             rev: 0,
         });
         let ctx = egui::Context::default();
