@@ -13,7 +13,8 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only PRs cancel superseded runs; every main push keeps its cache save and Sonar main analysis.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
   # No debug info: faster builds and a smaller cache; panics still name the function.
@@ -34,7 +35,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           # Linux: full history for Sonar blame and new-code detection. Windows: HEAD^1 for the change check.
-          fetch-depth: ${{ runner.os == 'Linux' && 0 || 2 }}
+          fetch-depth: ${{ runner.os != 'Linux' && 2 || 0 }}
           persist-credentials: false
       # A PR checks out its merge commit, so HEAD^1 is the base. PRs without Rust changes skip the build;
       # main always builds to keep the cache and Sonar's coverage complete.
