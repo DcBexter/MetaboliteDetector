@@ -4,9 +4,15 @@
 //! libraries and the recent files. Unknown keys are kept as they are, so a newer version's values
 //! survive; `mode` (S7) and `language` (S8) are reserved for those. The first start imports the old
 //! 3.3 settings once (`~/.config/TU-Braunschweig/MetaboliteDetector.conf`, on Windows the registry).
-//! Every value is checked; a bad one keeps its default, and the unreadable file is copied aside.
+//! Every value is checked; a bad one keeps its default.
+//!
+//! eframe writes `app.ron` itself, not atomically, so [`guard`] runs before it reads the file and
+//! keeps the last good copy as `app.ron.bak` (the only backup, rewritten via temp file + rename).
+//! A damaged file is replaced by that copy (#286, #288). Two open windows: the last one to save wins
+//! for settings, panels and libraries; the recent files are merged with the file on disk (#287).
 
-use std::io::Read;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -29,9 +35,26 @@ pub struct Saved {
     nist: Option<PathBuf>,
     /// Keys this version does not know, written back unchanged.
     extra: Vec<(String, String)>,
+    /// The `app.ron` eframe writes, to merge with at save time.
+    file: Option<PathBuf>,
 }
 
 impl Saved {
+    /// Adds the recent files another window saved since we started (only those that still exist,
+    /// so a file we dropped does not come back); ours stay first.
+    pub fn merge_disk(&mut self) {
+        let Some(state) = self.file.as_deref().and_then(read_state) else {
+            return;
+        };
+        let disk = own_entries(state.get(KEY).map_or("", String::as_str));
+        let mut new: Vec<PathBuf> = (disk.into_iter())
+            .filter_map(|(_, k, v)| (k == "recent").then(|| path(&v)).flatten())
+            .filter(|p| p.exists() && !self.recent.contains(p))
+            .collect();
+        self.recent.append(&mut new);
+        self.recent.truncate(RECENT);
+    }
+
     pub fn remember(&mut self, path: PathBuf) {
         // Absolute, so a command-line `a.cdf` and the same file from the dialog are one entry.
         let path = std::path::absolute(&path).unwrap_or(path);
@@ -504,44 +527,94 @@ pub fn text(app: &App) -> String {
         .collect()
 }
 
-/// Copies an unreadable `app.ron` aside before eframe overwrites it; returns what to tell the user.
-fn backup(file: Option<&Path>) -> String {
-    let Some(file) = file.filter(|f| f.exists()) else {
-        return String::new();
+/// What `app.ron` holds as eframe wrote it, or None if it is missing or does not parse.
+fn read_state(file: &Path) -> Option<HashMap<String, String>> {
+    parse(&std::fs::read(file).ok()?)
+}
+
+fn parse(bytes: &[u8]) -> Option<HashMap<String, String>> {
+    ron::de::from_str(std::str::from_utf8(bytes).ok()?).ok()
+}
+
+/// Writes a temp file next to `file`, then renames it over: a crash leaves the old file whole.
+fn write_atomic(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = file.with_extension("ron.tmp");
+    let done = std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| std::fs::rename(&tmp, file));
+    if done.is_err() {
+        std::fs::remove_file(&tmp).ok();
+    }
+    done
+}
+
+/// What [`guard`] tells the user.
+type Note = Result<String, String>;
+
+/// Before eframe reads `app.ron`. A good file is copied to `app.ron.bak`. A damaged one (eframe
+/// drops it and would write over it) is replaced by that copy; without one it becomes the backup.
+/// If neither works, eframe gets another file name, so nothing is overwritten. Returns the file
+/// eframe may use and what to tell the user.
+pub fn guard(file: Option<PathBuf>) -> (Option<PathBuf>, Option<Note>) {
+    let Some(file) = file else {
+        return (None, None);
     };
-    let secs = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
-        .map_or(0, |d| d.as_secs());
-    let copy = file.with_extension(format!("ron.{secs}.bak"));
-    match std::fs::copy(file, &copy) {
-        Ok(_) => format!(" The old file is kept as {}.", copy.display()),
-        Err(e) => format!(" Copying it aside failed: {e}."),
+    if !file.exists() {
+        return (Some(file), None);
+    }
+    let bak = file.with_extension("ron.bak");
+    let bytes = std::fs::read(&file).unwrap_or_default();
+    if parse(&bytes).is_some() {
+        // A failed copy loses nothing: the file itself is fine.
+        if std::fs::read(&bak).ok().as_deref() != Some(&bytes[..]) {
+            write_atomic(&bak, &bytes).ok();
+        }
+        return (Some(file), None);
+    }
+    let lost = "The saved settings could not be read.";
+    let kept = match std::fs::read(&bak).ok().filter(|b| parse(b).is_some()) {
+        Some(good) => write_atomic(&file, &good).map(|()| "The last good copy is used.".to_owned()),
+        None => std::fs::rename(&file, &bak).map(|()| {
+            format!(
+                "The defaults are used; the old file is kept as {}.",
+                bak.display()
+            )
+        }),
+    };
+    match kept {
+        Ok(what) => (Some(file), Some(Err(format!("{lost} {what}")))),
+        Err(e) => {
+            let other = file.with_extension("ron.new");
+            let msg = format!(
+                "{lost} It could not be kept aside ({e}), so this session saves to {} instead.",
+                other.display()
+            );
+            (Some(other), Some(Err(msg)))
+        }
     }
 }
 
 /// At start: the saved state, else on the first start the old app's settings; then the libraries.
+/// `guarded` is what [`guard`] said about the file.
 pub fn restore(
     app: &mut App,
     ctx: &egui::Context,
     storage: Option<&dyn eframe::Storage>,
-    file: Option<&Path>,
+    file: Option<PathBuf>,
+    guarded: Option<Note>,
 ) {
+    app.saved.file = file;
     let saved = storage.and_then(|s| s.get_string(KEY));
     let note = match saved {
         Some(text) => {
             let bad = apply(app, ctx, own_entries(&text));
             (!bad.is_empty()).then(|| {
                 Err(format!(
-                    "Saved values could not be read and use their defaults: {}.{}",
-                    bad.join(", "),
-                    backup(file)
+                    "Saved values could not be read and use their defaults: {}.",
+                    bad.join(", ")
                 ))
             })
         }
-        // eframe drops a file it cannot parse and would write over it.
-        None if file.is_some_and(Path::exists) => Some(Err(format!(
-            "The saved settings could not be read; the defaults are used.{}",
-            backup(file)
-        ))),
         None => old_entries().map(|(source, entries)| {
             let bad = apply(app, ctx, entries);
             let done = format!("Imported the settings of MetaboliteDetector 3.3 from {source}.");
@@ -555,7 +628,7 @@ pub fn restore(
             }
         }),
     };
-    if let Some(note) = note {
+    if let Some(note) = guarded.or(note) {
         app.settings.show_note(note);
     }
     // A library that is missing now (a drive not mounted) is kept for the next start without a
@@ -729,23 +802,101 @@ size=@Size(1591 800)
         assert!(app.panels.runs);
     }
 
-    /// A file eframe could not read is copied aside and the user is told; the defaults apply.
-    #[test]
-    fn unreadable_file_is_kept_as_backup() {
-        let dir = std::env::temp_dir().join(format!("md-persist-{}", std::process::id()));
+    /// A fresh directory with an `app.ron` holding `recent` lines for these paths.
+    fn state_dir(name: &str, recent: &[&Path]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("md-persist-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("app.ron");
-        std::fs::write(&file, "not ron {").unwrap();
-        let mut app = App::default();
-        restore(&mut app, &egui::Context::default(), None, Some(&file));
-        let backups: Vec<_> = (std::fs::read_dir(&dir).unwrap())
-            .filter_map(|e| e.ok()?.file_name().into_string().ok())
-            .filter(|n| n.ends_with(".bak"))
+        write_state(&file, recent);
+        (dir, file)
+    }
+
+    fn write_state(file: &Path, recent: &[&Path]) {
+        let lines: String = (recent.iter())
+            .map(|p| format!("recent={}\n", p.display()))
             .collect();
+        let state = HashMap::from([(KEY.to_owned(), lines)]);
+        std::fs::write(file, ron::to_string(&state).unwrap()).unwrap();
+    }
+
+    fn files(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = (std::fs::read_dir(dir).unwrap())
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A truncated write (crash, full disk) does not cost the last good state; no backup piles up.
+    #[test]
+    fn truncated_file_is_restored_from_the_last_good_copy() {
+        let (dir, file) = state_dir("truncated", &[Path::new("/a")]);
+        for _ in 0..3 {
+            assert!(guard(Some(file.clone())).1.is_none());
+        }
+        let good = std::fs::read(&file).unwrap();
+        std::fs::write(&file, &good[..good.len() / 2]).unwrap();
+        let (used, note) = guard(Some(file.clone()));
+        let (names, restored) = (files(&dir), std::fs::read(&file).unwrap());
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(backups.len(), 1, "{backups:?}");
-        assert!(app.settings.open);
-        assert_eq!(app.settings.applied, GcmsSettings::default());
+        assert_eq!(used, Some(file));
+        assert!(note.is_some_and(|n| n.is_err()));
+        assert_eq!(restored, good);
+        assert_eq!(names, ["app.ron", "app.ron.bak"]);
+    }
+
+    /// Without a good copy the damaged file becomes the one backup; the defaults apply.
+    #[test]
+    fn damaged_file_without_copy_is_kept_as_backup() {
+        let (dir, file) = state_dir("damaged", &[]);
+        std::fs::write(&file, "not ron {").unwrap();
+        let (used, note) = guard(Some(file.clone()));
+        let again = guard(Some(file.clone()));
+        let (names, bak) = (files(&dir), std::fs::read(file.with_extension("ron.bak")));
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(used, Some(file.clone()));
+        assert!(note.is_some_and(|n| n.is_err()));
+        assert_eq!(again, (Some(file), None), "nothing left to guard");
+        assert_eq!(names, ["app.ron.bak"]);
+        assert_eq!(bak.unwrap(), b"not ron {");
+    }
+
+    /// If the damaged file cannot be kept aside, eframe gets another name and never overwrites it.
+    #[test]
+    fn failed_backup_protects_the_file() {
+        let (dir, file) = state_dir("failed", &[]);
+        std::fs::write(&file, "not ron {").unwrap();
+        // A directory in the way makes the rename fail on every platform.
+        std::fs::create_dir(file.with_extension("ron.bak")).unwrap();
+        let (used, note) = guard(Some(file.clone()));
+        let kept = std::fs::read(&file);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(used, Some(file.with_extension("ron.new")));
+        assert!(note.is_some_and(|n| n.is_err()));
+        assert_eq!(kept.unwrap(), b"not ron {");
+    }
+
+    /// Two windows save one after the other: the settings of the last win, the recent files merge.
+    #[test]
+    fn second_instance_merges_recent_files() {
+        let tmp = std::env::temp_dir();
+        let (a, b) = (tmp.join("md-merge-a.cdf"), tmp.join("md-merge-b.cdf"));
+        let gone = tmp.join("md-merge-gone.cdf");
+        std::fs::write(&a, "").unwrap();
+        std::fs::write(&b, "").unwrap();
+        let (dir, file) = state_dir("merge", &[&a, &gone]);
+        // The second window knows only b and has not seen what the first saved.
+        let mut saved = Saved {
+            file: Some(file),
+            ..Saved::default()
+        };
+        saved.remember(b.clone());
+        saved.merge_disk();
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
+        assert_eq!(saved.recent, [b, a], "a is added; gone is dropped");
     }
 
     #[test]

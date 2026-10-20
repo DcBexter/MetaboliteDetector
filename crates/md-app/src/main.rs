@@ -45,9 +45,10 @@ mod view;
 use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
-    // Without our config dir eframe would pick its own; name it, so `restore` checks that file too.
+    // Without our config dir eframe would pick its own; name it, so `persist::guard` checks that file.
     let file = (persist::config_dir().or_else(|| eframe::storage_dir("MetaboliteDetector")))
         .map(|d| d.join("app.ron"));
+    let (file, guarded) = persist::guard(file);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MetaboliteDetector")
@@ -61,7 +62,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
             let mut app = App::default();
-            persist::restore(&mut app, &cc.egui_ctx, cc.storage, file.as_deref());
+            persist::restore(&mut app, &cc.egui_ctx, cc.storage, file, guarded);
             app.updater.start(&cc.egui_ctx);
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
                 if identify::is_library(&path) {
@@ -238,6 +239,7 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.saved.merge_disk();
         storage.set_string(persist::KEY, persist::text(self));
     }
 }
