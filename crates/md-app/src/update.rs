@@ -56,7 +56,7 @@ fn now() -> u64 {
 }
 
 /// `%APPDATA%\MetaboliteDetector`, else `$XDG_CONFIG_HOME` or `~/.config` + `/metabolite-detector`.
-fn config_path() -> Option<PathBuf> {
+pub fn config_path() -> Option<PathBuf> {
     let env = |k| {
         std::env::var_os(k)
             .map(PathBuf::from)
