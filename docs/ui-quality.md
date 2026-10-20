@@ -33,13 +33,10 @@ can draw.
 
 ## Re-check after the open UI pull requests merge
 
-Findings from the first review (#102) that live in files other sessions are changing:
+Findings from the first review (#102) that are still open. #111, #112, #77/#78 and #113 were re-checked
+on 2026-10-20 and are done; #127 (windows beside the run list, `×`) is done too.
 
 | Area | Issue | What to check |
 |---|---|---|
-| Windows (layout) | #89, done in #127 | ✓ Windows open over the plots beside the run list, a step apart; the library editor uses `×` and `KNOWN` is gone |
-| TIC plot | #111 | Hit labels do not overlap; y axis is readable |
-| Spectrum, hit table | #77 / #78 | The spectrum says whether it shows a scan or a deconvoluted component; table headers are `strong` |
-| Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI; inputs have names |
-| Settings, Analysis menu | #113 | Plain names, old key and explanation on hover; inputs have names |
-| Batch | #88 | A disabled Start button looks like a button and says why; inputs have names |
+| Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI. `11-library-editor` shows no compound yet: the test clicks the last "Compound at" match, which lies outside the editor |
+| Batch | #88 | A disabled Start button looks like a button and says why; inputs have names (8 unnamed) |
