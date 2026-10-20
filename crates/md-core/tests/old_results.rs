@@ -52,6 +52,10 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[test]
+#[allow(
+    clippy::cognitive_complexity,
+    reason = "a test of many cases: each assert counts, and Sonar skips tests"
+)]
 fn reads_and_rewrites_old_cmp_files() {
     let Some(d) = dir() else {
         eprintln!("skipped: example-data/old-results/ missing");
