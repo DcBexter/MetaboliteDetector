@@ -208,6 +208,7 @@ mod tests {
                 values: vec![Some(600.0), None],
                 rts_s: vec![Some(60.0), None],
             }],
+            ..Default::default()
         };
         let mut out = Vec::new();
         t.write_ions_csv(&[&a, &b], &TableSettings::default(), &mut out)

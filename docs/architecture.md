@@ -347,8 +347,16 @@ the old statistics columns (`stats::summary`, `stats::student`). `Table::select_
 the CSV export and the statistics window see the edited table. Old formulas (from the 3.3 binary):
 "Mean" and "Rel. Std. Err." (sample SD / sqrt(n) / mean, a fraction) use only values that are not 0, NaN or
 infinite; "#" counts values above 0; "P (blank)" is Student's t-test with pooled variance, two-sided, with
-missing values as 0, against the group named `BLANK`. Not ported yet: the ANOVA p-value column, the
-alternative library hits per cell, all quant ions in the CSV and the used settings in the file.
+missing values as 0, against the group named `BLANK`.
+
+**Details behind a cell** (#160): `Found::alternatives` keeps the other library hits of the component
+(`md_core::batch::hit_list`, assigned hit first); the Values view shows them as a tooltip, the assigned one in
+red, like the old tree. "Quant ion lines" adds a line per quant ion under each substance with its raw
+integral (`ion_integrals`, the same rule as the cell: largest peak with at least `MIN_SN`). An export also
+writes `FILE.settings.csv` (`Setting,Value`: the batch filters and `QUANT_*`, the normalisation and the number
+of removed runs and substances; `TableSettings::write_csv`) and, on request ("Export quant ions" /
+`md-cli --ion-integrals`), `FILE.ions.csv` (`Substance,Quant_ion,<run>...`, raw integrals, empty = not found;
+`Table::write_ions_csv`). Not ported yet: the ANOVA p-value column.
 
 All 15 example runs against the TargetSearchData library (12 entries, converted to MSL), measured
 2026-10-20 on a loaded machine: 1.1 s with 1 run in memory (33 MiB peak working set), 0.17 s with 4
@@ -375,7 +383,8 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 `--shift-reference` (needs `-c`; `--shift-cutoff`) switch on the passes above. The CSV is
 `Table::write_csv` (UTF-8 with byte order mark for Excel, `Substance,RT_s,Quant_ions,<run>...`, empty cell = not
 quantified; names that start with `=`, `+`, `-` or `@` get a leading `'`); with replicate groups, `-o FILE`
-and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`); progress and
+and the app's export also write `FILE.groups.csv` (`Run,Group`, `Table::write_groups_file`); `-o FILE` always
+writes `FILE.settings.csv` and, with `--ion-integrals`, `FILE.ions.csv` (see "Details behind a cell"); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
