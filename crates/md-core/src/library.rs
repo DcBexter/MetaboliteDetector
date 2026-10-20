@@ -652,57 +652,61 @@ fn bin_to_whole_masses(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>) {
 fn centroid(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
     let n = masses.len().min(values.len());
     let (mut out_m, mut out_v, mut out_w) = (Vec::new(), Vec::new(), Vec::new());
-    // The old code reads past the end as "the same as the last point".
-    let at = |k: usize| values[k.min(n - 1)];
-    let mass_at = |k: usize| masses[k.min(n - 1)];
     let mut i = 0;
     while i < n {
-        let (start, mut j, mut max) = (i, i, f64::MIN);
-        let mut rising = true;
-        while j < n {
-            let (v0, v1, v2) = (at(j), at(j + 1), at(j + 2));
-            max = max.max(f64::from(v0));
-            if f64::from(mass_at(j + 1) - mass_at(j)) > 0.01 {
-                break;
-            }
-            // Climb to the apex (two falling steps in a row end the climb), then fall to the valley
-            // (a clear rise ends the peak).
-            if rising {
-                if v1 < v0 && v2 < v1 {
-                    rising = false;
-                    continue;
-                }
-            } else if v1 > v0 && v2 > v1 {
-                break;
-            }
-            j += 1;
-        }
+        let (j, max) = group_end(&masses[..n], &values[..n], i);
         let end = if j >= n { j - 1 } else { j };
-        let (ms, vs) = (&masses[start..=end], &values[start..=end]);
-        if start == end {
-            out_m.push(ms[0]);
-            out_v.push(vs[0]);
-            out_w.push(1.0);
+        let peak = if i == end {
+            Some((masses[i], values[i], 1.0))
         } else {
-            let half = max / 2.0;
-            let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
-            for (&m, &v) in ms.iter().zip(vs) {
-                if f64::from(v) >= half {
-                    weighted += f64::from(m * v as f32);
-                    sum += f64::from(v);
-                    width += 1.0;
-                }
-            }
-            // The old code drops a peak without weight.
-            if sum != 0.0 && weighted != 0.0 {
-                out_m.push((weighted / sum) as f32);
-                out_v.push(sum as i32);
-                out_w.push(width);
-            }
+            weighted_peak(&masses[i..=end], &values[i..=end], max)
+        };
+        if let Some((m, v, w)) = peak {
+            out_m.push(m);
+            out_v.push(v);
+            out_w.push(w);
         }
         i = j + 1;
     }
     (out_m, out_v, out_w)
+}
+
+/// Where the profile peak starting at `start` ends (`n` when it runs to the end) and its largest value.
+fn group_end(masses: &[f32], values: &[i32], start: usize) -> (usize, f64) {
+    let n = masses.len();
+    // The old code reads past the end as "the same as the last point".
+    let at = |k: usize| values[k.min(n - 1)];
+    let mass_at = |k: usize| masses[k.min(n - 1)];
+    let (mut j, mut max, mut rising) = (start, f64::MIN, true);
+    while j < n {
+        let (v0, v1, v2) = (at(j), at(j + 1), at(j + 2));
+        max = max.max(f64::from(v0));
+        if f64::from(mass_at(j + 1) - mass_at(j)) > 0.01 {
+            break;
+        }
+        // Climb to the apex (two falling steps in a row end the climb), then fall to the valley
+        // (a clear rise ends the peak).
+        if rising && v1 < v0 && v2 < v1 {
+            rising = false;
+        } else if !rising && v1 > v0 && v2 > v1 {
+            break;
+        } else {
+            j += 1;
+        }
+    }
+    (j, max)
+}
+
+/// Mass, intensity and FWHM of several points; the old code drops a peak without weight.
+fn weighted_peak(ms: &[f32], vs: &[i32], max: f64) -> Option<(f32, i32, f64)> {
+    let half = max / 2.0;
+    let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (&m, &v) in ms.iter().zip(vs).filter(|&(_, &v)| f64::from(v) >= half) {
+        weighted += f64::from(m * v as f32);
+        sum += f64::from(v);
+        width += 1.0;
+    }
+    (sum != 0.0 && weighted != 0.0).then(|| ((weighted / sum) as f32, sum as i32, width))
 }
 
 /// Writes compounds as the old program does for `kind`, byte for byte. Unlike [`write_msl`] this is for
