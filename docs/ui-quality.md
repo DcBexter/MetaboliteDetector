@@ -45,3 +45,11 @@ every screen except batch had no unnamed input.
 #169, #170, #171 and #187 are done. #175 named every batch input, gave each a hover text and renamed
 `QUANT_EXCL_IONS` to a plain name; it also named the library editor's feature fields. No screenshot
 lists an unnamed input now. Nothing from the second review is open.
+
+Third review (#219, 2026-10-20) of every screenshot on `main` after #175, #187, #189, #190 and #196.
+Fixed in #219: the results table gives the compound name the room the fixed columns leave, and its score
+headers read "Score" and "Spectrum" like the library hits; biomarker statistics shows means and standard
+deviations with 6 significant digits like the batch table ("7700", not "7700.0000"); RI calibration
+opens wide enough that its first checkbox fits on one line. Start screen, menus, settings, isotopes, run
+info and the batch, library editor and MID windows had no findings, and no screenshot lists an unnamed
+input.
