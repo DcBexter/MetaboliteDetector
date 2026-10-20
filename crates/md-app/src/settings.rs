@@ -183,7 +183,11 @@ impl Settings {
                         ui.strong(crate::guided::text::MODE);
                         crate::guided::switch(ui, mode);
                         ui.add_space(8.0);
-                        crate::guided::advanced(ui, "settings", |ui| self.fields(ui, times));
+                        // An invalid value must not hide under a closed "Advanced" (#303).
+                        let invalid = self.draft.validate().is_err();
+                        crate::guided::advanced_open(ui, "settings", invalid, |ui| {
+                            self.fields(ui, times)
+                        });
                     });
                 ui.separator();
                 self.buttons(ui, times);
@@ -727,6 +731,32 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+
+    /// #303: in Guided mode "Advanced" is closed, but an invalid draft opens it.
+    #[test]
+    fn invalid_value_opens_closed_advanced() {
+        let s = Settings {
+            open: true,
+            ..Default::default()
+        };
+        let mut h = Harness::new_ui_state(
+            |ui, (s, mode): &mut (Settings, crate::guided::Mode)| {
+                let ctx = ui.ctx().clone();
+                let ctx = &ctx;
+                crate::guided::publish(ctx, *mode);
+                s.window(ctx, [None, None], mode, None);
+            },
+            (s, crate::guided::Mode::Guided),
+        );
+        h.run();
+        assert!(
+            h.query_by_label("Deconvolution width").is_none(),
+            "Advanced starts closed"
+        );
+        h.state_mut().0.draft.sf_fwhm = f64::NAN;
+        h.run();
+        h.get_by_label("Deconvolution width");
+    }
 
     /// #279: Auto shows the width of the shown run; unticking it sets that width.
     #[test]

@@ -510,6 +510,8 @@ pub struct TableSettings {
     /// Groups from a sample table; they win over `replicates` for the runs the table names. A run
     /// it lacks is grouped by `replicates`.
     pub sample_groups: SampleGroups,
+    /// Groups set by hand per run; they win over the sample table and the pattern.
+    pub manual_groups: SampleGroups,
     /// Keep a substance only if some group quantifies it in at least this fraction of its runs.
     pub min_reproducibility: f64,
     /// A value counts only if at least this many of the substance's quant ions were found (at most
@@ -528,6 +530,7 @@ impl Default for TableSettings {
             quant: QuantSettings::default(),
             replicates: String::new(),
             sample_groups: SampleGroups::new(),
+            manual_groups: SampleGroups::new(),
             min_reproducibility: 0.0,
             min_ions: 1,
             min_sn: 0.0,
@@ -715,8 +718,14 @@ pub fn table(
             .to_string_lossy()
             .into_owned()
     };
-    let group = |n: &str| match (s.sample_groups.get(&run_key(n)), pattern.captures(n)) {
-        (Some(g), _) => g.clone(),
+    let group = |n: &str| match (
+        [&s.manual_groups, &s.sample_groups]
+            .into_iter()
+            .find_map(|m| m.get(&run_key(n))),
+        pattern.captures(n),
+    ) {
+        // Trimmed here: a field being typed keeps its blanks.
+        (Some(g), _) => g.trim().into(),
         // A run the table lacks is a group of its own, not part of "all runs".
         _ if s.replicates.is_empty() && !s.sample_groups.is_empty() => n.into(),
         _ if s.replicates.is_empty() => String::new(),
@@ -1069,6 +1078,20 @@ mod tests {
         let t = table(&more, &[], &[], &s).unwrap();
         assert_eq!(t.groups.iter().filter(|g| *g == "extra").count(), 1);
         assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 3);
+        // A group set by hand wins over the table and the pattern; the other runs are not touched.
+        let hand = TableSettings {
+            manual_groups: SampleGroups::from([(run_key("/x/RUN01.cdf"), "blank ".into())]),
+            ..s
+        };
+        let t = table(&more, &[], &[], &hand).unwrap();
+        assert_eq!(t.groups.iter().filter(|g| *g == "blank").count(), 1);
+        assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 2);
+        let only_hand = TableSettings {
+            manual_groups: hand.manual_groups.clone(),
+            ..Default::default()
+        };
+        let t = table(&more, &[], &[], &only_hand).unwrap();
+        assert_eq!(t.groups.iter().filter(|g| g.is_empty()).count(), 15);
     }
 
     /// Two substances of 12 ions each, apart in time (early at 30 s, late at 70 s).

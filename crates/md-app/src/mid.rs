@@ -48,6 +48,8 @@ struct Done {
     text: String,
     stats_text: Option<String>,
     errors: Vec<String>,
+    /// Runs that loaded and were scanned.
+    scanned: usize,
     took: Duration,
 }
 
@@ -327,6 +329,7 @@ impl MidWindow {
                 text: String::new(),
                 stats_text: None,
                 errors,
+                scanned: runs.len(),
                 took: started.elapsed(),
             };
             done.refresh();
@@ -413,6 +416,12 @@ impl MidWindow {
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
+    }
+
+    /// Runs scanned and problems of the last determination, for the guided Start step.
+    pub fn summary(&self) -> Option<(usize, usize)> {
+        let r = self.result.as_ref()?;
+        Some((r.scanned, r.errors.len() + r.mids.errors.len()))
     }
 
     /// Why the MIDs cannot be determined yet.
@@ -840,6 +849,7 @@ mod tests {
             text: String::new(),
             stats_text: None,
             errors: Vec::new(),
+            scanned: 0,
             took: Duration::ZERO,
         };
         d.refresh();
