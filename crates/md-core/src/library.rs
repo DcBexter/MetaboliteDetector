@@ -270,6 +270,18 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| bytes.iter().map(|&b| b as char).collect())
 }
 
+/// Opens a library by extension: `.lbr`, else AMDIS `.msl`.
+pub fn open(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
+    let path = path.as_ref();
+    match path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"))
+    {
+        true => read_lbr(path),
+        false => import_msl(path),
+    }
+}
+
 /// Imports an AMDIS `.msl` file; each compound records the file as its source like the old app.
 pub fn import_msl(path: impl AsRef<Path>) -> Result<Vec<LibraryCompound>, LibraryError> {
     let path = path.as_ref();
@@ -453,6 +465,20 @@ pub fn write_msl(compounds: &[LibraryCompound]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_picks_the_reader_by_extension() {
+        let dir = std::env::temp_dir().join(format!("md-core-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let msl = dir.join("lib.MSL");
+        std::fs::write(&msl, "NAME: A\nNUM PEAKS: 1\n(100 1)\n").unwrap();
+        assert_eq!(super::open(&msl).unwrap()[0].name, "A");
+        // The same bytes are no .lbr file.
+        let lbr = dir.join("lib.LBR");
+        std::fs::copy(&msl, &lbr).unwrap();
+        assert!(super::open(&lbr).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     /// Version 2 payload with one compound, written like the old `toStream`.

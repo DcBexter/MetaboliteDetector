@@ -297,6 +297,21 @@ impl Batch {
                     self.shown = Some((n.clone(), shown));
                 }
                 if let Some((_, shown)) = &self.shown {
+                    // The export has the values the table shows.
+                    if ui.button("Export CSV…").clicked()
+                        && let Some(p) = rfd::FileDialog::new()
+                            .add_filter("CSV", &["csv"])
+                            .set_file_name("results.csv")
+                            .save_file()
+                    {
+                        self.note = match std::fs::File::create(&p)
+                            .map(std::io::BufWriter::new)
+                            .and_then(|f| shown.write_csv(f))
+                        {
+                            Ok(()) => format!("Saved {}", p.display()),
+                            Err(e) => format!("Export failed: {e}"),
+                        };
+                    }
                     table_view(ui, shown, &self.norm);
                 }
             }

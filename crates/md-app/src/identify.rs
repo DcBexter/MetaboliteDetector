@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
 use eframe::egui;
-use md_core::library::{LibraryCompound, import_msl, read_lbr};
+use md_core::library::LibraryCompound;
 use md_core::ri::RiCalibration;
 use md_core::search::{
     Identification, PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
@@ -53,15 +53,7 @@ pub fn is_library(path: &Path) -> bool {
 }
 
 fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
-    let lbr = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"));
-    let compounds = if lbr {
-        read_lbr(path)
-    } else {
-        import_msl(path)
-    }
-    .map_err(|e| format!("{}: {e}", path.display()))?;
+    let compounds = md_core::library::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Library {
         name: path
             .file_name()
