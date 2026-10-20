@@ -20,9 +20,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use regex::Regex;
 
 use crate::Chromatogram;
-use crate::deconv::{DeconvSettings, deconvolute};
+use crate::deconv::{Component, DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, PeakSettings, TooLarge};
+use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
 use crate::ri::RiCalibration;
 use crate::search::{
     PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
@@ -104,6 +104,27 @@ pub struct Scanned {
     pub calibration: Option<RiCalibration>,
 }
 
+/// The ion peaks of a component, largest integral first (§7.2).
+pub fn ion_peaks(k: &Component, peaks: &[Peak], traces: &IonTraces) -> Vec<IonPeak> {
+    let mut ions: Vec<IonPeak> = k
+        .peaks
+        .iter()
+        .map(|f| {
+            let p = &peaks[f.peak];
+            IonPeak {
+                mass: traces.masses[p.row as usize],
+                integral: f.integral,
+                quality: p.quality,
+                signal_to_noise: p.signal_to_noise,
+            }
+        })
+        .collect();
+    // The old code sorts ascending and walks backwards, so ties come last-in-list first (§7.2).
+    ions.sort_by(|a, b| a.integral.total_cmp(&b.integral));
+    ions.reverse();
+    ions
+}
+
 /// Deconvolutes one run and returns the library substances assigned to its components (and, if
 /// `s.untargeted`, the other components).
 pub fn scan_chromatogram(
@@ -133,22 +154,7 @@ pub fn scan_chromatogram(
         if hit.is_none() && !s.untargeted {
             continue;
         }
-        let mut ions: Vec<IonPeak> = k
-            .peaks
-            .iter()
-            .map(|f| {
-                let p = &peaks[f.peak];
-                IonPeak {
-                    mass: traces.masses[p.row as usize],
-                    integral: f.integral,
-                    quality: p.quality,
-                    signal_to_noise: p.signal_to_noise,
-                }
-            })
-            .collect();
-        // The old code sorts ascending and walks backwards, so ties come last-in-list first (§7.2).
-        ions.sort_by(|a, b| a.integral.total_cmp(&b.integral));
-        ions.reverse();
+        let ions = ion_peaks(k, &peaks, &traces);
         let rt_s = times[k.apex_scan as usize];
         match hit {
             Some(h) => found.push(Found {
