@@ -8,10 +8,12 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
-use md_core::batch::{TableSettings, scan_runs, table};
+use md_core::batch::{
+    RescanSettings, ShiftReference, TableSettings, complete_scan, scan_runs, table,
+};
 use md_core::library;
 use md_core::ri::RiCalibration;
-use md_core::search::PreparedLibrary;
+use md_core::search::{PreparedLibrary, SearchSettings};
 use md_core::settings::GcmsSettings;
 
 const USAGE: &str = "\
@@ -32,6 +34,14 @@ Options:
       --ions N                quant ions per substance (default: QUANT_ION_NUMBER of the settings)
       --min-dist F            min. distance of quant ions (default: QUANT_MIN_DIST_IONS)
       --quality-cutoff F      quant ion quality cut-off (default: QUANT_QUALITY_CUTOFF)
+      --exclude-ions LIST     m/z ranges not picked as quant ions, e.g. 73,147-149 (default: QUANT_EXCL_IONS)
+      --min-sn F              an ion counts only with at least this signal-to-noise ratio
+      --max-discrepancy F     a value counts only if the mean peak quality of its ions is at most F
+      --untargeted            also tabulate components without library hit (pooled over all runs)
+      --rescan                look for quant ions a run lacks in its ion traces
+      --rescan-window S       width of that search window in seconds (default 6)
+      --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
+      --shift-cutoff F        min. score of the reference in a run (default: the library search cutoff)
   -h, --help                  this text";
 
 struct Args {
@@ -46,7 +56,33 @@ struct Args {
     ions: Option<usize>,
     min_dist: Option<f32>,
     quality_cutoff: Option<f32>,
+    exclude_ions: Option<Vec<(f32, f32)>>,
+    min_sn: Option<f32>,
+    max_discrepancy: Option<f32>,
+    untargeted: bool,
+    rescan: bool,
+    rescan_window: Option<f64>,
+    shift_reference: Option<String>,
+    shift_cutoff: Option<f64>,
     runs: Vec<PathBuf>,
+}
+
+/// `73,147-149` → inclusive ranges; a single mass is a range of its own.
+fn ranges(text: &str) -> Result<Vec<(f32, f32)>, String> {
+    let mass = |t: &str| {
+        t.trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|m| (0.0..=100_000.0).contains(m))
+            .ok_or_else(|| format!("not a mass: {t}"))
+    };
+    text.split(',')
+        .filter(|r| !r.trim().is_empty())
+        .map(|r| match r.split_once('-') {
+            Some((lo, hi)) => Ok((mass(lo)?, mass(hi)?)),
+            None => mass(r).map(|m| (m, m)),
+        })
+        .collect()
 }
 
 /// `Ok(None)` for `--help`.
@@ -65,6 +101,14 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         ions: None,
         min_dist: None,
         quality_cutoff: None,
+        exclude_ions: None,
+        min_sn: None,
+        max_discrepancy: None,
+        untargeted: false,
+        rescan: false,
+        rescan_window: None,
+        shift_reference: None,
+        shift_cutoff: None,
         runs: Vec::new(),
     };
     let mut only_runs = false;
@@ -102,6 +146,14 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--ions" => a.ions = Some(num(1.0, 20.0)? as usize),
             "--min-dist" => a.min_dist = Some(num(0.0, 100.0)? as f32),
             "--quality-cutoff" => a.quality_cutoff = Some(num(0.0, 100.0)? as f32),
+            "--exclude-ions" => a.exclude_ions = Some(ranges(&text()?)?),
+            "--min-sn" => a.min_sn = Some(num(0.0, 1e6)? as f32),
+            "--max-discrepancy" => a.max_discrepancy = Some(num(0.0, 1e6)? as f32),
+            "--untargeted" => a.untargeted = true,
+            "--rescan" => a.rescan = true,
+            "--rescan-window" => a.rescan_window = Some(num(0.0, 1e4)?),
+            "--shift-reference" => a.shift_reference = Some(text()?),
+            "--shift-cutoff" => a.shift_cutoff = Some(num(0.0, 1.0)?),
             _ => return Err(format!("unknown option {name}")),
         }
     }
@@ -143,6 +195,27 @@ fn run(a: Args) -> Result<bool, String> {
     ts.quant.quality_cutoff = a.quality_cutoff.unwrap_or(ts.quant.quality_cutoff);
     ts.min_reproducibility = a.min_reproducibility.unwrap_or(ts.min_reproducibility);
     ts.min_ions = a.min_ions.unwrap_or(ts.min_ions);
+    ts.quant.excluded = a.exclude_ions.unwrap_or(ts.quant.excluded);
+    ts.min_sn = a.min_sn.unwrap_or(ts.min_sn);
+    ts.max_discrepancy = a.max_discrepancy.unwrap_or(ts.max_discrepancy);
+    let mut scan = settings.scan(calibration);
+    scan.untargeted = a.untargeted;
+    if let Some(name) = &a.shift_reference {
+        if scan.calibration.is_none() {
+            return Err("--shift-reference needs a calibration (-c)".into());
+        }
+        let cutoff = a.shift_cutoff.unwrap_or(SearchSettings::default().cutoff);
+        scan.shift = Some(
+            ShiftReference::find(&compounds, name, cutoff)
+                .ok_or_else(|| format!("--shift-reference: no substance with RI named {name}"))?,
+        );
+    }
+    let rescan = a.rescan.then(|| RescanSettings {
+        window_s: a
+            .rescan_window
+            .unwrap_or(RescanSettings::default().window_s),
+        ..Default::default()
+    });
 
     // Open the output first: a wrong path must not cost a whole scan.
     let mut out: Box<dyn Write> = match &a.output {
@@ -153,16 +226,21 @@ fn run(a: Args) -> Result<bool, String> {
     };
     let started = Instant::now();
     let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
-    let (runs, errors) = scan_runs(
-        &a.runs,
-        &prepared,
-        &settings.scan(calibration),
+    let (mut runs, mut errors) =
+        scan_runs(&a.runs, &prepared, &scan, a.parallel, &done, &cancel).ok_or("cancelled")?;
+    let more = complete_scan(
+        &mut runs,
+        &compounds,
+        &scan,
+        &ts.quant,
+        rescan.as_ref(),
         a.parallel,
-        &done,
         &cancel,
     )
     .ok_or("cancelled")?;
-    let table = table(&runs, &compounds, &ts).map_err(|e| format!("--replicates: {e}"))?;
+    errors.extend(more.errors);
+    let table =
+        table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
     let io = |e: std::io::Error| format!("output: {e}");
     table.write_csv(&mut out).map_err(io)?;
@@ -305,6 +383,65 @@ mod tests {
         std::fs::remove_file(dir.join("lib.msl")).unwrap();
         assert!(fails(&line));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn untargeted_adds_the_unknown_substance_and_options_are_checked() {
+        let dir = std::env::temp_dir().join(format!("md-cli-unknown-{}", std::process::id()));
+        let line = study(&dir);
+        // Only "early" is in the library, so "late" can only come from the pooled unknowns.
+        let early: String = (0..12)
+            .map(|j| format!("({} {}) ", 60 + j, j + 1))
+            .collect();
+        std::fs::write(
+            dir.join("lib.msl"),
+            format!(
+                "NAME: early
+NUM PEAKS: 12
+{early}
+"
+            ),
+        )
+        .unwrap();
+        let table = |extra: &str| {
+            let l = format!("{line} {extra}");
+            assert!(run(args(&l).unwrap().unwrap()).unwrap());
+            std::fs::read_to_string(dir.join("out.csv")).unwrap()
+        };
+        assert_eq!(table("").lines().count(), 2, "header and early");
+        let csv = table(
+            "--untargeted --rescan --rescan-window 4 --exclude-ions 73,147-149 --min-sn 1 --max-discrepancy 1000",
+        );
+        let names: Vec<&str> = csv
+            .lines()
+            .skip(1)
+            .map(|l| l.split(',').next().unwrap())
+            .collect();
+        assert_eq!(names, ["early", "Unknown 1"], "{csv}");
+
+        let shift = |extra: &str| run(args(&format!("{line} {extra}")).unwrap().unwrap());
+        assert!(
+            shift("--shift-reference early")
+                .unwrap_err()
+                .contains("calibration")
+        );
+        let calib = format!("-c {}", dir.join("a.calib").display());
+        assert!(
+            shift(&format!("{calib} --shift-reference nobody"))
+                .unwrap_err()
+                .contains("nobody")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_mass_ranges() {
+        assert_eq!(
+            ranges("73, 147-149").unwrap(),
+            [(73.0, 73.0), (147.0, 149.0)]
+        );
+        assert!(ranges("").unwrap().is_empty());
+        assert!(ranges("x").is_err() && ranges("5-").is_err() && ranges("-1").is_err());
     }
 
     #[test]

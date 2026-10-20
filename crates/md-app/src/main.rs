@@ -15,6 +15,7 @@ mod export;
 mod identify;
 mod isotopes;
 mod jobs;
+mod layout;
 mod library_editor;
 mod loading;
 mod menu;
@@ -192,7 +193,9 @@ impl App {
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
-        self.batch.window(ctx, self.library.as_ref(), cal);
+        let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
+        self.batch
+            .window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);

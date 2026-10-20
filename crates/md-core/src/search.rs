@@ -151,46 +151,56 @@ impl PreparedLibrary {
             frag_ions: Vec::new(),
             fragment_filter: false,
         };
-        let (mut peaks, mut merged) = (Vec::new(), Vec::new());
         for c in library {
-            // shortcut: rounds to nominal mass and sums, because the old getBinnedCentroidCompound is not
-            // decoded (§5.9) and components are unit-mass; high-resolution search needs the old binning.
-            peaks.clear();
-            peaks.extend(
-                c.spectrum
-                    .masses
-                    .iter()
-                    .zip(&c.spectrum.values)
-                    .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v >= 0)
-                    .map(|(m, v)| (m.round() as u32, *v as f64)),
-            );
-            peaks.sort_unstable_by_key(|p| p.0);
-            merged.clear();
-            merged.extend(
-                peaks
-                    .chunk_by(|a, b| a.0 == b.0)
-                    .map(|c| (c[0].0, c.iter().map(|p| p.1).sum::<f64>())),
-            );
-            let mut norm = 0.0;
-            for &(mass, v) in &merged {
-                if s.filtered(mass) {
-                    continue;
-                }
-                let v = s.scale(mass, v);
-                lib.masses.push(mass);
-                lib.values.push(v);
-                norm += v * v;
-            }
-            // The old index is built from the stored spectrum, before mass filter and scaling.
-            // Runs are disjoint and in mass order, so the ions come out ascending.
-            lib.frag_ions
-                .extend(fragments(&merged).into_iter().map(|f| f.0));
-            lib.frag_offsets.push(lib.frag_ions.len());
-            lib.offsets.push(lib.masses.len());
-            lib.norms.push(norm);
-            lib.ris.push(known_ri(ri(c)));
+            lib.push_with(c, s, ri);
         }
         lib
+    }
+
+    /// Appends one entry, scaled like the others (the entry gets the next index).
+    pub fn push(&mut self, c: &LibraryCompound, s: &SearchSettings) {
+        self.push_with(c, s, |c| c.spectrum.ri);
+    }
+
+    fn push_with(
+        &mut self,
+        c: &LibraryCompound,
+        s: &SearchSettings,
+        ri: fn(&LibraryCompound) -> f64,
+    ) {
+        // shortcut: rounds to nominal mass and sums, because the old getBinnedCentroidCompound is not
+        // decoded (§5.9) and components are unit-mass; high-resolution search needs the old binning.
+        let mut peaks: Vec<(u32, f64)> = c
+            .spectrum
+            .masses
+            .iter()
+            .zip(&c.spectrum.values)
+            .filter(|(m, v)| m.is_finite() && **m >= 0.5 && **v >= 0)
+            .map(|(m, v)| (m.round() as u32, *v as f64))
+            .collect();
+        peaks.sort_unstable_by_key(|p| p.0);
+        let merged: Vec<(u32, f64)> = peaks
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|c| (c[0].0, c.iter().map(|p| p.1).sum()))
+            .collect();
+        let mut norm = 0.0;
+        for &(mass, v) in &merged {
+            if s.filtered(mass) {
+                continue;
+            }
+            let v = s.scale(mass, v);
+            self.masses.push(mass);
+            self.values.push(v);
+            norm += v * v;
+        }
+        // The old index is built from the stored spectrum, before mass filter and scaling.
+        // Runs are disjoint and in mass order, so the ions come out ascending.
+        self.frag_ions
+            .extend(fragments(&merged).into_iter().map(|f| f.0));
+        self.frag_offsets.push(self.frag_ions.len());
+        self.offsets.push(self.masses.len());
+        self.norms.push(norm);
+        self.ris.push(known_ri(ri(c)));
     }
 
     /// Built with [`Self::new_rt_only`].
