@@ -35,8 +35,8 @@ pub type Key = (
 /// reference when it was found.
 pub type Identified = (Key, Identification, Option<RiCalibration>);
 
-/// A text on the TIC: position, name, colour.
-pub type Label = ([f64; 2], String, egui::Color32);
+/// A text on the TIC: position, name, colour, library score.
+pub type Label = ([f64; 2], String, egui::Color32, f64);
 
 /// Old label colours: above 0.9, above 0.7, the rest.
 fn score_color(score: f64) -> egui::Color32 {
@@ -198,6 +198,7 @@ pub fn labels(run: &Run, show: impl Fn(f64) -> bool) -> Vec<Label> {
                 [run.minutes[s], run.tic[s]],
                 lib.compounds[h.compound].name.clone(),
                 score_color(h.overall),
+                h.overall,
             ))
         })
         .collect()
@@ -246,3 +247,39 @@ pub fn hits_panel(ui: &mut egui::Ui, run: &Run) {
 
 pub type LibraryJob = mpsc::Receiver<Result<Arc<Library>, String>>;
 pub type IdentJob = (Key, mpsc::Receiver<(Identification, Option<RiCalibration>)>);
+
+/// Which labels stay visible when they are drawn left-aligned at `starts` (pixels) with the
+/// given `widths`: the highest score wins, a label overlapping a kept one is hidden.
+pub fn visible_labels(starts: &[f32], widths: &[f32], scores: &[f64]) -> Vec<bool> {
+    let mut order: Vec<usize> = (0..starts.len()).collect();
+    order.sort_by(|a, b| scores[*b].total_cmp(&scores[*a]));
+    let mut keep = vec![false; starts.len()];
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        if kept
+            .iter()
+            .all(|k| starts[i] >= starts[*k] + widths[*k] || starts[*k] >= starts[i] + widths[i])
+        {
+            keep[i] = true;
+            kept.push(i);
+        }
+    }
+    keep
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_labels_keep_the_best_score() {
+        // 0 and 1 overlap (1 scores higher), 2 is clear of both.
+        let keep = visible_labels(&[0.0, 30.0, 100.0], &[50.0, 50.0, 40.0], &[0.8, 0.95, 0.5]);
+        assert_eq!(keep, [false, true, true]);
+        // Touching labels do not overlap.
+        assert_eq!(
+            visible_labels(&[0.0, 50.0], &[50.0, 50.0], &[0.9, 0.8]),
+            [true, true]
+        );
+    }
+}

@@ -124,6 +124,11 @@ impl Calibration {
         anchor(self.rt_only, c)
     }
 
+    /// Gives one run its own calibration (one the old program saved with it).
+    pub fn set_own(&mut self, run: PathBuf, cal: RiCalibration) {
+        self.own.insert(run, Arc::new(cal));
+    }
+
     /// Also drops a running search, so its late result cannot replace this calibration.
     fn set(&mut self, cal: RiCalibration, source: String) {
         self.rows = (cal.points().iter())

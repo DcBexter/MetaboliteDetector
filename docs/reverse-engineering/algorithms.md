@@ -261,7 +261,7 @@ All addresses below are syms addresses (MCP = +0x100000). Ghidra cuts most of th
 
 - GUI path: `metabolitedetector::ComponentDetector::detectComponents()` (0x4b3a0c) calls `GCMSAnalyzer::detectAllPeaks(reorder=true, scan_dist=10.0f, ion_dist=0.05f)` (call at 0x4b3a87; floats at rodata 0xa81010 = 10.0 and 0xa8100c = 0.05). Then it calls `deconvoluteChromatogram()` (0x5e907e).
 - RI calibration wizard: `RICalibrationWizard::CompoundDetector::detect()` calls `detectAllPeaks(reorder=false, ...)` (0x3f4710), then `deconvoluteChromatogram()`.
-- Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window.
+- Batch quantification: `ResultSeries::scanIons` (0x638589..0x6385d7) builds an analyzer with a fresh `DefaultPeakDetector`, calls `setMinimumPeakNumberRequired(1)`, then `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)` on a scan window. Details of the whole batch rescan: [batch-quantification.md](batch-quantification.md).
 - `MIN_PEAK_NUMBER` is field +0x0 of GCMSAnalyzer. The settings dialog sets it from `AN_MIN_PEAK_NUMBER` (call at 0x3c1177). The GCMSAnalyzer ctor sets it to `AN_MIN_PEAK_NUMBER` (Observed).
 - `deconvoluteChromatogram()` (0x5e907e) = `deconvoluteChromatogram(this->peaks, scan->vtbl[3]() /*scan count*/, 0, AN_DECONVOLUTION_WIDTH)`. Observed.
 

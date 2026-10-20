@@ -25,11 +25,11 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, run info, score filter, auto-Y done; export #9 |
 | 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison, centroid, component panel #77 |
 | 6 | Chromatogram overlay | `ChromatogramOverlayDialog`, `MultiChromatogramPlot` | Overlay TIC or SIC of several runs. | done (#8) |
-| 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` #13/#107 |
+| 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default and matched detector + deconvolution done; `.cmp` read/write done (#13), save/load in the app #107 |
 | 8 | Library identification | `gcms::LibrarySearch`, `SpectrumFunctions`, settings `LS_*` | Score = spectrum similarity, RI similarity or combined; pure/impure factors, cutoff, max ΔRI, mass filter ranges, scaled library, fragment pre-filter (`SQL_*`). | done (scaled library always on); `SQL_*` pre-filter and `LS_IDENTIFICATION_ALGORITHM` #21 |
 | 9 | RI calibration wizard | `RICalibrationWizard`, `RICalculator` | Alkane (or other) calibration mix from a library, RT→RI table per chromatogram (`.calib`), optional "advanced" RT shift correction using a calibration compound; RT-only alignment as fallback. | basics + reference shift done (#20, #45); mix from library, editable table, per-run calibration, RT-only (#81) |
 | 10 | Batch compound detection wizard | `Compound Detection Wizard...` | Runs #7 for many files after RI calibration. | targeted done (#22); per-run result list done (#78) |
-| 11 | Batch quantification | `BatchQuantificationWizard`, `BatchQuantificator` | Targeted (reference library only) or non-targeted (temporary library collecting all spectra); replicate groups via regex; compound filter (reproducibility, discrepancy index, min ions); extended SIC rescan for missing quant ions; result table export. | targeted + groups done (#22); non-targeted #58; result views #83 |
+| 11 | Batch quantification | `BatchQuantificationWizard`, `BatchQuantificator` | Targeted (reference library only) or non-targeted (temporary library collecting all spectra); replicate groups via regex; compound filter (reproducibility, discrepancy index, min ions); extended SIC rescan for missing quant ions; result table export. | targeted + groups done (#22); non-targeted, rescan, S/N and discrepancy filters (#58, [batch-quantification.md](batch-quantification.md)); result views #83 |
 | 12 | Quantification ions | `Compound::assignQuantificationIons`, `QuantIonChecker`, `QUANT_*` | N ions per compound, min distance, quality cut-off, excluded ions; manual/automatic ions in the library. | automatic ions in batch done; store in library #80, editor #12 |
 | 13 | Normalisation | `CompoundSeriesNormalizer`, `PoolNormalizer` | By internal standard compound, summed sample signal, pool measurement, z-score. | #23 |
 | 14 | Statistics | `BiomarkerDialog`, `tools::Statistics`, `BoxPlot`, `HistogramPlot` | Two-group biomarker table (means, ratio, p-value, hits), independent/paired samples, box plots. | #24 |
@@ -58,7 +58,6 @@ by exactly one issue.
 | 7 | Matched-filter peak detection for components | #82 |
 | 7 | Result list: table, find compound, CSV done (#78); save/load `.cmp` and `.cmp` as batch input | #107 |
 | 8, 19 | NIST import into SQLite, fragment pre-filter (`SQL_*`), `LS_IDENTIFICATION_ALGORITHM`, NIST path | #21 |
-| 11 | Non-targeted batch, rescan for missing quant ions, excluded ions, discrepancy index, S/N and required-peaks filters | #58 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |
@@ -67,7 +66,7 @@ by exactly one issue.
 | 14, 15 | Group assignment, p-value filter, box plots, PCA axes/loadings/variance, plot export | #24 |
 | 16 | MID wizard: methods, tracer, M1, result tree, StdErr, CSV/clipboard, MID plots | #28 |
 | 20 | CSV results + R template instead of the embedded R console | #26 |
-| files | `.cmp` and binary `.calib` layout, RT unit | #13 |
+| files | `.cmp` versions 1 to 3 (older releases, no sample) | — |
 | files | High-resolution runs (`getDataType() == 2`) | #34 |
 
 Issues that waited for lab or licensed files (#13, #21, #28, #29, #34, #41) now have a plan on the issue to produce references with the

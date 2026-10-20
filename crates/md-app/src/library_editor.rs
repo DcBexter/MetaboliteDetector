@@ -16,7 +16,7 @@ use add::{AddDialog, RtDialog, Source};
 #[derive(Default)]
 pub struct LibraryEditor {
     pub open: bool,
-    compounds: Vec<LibraryCompound>,
+    pub(crate) compounds: Vec<LibraryCompound>,
     /// `.mdlib` file the compounds came from or were last saved to; Save writes only there.
     path: Option<PathBuf>,
     /// Library name in the title; empty for a new library.
@@ -63,7 +63,7 @@ fn parse_ions(text: &str) -> Option<Vec<f32>> {
 }
 
 impl LibraryEditor {
-    fn select(&mut self, i: Option<usize>) {
+    pub(crate) fn select(&mut self, i: Option<usize>) {
         self.selected = i;
         self.ions = i.map_or(String::new(), |i| ions_text(&self.compounds[i].quant_ions));
     }
@@ -204,20 +204,25 @@ impl LibraryEditor {
         ui.separator();
         self.add_windows(ui.ctx());
 
-        egui::Panel::left("library compounds")
-            .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| self.list(ui, source.as_ref()));
-        if let Some(i) = self.selected {
-            egui::ScrollArea::vertical().show(ui, |ui| self.details(ui, i));
-        } else {
-            ui.label("Select a compound.");
-        }
+        crate::layout::list_and_details(
+            ui,
+            "library compounds",
+            self,
+            |ed, ui| ed.list(ui, source.as_ref()),
+            |ed, ui| match ed.selected {
+                Some(i) => {
+                    egui::ScrollArea::vertical().show(ui, |ui| ed.details(ui, i));
+                }
+                None => {
+                    ui.label("Select a compound.");
+                }
+            },
+        );
         saved
     }
 
     fn list(&mut self, ui: &mut egui::Ui, source: Option<&Source>) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("New compound").clicked() {
                 self.compounds.push(LibraryCompound::new("New compound"));
                 self.dirty = true;
@@ -248,7 +253,11 @@ impl LibraryEditor {
                 self.select(None);
             }
         });
-        ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Filter by name"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.filter)
+                .hint_text("Filter by name")
+                .desired_width(f32::INFINITY),
+        );
         let filter = self.filter.to_lowercase();
         let shown: Vec<usize> = (0..self.compounds.len())
             .filter(|&i| self.compounds[i].name.to_lowercase().contains(&filter))

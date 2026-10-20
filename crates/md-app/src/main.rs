@@ -15,6 +15,7 @@ mod export;
 mod identify;
 mod isotopes;
 mod jobs;
+mod layout;
 mod library_editor;
 mod loading;
 mod menu;
@@ -66,7 +67,7 @@ struct App {
     runs: Vec<Run>,
     /// Index into `runs` whose scan cursor and spectrum are shown.
     active: usize,
-    loading: Vec<(PathBuf, mpsc::Receiver<Result<Run, String>>)>,
+    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, String>>)>,
     load_started: Option<Instant>,
     load_note: String,
     error: Option<String>,
@@ -120,6 +121,9 @@ impl Default for App {
 /// (m/z, tolerance) of a SIC.
 type SicKey = (f32, f32);
 
+/// A loaded run with warnings about its side files (`.cmp`, `.calib`).
+type Loaded = (Run, Vec<String>);
+
 struct Run {
     path: PathBuf,
     name: String,
@@ -135,6 +139,8 @@ struct Run {
     components: Vec<Component>,
     /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
     peak_masses: Vec<u32>,
+    /// Calibration saved with the run by the old program, handed to the calibration window on load.
+    saved_calibration: Option<md_core::ri::RiCalibration>,
     analysis: settings::Analysis,
     scan: usize,
     /// Selected component; its deconvoluted spectrum replaces the raw one.
@@ -187,7 +193,9 @@ impl App {
         let cal = (self.ri.cal.as_deref()).filter(|_| {
             (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
         });
-        self.batch.window(ctx, self.library.as_ref(), cal);
+        let reference = (self.ri.reference.as_deref()).map(|n| (n, self.ri.ref_cutoff));
+        self.batch
+            .window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
