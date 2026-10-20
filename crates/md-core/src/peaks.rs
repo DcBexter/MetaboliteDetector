@@ -205,7 +205,7 @@ fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
 }
 
 /// The run as the old CDF import stores it: every scan centroided. `None` when no scan has two
-/// points within 0.1 m/z, where centroiding keeps every point of integer intensity and m/z >= 0.
+/// points within 0.1 m/z, where centroiding keeps every point of non-negative integer intensity and m/z >= 0.
 /// shortcut: that skip keeps fractional intensities and m/z in [-0.5, 0), which centroiding rounds
 /// or drops (CDF intensities are integers); round both ways alike if such input matters.
 fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
@@ -1115,7 +1115,8 @@ mod tests {
 
     #[test]
     fn reorder_peaks_leaves_out_the_last_bin_of_a_profile() {
-        // The profile of the first peak (bin 1000) covers bins 900..1100 (insertIonProfile, §4.2).
+        // The profile of the first peak (bin 1003) covers bins 903..1103 (insertIonProfile, §4.2); bin
+        // 1103 shares a lookup block with the covered bins, so the range test decides.
         let scans = 300;
         let mut traces = [noisy(scans), noisy(scans)];
         gauss(&mut traces[0], 100.0, 3.0, 20_000.0);
@@ -1139,10 +1140,10 @@ mod tests {
             quality: 0.0,
             sharpness: 1.0,
         };
-        let mut joined = [peak(0, 100, 100.0), peak(1, 105, 109.9)];
+        let mut joined = [peak(0, 100, 100.3), peak(1, 105, 110.2)];
         reorder_peaks(&mut joined, &t, 10.0, 0.05, 10);
         assert_eq!(joined[0].apex_scan, joined[1].apex_scan);
-        let mut apart = [peak(0, 100, 100.0), peak(1, 105, 110.0)];
+        let mut apart = [peak(0, 100, 100.3), peak(1, 105, 110.3)];
         reorder_peaks(&mut apart, &t, 10.0, 0.05, 10);
         assert_eq!((apart[0].apex_scan, apart[1].apex_scan), (100, 105));
     }
