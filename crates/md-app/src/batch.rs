@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{RunResult, ScanSettings, Table, TableSettings, scan_runs, table};
+use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply};
 use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
 
@@ -33,6 +34,39 @@ struct Scan {
     took: Duration,
 }
 
+/// Which normalisation (F13) the table shows; the table is derived again when this changes.
+#[derive(Clone, PartialEq)]
+struct Norm {
+    kind: Kind,
+    /// Library index of the internal standard.
+    standard: Option<usize>,
+    pool_group: String,
+    pool_nearest: usize,
+    pool_median: bool,
+    z_score: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    None,
+    InternalStandard,
+    TotalSignal,
+    Pool,
+}
+
+impl Default for Norm {
+    fn default() -> Self {
+        Self {
+            kind: Kind::None,
+            standard: None,
+            pool_group: POOL_GROUP.into(),
+            pool_nearest: 2,
+            pool_median: false,
+            z_score: false,
+        }
+    }
+}
+
 pub struct Batch {
     pub open: bool,
     paths: Vec<PathBuf>,
@@ -45,6 +79,11 @@ pub struct Batch {
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
     table: Option<(TableSettings, Result<Table, String>)>,
+    norm: Norm,
+    /// `table` normalised as `norm` says.
+    shown: Option<(Norm, Table)>,
+    /// File dates of the table's runs and how many could not be read; read once per table.
+    times: Option<(Vec<i64>, usize)>,
     note: String,
 }
 
@@ -60,6 +99,9 @@ impl Default for Batch {
             job: None,
             scan: None,
             table: None,
+            norm: Norm::default(),
+            shown: None,
+            times: None,
             note: String::new(),
         }
     }
@@ -237,6 +279,8 @@ impl Batch {
             let t =
                 table(&scan.runs, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
+            self.shown = None;
+            self.times = None;
         }
         ui.separator();
         ui.label(format!(
@@ -250,21 +294,20 @@ impl Batch {
         }
         match self.table.as_ref().map(|t| &t.1) {
             Some(Ok(t)) => {
-                if ui.button("Export CSV…").clicked()
-                    && let Some(p) = rfd::FileDialog::new()
-                        .add_filter("CSV", &["csv"])
-                        .set_file_name("results.csv")
-                        .save_file()
-                {
-                    self.note = match std::fs::File::create(&p)
-                        .map(std::io::BufWriter::new)
-                        .and_then(|f| t.write_csv(f))
-                    {
-                        Ok(()) => format!("Saved {}", p.display()),
-                        Err(e) => format!("Export failed: {e}"),
-                    };
+                norm_controls(ui, &mut self.norm, t);
+                pool_notes(ui, &self.norm, t, &scan.runs, &mut self.times);
+                if self.shown.as_ref().is_none_or(|s| s.0 != self.norm) {
+                    let n = &self.norm;
+                    let times = self.times.as_ref().map(|t| t.0.as_slice());
+                    let shown = apply(t, &mode(n, t, times.unwrap_or_default()), n.z_score);
+                    self.shown = Some((n.clone(), shown));
                 }
-                table_view(ui, t)
+                if let Some((_, shown)) = &self.shown {
+                    if let Some(note) = export_button(ui, shown) {
+                        self.note = note;
+                    }
+                    table_view(ui, shown, &self.norm);
+                }
             }
             Some(Err(e)) => {
                 ui.colored_label(
@@ -277,12 +320,38 @@ impl Batch {
     }
 }
 
+/// The export has the values the table shows. Returns a note after a save attempt.
+fn export_button(ui: &mut egui::Ui, t: &Table) -> Option<String> {
+    if !ui.button("Export CSV…").clicked() {
+        return None;
+    }
+    let p = rfd::FileDialog::new()
+        .add_filter("CSV", &["csv"])
+        .set_file_name("results.csv")
+        .save_file()?;
+    Some(
+        match std::fs::File::create(&p)
+            .map(std::io::BufWriter::new)
+            .and_then(|f| t.write_csv(f))
+        {
+            Ok(()) => format!("Saved {}", p.display()),
+            Err(e) => format!("Export failed: {e}"),
+        },
+    )
+}
+
 /// Rows are virtualised, so only the visible ones are laid out each frame.
 /// shortcut: all columns are laid out per visible row; virtualise columns too if studies with
 /// thousands of runs feel slow.
-fn table_view(ui: &mut egui::Ui, t: &Table) {
+fn table_view(ui: &mut egui::Ui, t: &Table, norm: &Norm) {
+    let what = match (norm.kind, norm.z_score) {
+        (Kind::None, false) => "summed quant ion integrals",
+        (_, false) => "normalised quant ion integrals",
+        (Kind::None, true) => "z-scores of the summed integrals",
+        (_, true) => "z-scores of the normalised integrals",
+    };
     ui.label(format!(
-        "{} substances × {} runs; values are summed quant ion integrals",
+        "{} substances × {} runs; values are {what}",
         t.rows.len(),
         t.runs.len()
     ));
@@ -331,4 +400,120 @@ fn table_view(ui: &mut egui::Ui, t: &Table) {
                 });
             });
     });
+}
+
+fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
+    ui.horizontal(|ui| {
+        ui.label("Normalise by");
+        for (kind, title) in [
+            (Kind::None, "nothing"),
+            (Kind::InternalStandard, "internal standard"),
+            (Kind::TotalSignal, "total signal"),
+            (Kind::Pool, "pool"),
+        ] {
+            ui.selectable_value(&mut n.kind, kind, title);
+        }
+        ui.checkbox(&mut n.z_score, "z-score");
+    });
+    match n.kind {
+        Kind::InternalStandard => {
+            ui.horizontal(|ui| {
+                ui.label("Internal standard");
+                let name = |c: Option<usize>| {
+                    t.rows
+                        .iter()
+                        .find(|r| Some(r.compound) == c)
+                        .map_or("choose…", |r| r.name.as_str())
+                };
+                egui::ComboBox::from_id_salt("norm standard")
+                    .selected_text(name(n.standard))
+                    .show_ui(ui, |ui| {
+                        for r in &t.rows {
+                            ui.selectable_value(&mut n.standard, Some(r.compound), &r.name);
+                        }
+                    });
+            });
+        }
+        Kind::Pool => {
+            ui.horizontal(|ui| {
+                ui.label("Pool runs are the replicate group");
+                ui.add(egui::TextEdit::singleline(&mut n.pool_group).desired_width(80.0));
+                ui.label("nearest pool runs");
+                ui.add(egui::DragValue::new(&mut n.pool_nearest).range(1..=99));
+                ui.checkbox(&mut n.pool_median, "median");
+            })
+            .response
+            .on_hover_text("Each run is divided by the mean or median of the nearest pool runs in time (file date). Pool runs keep their raw values.");
+        }
+        Kind::None | Kind::TotalSignal => {}
+    }
+}
+
+fn mode(n: &Norm, t: &Table, times: &[i64]) -> Normalization {
+    match n.kind {
+        Kind::None => Normalization::None,
+        Kind::TotalSignal => Normalization::TotalSignal,
+        Kind::InternalStandard => Normalization::InternalStandard(
+            t.rows
+                .iter()
+                .position(|r| Some(r.compound) == n.standard)
+                .unwrap_or(usize::MAX),
+        ),
+        Kind::Pool => Normalization::Pool(Pool {
+            group: n.pool_group.clone(),
+            times: times.to_vec(),
+            nearest: n.pool_nearest,
+            median: n.pool_median,
+        }),
+    }
+}
+
+/// The old program orders runs by acquisition date; the file date stands in for it.
+/// shortcut: files are found by name, so equal names in different folders are not told apart.
+fn run_times(t: &Table, runs: &[RunResult]) -> (Vec<i64>, usize) {
+    let by_name: std::collections::HashMap<_, _> = runs
+        .iter()
+        .filter_map(|r| Some((r.path.file_name()?.to_string_lossy().into_owned(), &r.path)))
+        .collect();
+    let mut missing = 0;
+    let times = t
+        .runs
+        .iter()
+        .map(|name| {
+            by_name
+                .get(name)
+                .and_then(|p| std::fs::metadata(p).ok()?.modified().ok())
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or_else(
+                    || {
+                        missing += 1;
+                        0
+                    },
+                    |d| d.as_secs() as i64,
+                )
+        })
+        .collect();
+    (times, missing)
+}
+
+/// Reads the run dates once and warns when the pool settings cannot work.
+fn pool_notes(
+    ui: &mut egui::Ui,
+    n: &Norm,
+    t: &Table,
+    runs: &[RunResult],
+    times: &mut Option<(Vec<i64>, usize)>,
+) {
+    if n.kind != Kind::Pool {
+        return;
+    }
+    let (_, missing) = times.get_or_insert_with(|| run_times(t, runs));
+    if *missing > 0 {
+        ui.label(format!(
+            "No file date for {missing} runs; they count as time 0."
+        ));
+    }
+    if !t.groups.contains(&n.pool_group) {
+        ui.label("No run is in the pool group: every normalised value is empty.");
+    }
 }

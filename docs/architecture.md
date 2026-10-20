@@ -13,7 +13,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | File dialogs | rfd | Native dialogs on every OS. |
 | NetCDF | `netcdf3` (pure Rust) | ANDI-MS files are NetCDF-3; no libnetcdf/HDF5 C dependency to ship on Windows. |
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
-| R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and CLI) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
+| R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and the planned md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
 
 ## Layout
 
@@ -443,7 +443,7 @@ because the example `.cdf` files carry the instrument's `total_intensity`, not t
 ## Spectrum normalisation and export
 
 `md_core::spectrum::normalize` divides a spectrum by one norm: none, base peak, unit (vector length) or
-relative (total signal), like the old `SpectrumPlot` ([algorithms.md](reverse-engineering/algorithms.md) §7c).
+relative (total signal), like the old `SpectrumPlot` ([algorithms.md](reverse-engineering/algorithms.md) §7d).
 Spectra are centroid in this rewrite (NetCDF and `.bin` hold ions, not profile points), so there is no
 profile/centroid switch. File → Export (`crates/md-app/src/export.rs`) writes the shown chromatogram of the
 active run (TIC and/or SIC, every scan, not the decimated plot points) and the shown spectrum (with the

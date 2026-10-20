@@ -1,5 +1,5 @@
 //! Spectrum display normalisation, as in the old `SpectrumPlot::getNormalizedData`
-//! (`docs/reverse-engineering/algorithms.md` §7c): every intensity is divided by one norm of the spectrum.
+//! (`docs/reverse-engineering/algorithms.md` §7d): every intensity is divided by one norm of the spectrum.
 
 /// Old `Normalization` enum (`NONE`, `BP`, `SSUM`, `SUM`) with the menu names of the issue.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
