@@ -356,11 +356,6 @@ impl MidWindow {
         result_view(ui, r, &mut self.note);
     }
 
-    /// Whether Start can run once the library is ready; the guided steps go on once it can.
-    pub fn ready(&self) -> bool {
-        self.problem().is_none()
-    }
-
     /// Progress and Cancel while it runs, else Start and what it will use.
     pub fn start_row(
         &mut self,
@@ -421,7 +416,7 @@ impl MidWindow {
     }
 
     /// Why the MIDs cannot be determined yet.
-    fn problem(&self) -> Option<&'static str> {
+    pub fn problem(&self) -> Option<&'static str> {
         let tracer = self.tracer.trim();
         if self.labelled.is_empty() {
             Some("Add labelled runs.")

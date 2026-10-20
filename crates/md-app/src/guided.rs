@@ -34,10 +34,24 @@ pub mod text {
     pub const TO_EXPERT: &str = "Open the window";
     pub const TO_EXPERT_HINT: &str =
         "Leave the steps and go on in the full window, with the values set so far";
-    pub const ACTIVE_RUN: &str = "Active run";
-    pub const LIBRARY: &str = "Library";
-    pub const LOADING: &str = "Loading…";
-    pub const NONE: &str = "none";
+    pub const LIBRARY_LOADING: &str = "Library: loading…";
+    pub const BACK_HINT: &str = "The step before; what you set stays";
+    pub const NEXT_HINT: &str = "The next step";
+    pub const CONTINUE_HINT: &str = "Start working in the chosen mode";
+
+    pub fn active_run(name: Option<&str>) -> String {
+        match name {
+            Some(n) => format!("Active run: {n}"),
+            None => "No run open yet".into(),
+        }
+    }
+
+    pub fn library(name: Option<&str>) -> String {
+        match name {
+            Some(n) => format!("Library: {n}"),
+            None => "No library open yet".into(),
+        }
+    }
 
     pub fn step_of(x: usize, n: usize) -> String {
         format!("Step {x} of {n}")
@@ -129,7 +143,7 @@ pub mod text {
                 "Add the runs",
                 "Add the labelled runs and, for the reference correction, unlabelled runs of the \
                  same substances.",
-                "Add the runs the correction needs first",
+                "Add the runs first, or fix what the step shows",
             ),
             Step::StartMid => (
                 "Start",
@@ -195,7 +209,7 @@ impl Flow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Step {
     OpenRun,
     FindAlkanes,
@@ -291,7 +305,9 @@ impl App {
                 ui.add_space(8.0);
                 ui.label(text::ASK_LATER);
                 ui.add_space(8.0);
-                ui.button(text::CONTINUE).clicked()
+                ui.button(text::CONTINUE)
+                    .on_hover_text(text::CONTINUE_HINT)
+                    .clicked()
             });
             // Escape or a click outside keeps the preselected choice.
             if modal.inner || modal.should_close() {
@@ -319,12 +335,19 @@ impl App {
                 ui.heading(title);
                 ui.label(what);
                 ui.separator();
+                // Per step, so a step does not open at the scroll offset of the one before.
                 egui::ScrollArea::vertical()
+                    .id_salt(step)
                     .max_height(ctx.content_rect().height() * 0.5)
                     .show(ui, |ui| self.step_ui(ui, step));
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if i > 0 && ui.button(text::BACK).clicked() {
+                    if i > 0
+                        && ui
+                            .button(text::BACK)
+                            .on_hover_text(text::BACK_HINT)
+                            .clicked()
+                    {
                         go = Some(i - 1);
                     }
                     if i + 1 == steps.len() {
@@ -339,6 +362,7 @@ impl App {
                     }
                     if ui
                         .add_enabled(self.done(step), egui::Button::new(text::NEXT))
+                        .on_hover_text(text::NEXT_HINT)
                         .on_disabled_hover_text(waiting)
                         .clicked()
                     {
@@ -378,7 +402,7 @@ impl App {
             Step::FindAlkanes => self.ri.cal.is_some() || self.ri.rt_only,
             Step::Library => self.library.is_some(),
             Step::BatchRuns => self.batch.has_runs(),
-            Step::MidRuns => self.mid.ready(),
+            Step::MidRuns => self.mid.problem().is_none(),
             _ => true,
         }
     }
@@ -389,23 +413,18 @@ impl App {
             Step::OpenRun => {
                 self.open_chromatograms_button(ui);
                 let name = self.runs.get(self.active).map(|r| r.name.as_str());
-                ui.label(format!(
-                    "{}: {}",
-                    text::ACTIVE_RUN,
-                    name.unwrap_or(text::NONE)
-                ));
+                ui.label(text::active_run(name));
             }
             Step::FindAlkanes => self.ri.contents(ui, self.runs.get(self.active)),
             Step::CheckPoints => self.ri.table(ui),
             Step::Library => {
                 self.open_library_button(ui);
-                let name = self.library.as_ref().map(|l| l.name.as_str());
-                let name = if self.library_job.is_some() {
-                    Some(text::LOADING)
+                if self.library_job.is_some() {
+                    ui.label(text::LIBRARY_LOADING);
                 } else {
-                    name
-                };
-                ui.label(format!("{}: {}", text::LIBRARY, name.unwrap_or(text::NONE)));
+                    let name = self.library.as_ref().map(|l| l.name.as_str());
+                    ui.label(text::library(name));
+                }
             }
             Step::BatchRuns => self.batch.runs_row(ui),
             Step::SaveCmp => self.batch.cmp_grid(ui),
@@ -415,7 +434,13 @@ impl App {
                 (self.batch).job_row(ui, self.library.as_ref(), cal, reference);
             }
             Step::MidMethod => self.mid.settings(ui),
-            Step::MidRuns => self.mid.run_lists(ui),
+            Step::MidRuns => {
+                self.mid.run_lists(ui);
+                // Also a tracer problem of the step before, which Next waits for too.
+                if let Some(p) = self.mid.problem() {
+                    ui.weak(p);
+                }
+            }
             Step::StartMid => {
                 let (cal, reference) = self.ri.for_search(self.library.as_deref());
                 (self.mid).start_row(ui, self.library.as_ref(), cal, reference);

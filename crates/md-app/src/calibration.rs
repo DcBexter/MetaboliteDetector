@@ -327,6 +327,9 @@ impl Calibration {
             });
         });
         ui.horizontal(|ui| {
+            if run.is_none() {
+                ui.weak("Open a run to find the alkanes in it.");
+            }
             if let Some(run) = run
                 && ui
                     .add_enabled(self.job.is_none(), egui::Button::new(format!("Find alkanes in {}", run.name)))

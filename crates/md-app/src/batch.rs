@@ -707,6 +707,9 @@ impl Batch {
                 if lib.is_some_and(|l| !self.library_ready(l)) {
                     ui.label("Library is being prepared for the new search or RT-only settings.");
                 }
+                if self.paths.is_empty() {
+                    ui.label("Add runs first.");
+                }
                 ui.label(&self.note);
             }
         });
