@@ -111,14 +111,18 @@ impl App {
         };
         // New search settings: prepare the library again, then every run is searched again.
         let wanted = self.settings.applied.search();
-        if lib.settings != wanted {
+        let rt_only = self.ri.rt_only;
+        if lib.settings != wanted || lib.prepared.is_rt_only() != rt_only {
             if self.library_job.is_none() && self.library_failed.as_ref() != Some(&wanted) {
                 let lib = lib.clone();
                 self.library_job = Some(spawn(ctx, move || {
                     Ok(Arc::new(Library {
                         path: lib.path.clone(),
                         name: lib.name.clone(),
-                        prepared: PreparedLibrary::new(&lib.compounds, &wanted),
+                        prepared: match rt_only {
+                            true => PreparedLibrary::new_rt_only(&lib.compounds, &wanted),
+                            false => PreparedLibrary::new(&lib.compounds, &wanted),
+                        },
                         compounds: lib.compounds.clone(),
                         settings: wanted,
                     }))
@@ -126,18 +130,20 @@ impl App {
             }
             return;
         }
-        let cal = &self.ri.cal;
         let reference = (self.ri.reference.as_ref())
-            .filter(|_| cal.is_some())
             // The window offers only compounds with RI; a namesake without RI must not shadow them.
-            .and_then(|n| (lib.compounds.iter()).position(|c| &c.name == n && c.spectrum.ri >= 0.0))
+            .and_then(|n| {
+                (lib.compounds.iter()).position(|c| &c.name == n && self.ri.anchor(c) >= 0.0)
+            })
             .map(|k| (k, self.ri.ref_cutoff));
-        let current = |k: &Key| {
-            Arc::ptr_eq(&k.0, lib)
-                && k.1.as_ref().map(Arc::as_ptr) == cal.as_ref().map(Arc::as_ptr)
-                && k.2 == reference
-        };
         for run in &mut self.runs {
+            let cal = self.ri.base(run).cloned();
+            let reference = reference.filter(|_| cal.is_some());
+            let current = |k: &Key| {
+                Arc::ptr_eq(&k.0, lib)
+                    && k.1.as_ref().map(Arc::as_ptr) == cal.as_ref().map(Arc::as_ptr)
+                    && k.2 == reference
+            };
             if let Some((k, rx)) = &run.ident_job
                 && let Some(result) = poll_job(rx, &format!("{}: identification", run.name))
             {
@@ -177,7 +183,7 @@ impl App {
 }
 
 /// Names of the assigned library compounds at the component apexes on the TIC.
-pub fn labels(run: &Run) -> Vec<Label> {
+pub fn labels(run: &Run, show: impl Fn(f64) -> bool) -> Vec<Label> {
     let Some(((lib, ..), id, _)) = &run.ident else {
         return Vec::new();
     };
@@ -185,7 +191,7 @@ pub fn labels(run: &Run) -> Vec<Label> {
         .iter()
         .zip(&id.assigned)
         .filter_map(|(k, hit)| {
-            let h = hit.as_ref()?;
+            let h = hit.as_ref().filter(|h| show(h.overall))?;
             let s = k.apex_scan as usize;
             Some((
                 [run.minutes[s], run.tic[s]],

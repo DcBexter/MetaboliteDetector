@@ -22,12 +22,12 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 1 | NetCDF (ANDI-MS) import | `&NetCDF import...`, `CDFBatchImporter`, `gcms::CdfImporter` | Batch converts `.cdf` to the internal `.bin`/`.idx` format; optional spectrum compression; optional TOF calibration. | done (read directly, no conversion; NetCDF export #30) |
 | 2 | FastFlight import | `&FastFlight Import...`, `gcms::FastFlightImporter`, `MsData.FFT` | Raw TOF data; needs `.mzcalib` TOF calibration; can write `_centroid/_profile/_nominal.cdf`. | #29 |
 | 3 | TOF m/z calibration | `TOFCalibrationWindow`, `TOFCalibrationCalculator` | Polynomial fit of calibration pairs from a reference spectrum; saved as `.mzcalib`. | #29 |
-| 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, info, score filter #79; export #9 |
+| 4 | Chromatogram viewer | `ChromatogramPlot`, `SpectrumPlot`, `MainWindow` | TIC, single-ion chromatogram, scan/time/ion spinners, slider, 1st-derivative plot, zoom, CSV/clipboard/image export, label compounds by score (≤0.7, >0.7, >0.9). | TIC/SIC, zoom, slider, unload done; derivative, time unit, run info, score filter, auto-Y done; export #9 |
 | 5 | Spectrum view | `SpectrumPlot`, `SplitSpectrumPlot` | Profile/centroid, normalisation (none, base peak, unit, relative), split/difference mode for detected vs library spectrum. | normalisation #9; library comparison, centroid, component panel #77 |
 | 6 | Chromatogram overlay | `ChromatogramOverlayDialog`, `MultiChromatogramPlot` | Overlay TIC or SIC of several runs. | done (#8) |
 | 7 | Component detection (deconvolution) | `&Detect Components...`, `GCMSAnalyzer`, `PeakAnalyzer`, `DefaultPeakDetector`, `MatchedPeakDetector`, `ModelPeak`, `BaselineStatistics` | Peak detection per ion (derivative thresholds or matched filtering), baseline adjustment, noise units, binning (bins/scan), deconvolution width, min peaks, min % of base peak, model-peak integration. Results stored as `.cmp`. | default detector + deconvolution done; matched filtering #82; `.cmp` #13/#78 |
 | 8 | Library identification | `gcms::LibrarySearch`, `SpectrumFunctions`, settings `LS_*` | Score = spectrum similarity, RI similarity or combined; pure/impure factors, cutoff, max ΔRI, mass filter ranges, scaled library, fragment pre-filter (`SQL_*`). | done (scaled library always on); `SQL_*` pre-filter and `LS_IDENTIFICATION_ALGORITHM` #21 |
-| 9 | RI calibration wizard | `RICalibrationWizard`, `RICalculator` | Alkane (or other) calibration mix from a library, RT→RI table per chromatogram (`.calib`), optional "advanced" RT shift correction using a calibration compound; RT-only alignment as fallback. | basics + reference shift done (#20, #45); mix from library, editable table, per-run calibration #81 |
+| 9 | RI calibration wizard | `RICalibrationWizard`, `RICalculator` | Alkane (or other) calibration mix from a library, RT→RI table per chromatogram (`.calib`), optional "advanced" RT shift correction using a calibration compound; RT-only alignment as fallback. | basics + reference shift done (#20, #45); mix from library, editable table, per-run calibration, RT-only (#81) |
 | 10 | Batch compound detection wizard | `Compound Detection Wizard...` | Runs #7 for many files after RI calibration. | targeted done (#22); per-run result list #78 |
 | 11 | Batch quantification | `BatchQuantificationWizard`, `BatchQuantificator` | Targeted (reference library only) or non-targeted (temporary library collecting all spectra); replicate groups via regex; compound filter (reproducibility, discrepancy index, min ions); extended SIC rescan for missing quant ions; result table export. | targeted + groups done (#22); non-targeted #58; result views #83 |
 | 12 | Quantification ions | `Compound::assignQuantificationIons`, `QuantIonChecker`, `QUANT_*` | N ions per compound, min distance, quality cut-off, excluded ions; manual/automatic ions in the library. | automatic ions in batch done; store in library #80, editor #12 |
@@ -51,14 +51,13 @@ by exactly one issue.
 |---|-------------|---------|
 | 1 | Batch conversion, spectrum compression, recursive search | not needed: runs are read directly |
 | 2, 3 | FastFlight `.FFT`/`.FFC` import, centroiding (`SF_*`), TOF calibration window, `.mzcalib`, Calibration Setter | #29 |
-| 4 | First derivative, time unit (ms/s/min), run info dialog, label filter by score, auto-scale Y | #79 |
+| 4 | First derivative, time unit (ms/s/min), run info dialog, label filter by score, auto-scale Y | done (#79); the global noise standard deviation and TOF calibration are not in the new data model and are left out of Run info |
 | 4, 21 | Copy data/image, CSV, PNG/PDF/SVG, image size dialog | #9 |
 | 5 | Split/difference/normal comparison with the library spectrum, centroid toggle, spectrum export | #77 |
 | 5 | Component panel: S/N, sharpness, discrepancy index, scores, ion counts, peak list | #77 |
 | 7 | Matched-filter peak detection for components | #82 |
 | 7 | Per-run result list: table, find compound, CSV, save/load `.cmp`, `.cmp` as batch input | #78 |
 | 8, 19 | NIST import into SQLite, fragment pre-filter (`SQL_*`), `LS_IDENTIFICATION_ALGORITHM`, NIST path | #21 |
-| 9 | Calibration mix from a library, editable RT/RI table, RT-only fallback, calibration per run | #81 |
 | 11 | Non-targeted batch, rescan for missing quant ions, excluded ions, discrepancy index, S/N and required-peaks filters | #58 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |

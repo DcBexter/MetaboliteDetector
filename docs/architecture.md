@@ -194,6 +194,19 @@ time window per marker. The app's *Analysis → RI calibration* window finds alk
 (m/z 57, C10–C36 by default) or loads/saves a `.calib`; the calibration applies to all open runs and to the
 library search, and the status bar shows the RI of the scan or selected component.
 
+Calibration mix (old wizard, [algorithms.md](reverse-engineering/algorithms.md) §6.8): the user picks library
+compounds with RI; the calibration run's components are searched against them by spectrum only, and
+`match_mix` assigns them as the old `matchCompounds` does (mix by ascending RI, each takes the next component
+in time order that has it as a hit). The result is an editable table (use / RT / RI); substances not found
+are unused rows. A change takes effect when the field is left or the drag ends and builds a new
+`RiCalibration` (invalid tables keep the old one and show the error). Each run can take over the table as
+its own calibration and save it as `.calib`; runs without one use the table. Deviations: the old table offered
+the components' times in a combo box, here the time is typed; substances with the same RI are both kept.
+*RT only* (old "Use Retention time for chromatogram alignment (not recommended)", with its warning):
+`RiCalibration::identity()` (RI = time in s) and `PreparedLibrary::new_rt_only` (library RI = library RT in s)
+make the library search and the reference shift compare times. The RT/1000 fallback of §5.6 is still not
+ported for the normal mode.
+
 Checked against TargetSearch on the example data (`tests/example_data.rs`): its FAME markers (m/z 87 in
 the windows of `rimLimits.txt`) give the RI of every scan in `RI_*.txt` to within 0.01 in 14 of 15 runs.
 In `7235eg06` TargetSearch took a peak at 321.1 s as the middle marker, where m/z 87 reaches 36 512;
