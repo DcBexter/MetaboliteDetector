@@ -37,7 +37,7 @@ decompilation, **P** = package contents. Algorithm details: [algorithms.md](algo
 | 16 | MID wizard | `MIDWizard`, `tools::MIDSolver`, `NaturalMIDCalculator`, `MIDCompoundSeries` | Mass isotopomer distributions of labelled vs unlabelled runs; correction by sum formula, by unlabelled reference runs, by library spectrum, or uncorrected; M1 correction; tracer natural abundance; fragment syntax `(174/8)(261/5)`. | #28 |
 | 17 | Natural isotope calculator | `NaturalIsotopeWidget`, `:/isotopes.csv` | Isotope pattern for a sum formula. | done (#27) |
 | 18 | Library editor | `LibraryEditor`, `DialogAddLib`, `DialogImportLibrary`, `DialogExportLibrary` | Edit compounds, RI, quant ions, features (FRAG, comments); import/export AMDIS MSL (nominal/profile); add detected compound to library; copy RTs to a target library. | `.lbr` v2 to v5 read (#41), MSL import done (#11), MSL export as nominal / profile / FWHM done (#84, #114); editor #12; add compound / copy RTs done (#80, "Modify entry" spectrum merge not ported) |
-| 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | #21 |
+| 19 | NIST search | `&NIST search...`, `gcms::NISTParser` | Search a user-supplied NIST library file. | NIST text `.sdf` with the old fragment pre-filter and NIST MSP `.msp` read and searched (PR #123); live test with a real NIST file open (#21) |
 | 20 | R console | `RConsole`, `MDRConsole`, RInside | Results as R `data.frame data`, scripts, SVG/PDF plots, `.RData` export. | CSV + R template #26 (embedded R not ported on purpose) |
 | 21 | Exports | `NetCDFExporter`, `CSVChromatogramExporter`, `CompoundExporter` | Chromatogram to NetCDF/CSV, compound tables to CSV, plots to PDF/PNG. | NetCDF done (#30); CSV/PNG/PDF/SVG/clipboard #9; compound CSV done (#78) |
 
@@ -56,7 +56,8 @@ by exactly one issue.
 | 5 | Profile (centroid toggle): the rewrite reads centroid spectra only | not planned |
 | 7 | Matched-filter peak detection for components | #82 |
 | 7 | Result list: table, find compound, CSV done (#78); save/load `.cmp` and `.cmp` as batch input | #107 |
-| 8, 19 | NIST import into SQLite, fragment pre-filter (`SQL_*`), `LS_IDENTIFICATION_ALGORITHM`, NIST path | #21 |
+| 8, 19 | NIST import, fragment pre-filter (`SQL_*` defaults) | done (PR #123); live test #21 |
+| 8, 19 | `SQL_*` and `LS_IDENTIFICATION_ALGORITHM` in the settings, NIST path, "NIST search..." for one component | #131 |
 | 11 | Result tree, alternatives, RT table, rel. std. error, blanks / P(blank), delete rows/columns, all-ions CSV | #83 |
 | 12, 18 | Store detected compound and quant ions in the library, copy RTs to a target library | #80 |
 | 18 | Editor: auto quant ions, features dialog, ion frequency, resolution, MID fragments | #12 |

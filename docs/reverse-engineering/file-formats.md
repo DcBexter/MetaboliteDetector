@@ -525,8 +525,8 @@ a possible bug in the legacy writer (Inferred from the decompile). The checksum 
 
 ## 6. MSL (AMDIS) and NIST MSP import/export
 
-Status: partially decoded. The import function is decompiled but truncated; the NIST parser functions are
-named but not decoded. Most of this section is based on string literals and local names (Inferred).
+Status: MSL partially decoded (the import function is decompiled but truncated; most of 6.1 is based on string
+literals and local names, Inferred). NIST text decoded with a black-box driver (6.3).
 
 ### 6.1 MSL import: `LibrarySearch<int,float>::importMSL(char*)` 0x72b098 (Observed decompile, truncated)
 
@@ -613,24 +613,73 @@ back), a lone point at mass 0 (dropped by the old code) and a base peak of 0. Th
 without a space when the intensity has four digits (`( 57.000000  1.001000)`): no parser can split that peak, the
 old program writes it the same way.
 
-### 6.3 NIST MSP parser (`NISTParser`)
+### 6.3 NIST text (`NISTParser`, `SQLLibrary::importNIST`)
 
-Named functions (addresses from the earlier nm pass, Ghidra = nm + 0x100000): constructor 0x7ed026,
-nextRecord 0x7ed2be, nextField 0x7ed448, getFieldName 0x7ed88a, getFieldValue 0x7ed94c, trim 0x7edabe.
-**None of these were decompiled in this pass.** Gap.
+Decoded with a black-box driver that calls the old binary's own functions on a synthetic file
+(`tools/nist/make-nist-dump.sh`, input `crates/md-core/tests/data/synthetic-nist.sdf`, invented names and
+peaks; no NIST data). Reader: `md_core::library::parse_nist` (`.sdf`), tested on the same file
+(`tests/nist_synthetic.rs`).
 
-Field keys present as strings (Observed; their use by the `ImportNist` SQL path is Inferred from string adjacency):
-`NAME`, `SYNONYMS`, `FORMULA`, `CASNO`, `NISTNO`, `ESTIMATED KOVATS RI`, `RI ESTIMATION ERROR`,
-`MASS SPECTRAL PEAKS`. The SQL insert writes
-`compound (time_stamp, id, name, ri, ri_err, synonyms, formula, mw, cas, nist_no, nist_id, factor_intensity, ...)`.
+Grammar (Observed, 10 records parsed):
+- SDF-like records end with a line `$$$$`.
+- A field starts with a line matching `\s*>\s*<(.*)>`; the name is the text between `<` and `>` and may
+  contain spaces (`ESTIMATED KOVATS RI`).
+- The value is the following lines up to the next field or `$$$$`, each trimmed with `" \n\r\t"`, blank
+  lines dropped, joined with `\n`.
+- Fields may be missing and come in any order. Lines before the first field (an SDF mol block) and a
+  leading UTF-8 byte order mark are ignored by the rewrite (Inferred for the old parser).
+
+Import (`importNIST` 0x6e4024, one SQLite `compound` row per record):
+
+| Field | Into | Absent |
+|---|---|---|
+| `NAME` | name (a `"` becomes `''` in the SQL text only: SQL escaping) | empty |
+| `ESTIMATED KOVATS RI` | RI | -1 |
+| `RI ESTIMATION ERROR`, `FORMULA`, `CASNO`, `NISTNO`, `ID`, `MW`, `SYNONYMS` | own columns; rewrite: features under the field name | 0, `''` or -1 |
+| `MASS SPECTRAL PEAKS` | one `m/z intensity` pair per line, m/z by strtol, intensity by strtod | no record |
+
+- Only peaks with m/z > 69 and intensity > 0 are kept (Observed: 50 and 60 dropped). A record without a
+  kept peak is skipped with `No intensity, skipping...` (Observed).
+- RT is -1. Unknown fields: the rewrite keeps them as features (old: not tested).
+- Constants `factor_intensity` 0.6 and `factor_mz` 2.0 and the computed `spec_length` are not needed by
+  the rewrite (the search uses the `LS_*` settings).
+
+Fragment index (`red_spectrum`, built by `Spectrum::getSpectrumFragments` and `Fragment`, Observed in the
+disassembly and Verified against the stored rows):
+1. Walk the peaks in mass order. A peak whose next peak is exactly 1 m/z higher and less intense opens or
+   continues a run; the first peak where that fails closes the run and belongs to it. A run is kept when
+   `100 · sum / total signal >= 1.0`. A peak outside every run is a lone peak; a run below 1 % is dropped
+   (its peaks are not lone).
+2. Lone peaks directly below a run (M-1, M-2, … without gaps) join it ("hydrogen peaks").
+3. The fragment's ion is the most intense mass (the first on ties), its intensity the sum of the group.
+   Examples: 71/72 → 71 (112); 70/71/72 with 5/100/12 → 71 (117); 119/120 with 10/100 → none (rising);
+   133/134/135 with 100/10/50 → 133 (110), 135 stays alone.
+
+Pre-filter (`SQLLibrary::getPotentialHits` 0x6e2350): the query's fragments are sorted by summed intensity,
+strongest first (`compare_intens`), and the first `SQL_MAX_NUMBER_FRAGMENTS` = 5 are matched against the
+stored ions with `frag = ion`. A compound is a candidate with `hits > SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`
+(3), so at least 4 shared fragments (Verified: 4 shared → candidate, 3 shared → not). The tolerance
+argument is never read. Query ions below m/z 70 are not dropped: a query whose strongest fragments lie
+below 70 (41/42, 43/44, 55/56, 57/58) finds no candidate, because the library side never stores them
+(Verified: no candidate and 0 hits in the old binary, the same in the rewrite). The candidates are then
+scored like `LibrarySearch` (§5 of algorithms.md):
+Verified for an identical spectrum (S = 1, RI 0.969233234, O = 0.989637399) and for a different one
+(S = 0.773023519, O = 0.842290311); the rewrite agrees to 1e-8.
 
 Also present: `Name:`, `Formula:`, `Comment:`, `Ions:` strings in the GUI or compound-info text (purpose
-Unknown; probably the display/export of a compound, not the MSP reader).
+Unknown; probably the display/export of a compound, not this reader).
+
+### 6.4 NIST MSP text (public format, not in the old program)
+
+`parse_msl` also reads MSP files as published by NIST and MoNA/MassBank: keys `Name:`, `Synon:`, `Formula:`,
+`MW:`, `CAS#:`, `NIST#:`, `Comments:`, `Num Peaks:`; after `Num Peaks:` a line that starts with a digit holds
+`m/z intensity` pairs separated by `;` or spaces, each optionally followed by a quoted annotation. Repeated
+keys (`Synon:`) are joined with `\n`. Retention-index notations in comments are not read.
 
 ### Unknowns (section 6)
 - Full MSL line grammar, rt/ri key names, and handling of multiple spectra per block.
 - Whether `NUM PEAKS` is trusted or recounted.
-- NIST parser state machine and field order (all functions undecoded).
+- NIST: duplicate m/z in one record, ties in the fragment order, `LS_IDENTIFICATION_ALGORITHM` 1 and 2.
 - Encoding of MSL and NIST files.
 
 ---
@@ -643,6 +692,6 @@ Unknown; probably the display/export of a compound, not the MSP reader).
 4. .mzcalib: reader; precision; encoding.
 5. GCMSSettings: fromStream read order and checksum check; persistence of LS_CUTOFF and SQL_* fields.
 6. LBR: Peak<int,float> records of version 2/3 compounds with peaks (decoded otherwise, section 1).
-7. MSL and NIST: most functions undecoded; grammar inferred from strings.
+7. MSL: most functions undecoded; grammar inferred from strings. NIST: decoded (6.3) except the gaps in its list.
 8. Ghidra no-return truncations hide the tail of several readers (fromStream, readIndexFile, readTOFCalibData,
    RICalculator::fromDisk, importMSL). A disassembly-level or Ghidra no-return fix is needed to close these.

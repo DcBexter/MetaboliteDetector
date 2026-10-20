@@ -1,0 +1,209 @@
+> <NAME>
+Synthetic alpha
+
+> <ID>
+9001
+
+> <CASNO>
+12345
+
+> <NISTNO>
+1
+
+> <FORMULA>
+C7H8
+
+> <MW>
+92
+
+> <ESTIMATED KOVATS RI>
+1450
+
+> <RI ESTIMATION ERROR>
+20
+
+> <MASS SPECTRAL PEAKS>
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+105 60
+106 7
+119 50
+133 40
+147 30
+161 20
+
+$$$$
+> <NAME>
+Synthetic beta
+
+> <ID>
+9002
+
+> <MW>
+120
+
+> <MASS SPECTRAL PEAKS>
+73 100
+74 11
+85 90
+86 8
+99 70
+100 9
+113 60
+127 50
+141 40
+
+$$$$
+> <NAME>
+Synthetic gamma
+
+> <ID>
+9003
+
+> <MASS SPECTRAL PEAKS>
+71 100
+77 40
+91 80
+
+$$$$
+> <NAME>
+Synthetic delta
+
+> <ID>
+9004
+
+> <MASS SPECTRAL PEAKS>
+50 100
+60 80
+
+$$$$
+> <NAME>
+Synthetic "quoted" alpha twin
+
+> <ID>
+9005
+
+> <ESTIMATED KOVATS RI>
+1460
+
+> <MASS SPECTRAL PEAKS>
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+105 60
+106 7
+119 50
+133 40
+147 30
+161 20
+
+$$$$
+> <NAME>
+Synthetic eta
+
+> <ID>
+9006
+
+> <ESTIMATED KOVATS RI>
+1455
+
+> <MASS SPECTRAL PEAKS>
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+105 60
+106 7
+200 100
+210 100
+220 100
+230 100
+240 100
+
+$$$$
+> <NAME>
+Synthetic theta
+
+> <ID>
+9007
+
+> <ESTIMATED KOVATS RI>
+1000
+
+> <MASS SPECTRAL PEAKS>
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+105 60
+106 7
+
+$$$$
+> <NAME>
+Synthetic iota
+
+> <ID>
+9008
+
+> <ESTIMATED KOVATS RI>
+1455
+
+> <MASS SPECTRAL PEAKS>
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+119 50
+
+$$$$
+> <NAME>
+Synthetic kappa
+
+> <ID>
+9009
+
+> <ESTIMATED KOVATS RI>
+1455
+
+> <MASS SPECTRAL PEAKS>
+70 5
+71 100
+72 12
+77 40
+78 9
+91 80
+92 15
+105 60
+106 7
+
+$$$$
+> <NAME>
+Synthetic lambda
+
+> <ID>
+9010
+
+> <MASS SPECTRAL PEAKS>
+119 10
+120 100
+133 100
+134 10
+135 50
+150 1
+151 1
+200 1000
+
+$$$$
