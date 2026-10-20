@@ -77,7 +77,7 @@ fn trace_plot(
         .link_cursor(link, [true, false])
         .x_axis_label(format!("Retention time ({})", view.unit.label()))
         .y_axis_label(label)
-        .y_axis_formatter(|m, _| crate::view::compact(m.value))
+        .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
         .show(ui, |p| {
             // Draw at most ~2 points per pixel of the visible range, whatever the file size.
             let (lo, hi) = visible_minutes(p, view);
@@ -110,7 +110,7 @@ fn trace_plot(
             let px_per_t = p.response().rect.width() as f64 / (b.max()[0] - b.min()[0]).max(1e-9);
             let starts: Vec<f32> = labels
                 .iter()
-                .map(|l| (view.time(l.0[0]) * px_per_t) as f32)
+                .map(|l| ((view.time(l.0[0]) - b.min()[0]) * px_per_t) as f32)
                 .collect();
             let widths: Vec<f32> = labels
                 .iter()
