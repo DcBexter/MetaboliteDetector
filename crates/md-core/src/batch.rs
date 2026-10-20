@@ -119,7 +119,7 @@ pub fn scan_runs(
 ) -> Option<(Vec<RunResult>, Vec<String>)> {
     let next = AtomicUsize::new(0);
     let mut out: Vec<(usize, Result<RunResult, String>)> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..parallel.max(1))
+        let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
             .map(|_| {
                 scope.spawn(|| {
                     let mut mine = Vec::new();
@@ -265,6 +265,38 @@ pub struct Row {
     pub values: Vec<Option<f64>>,
 }
 
+impl Table {
+    /// RFC 4180 CSV with `.` decimals and `,` separators, readable by R (`read.csv`); in Excel use Data → From Text/CSV (UTF-8, comma):
+    /// `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are space-separated; a value
+    /// that was not found is an empty cell, which R reads as `NA`.
+    pub fn write_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
+        fn field(s: &str) -> String {
+            match s.contains([',', '"', '\n', '\r']) {
+                true => format!("\"{}\"", s.replace('"', "\"\"")),
+                false => s.into(),
+            }
+        }
+        let head = ["Substance", "RT_s", "Quant_ions"].map(String::from);
+        let head: Vec<String> = head
+            .into_iter()
+            .chain(self.runs.iter().map(|r| field(r)))
+            .collect();
+        writeln!(w, "{}", head.join(","))?;
+        for r in &self.rows {
+            let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
+            let cells = [field(&r.name), r.rt_s.to_string(), ions.join(" ")]
+                .into_iter()
+                .chain(
+                    r.values
+                        .iter()
+                        .map(|v| v.map(|v| v.to_string()).unwrap_or_default()),
+                );
+            writeln!(w, "{}", cells.collect::<Vec<_>>().join(","))?;
+        }
+        w.flush()
+    }
+}
+
 pub fn table(
     runs: &[RunResult],
     lib: &[LibraryCompound],
@@ -370,6 +402,48 @@ mod tests {
             integral,
             quality,
         }
+    }
+
+    #[test]
+    fn csv_quotes_fields_and_leaves_missing_values_empty() {
+        let t = Table {
+            runs: vec!["a,1.cdf".into(), "b.cdf".into()],
+            groups: vec![String::new(); 2],
+            rows: vec![Row {
+                compound: 0,
+                name: "Glucose \"1\"".into(),
+                rt_s: 12.5,
+                ions: vec![73, 147],
+                values: vec![Some(1500.0), None],
+            }],
+        };
+        let mut out = Vec::new();
+        t.write_csv(&mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Substance,RT_s,Quant_ions,\"a,1.cdf\",b.cdf
+\"Glucose \"\"1\"\"\",12.5,73 147,1500,
+"
+        );
+    }
+
+    #[test]
+    fn csv_reports_a_failing_flush() {
+        struct Full;
+        impl std::io::Write for Full {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("disk full"))
+            }
+        }
+        let t = Table {
+            runs: vec![],
+            groups: vec![],
+            rows: vec![],
+        };
+        assert!(t.write_csv(Full).is_err());
     }
 
     #[test]

@@ -6,8 +6,10 @@ use std::io::Read;
 
 use flate2::read::GzDecoder;
 
+use crate::batch::{QuantSettings, ScanSettings};
 use crate::deconv::DeconvSettings;
 use crate::peaks::PeakSettings;
+use crate::ri::RiCalibration;
 use crate::search::SearchSettings;
 
 /// Old `GCMSSettings`. Defaults are the old static values (file-formats.md §5.1).
@@ -363,6 +365,29 @@ impl GcmsSettings {
         }
     }
 
+    /// Settings of a batch scan: the library is prepared with `search()`, but hits are cut off at the
+    /// default `LS_CUTOFF` (the GUI colours by score, a table needs a decision).
+    pub fn scan(&self, calibration: Option<RiCalibration>) -> ScanSettings {
+        ScanSettings {
+            peaks: self.peak(),
+            deconv: self.deconv(),
+            search: SearchSettings {
+                cutoff: SearchSettings::default().cutoff,
+                ..self.search()
+            },
+            calibration,
+        }
+    }
+
+    pub fn quant(&self) -> QuantSettings {
+        QuantSettings {
+            ion_number: self.quant_ion_number.max(1) as usize,
+            min_dist: self.quant_min_dist_ions as f32,
+            quality_cutoff: self.quant_quality_cutoff as f32,
+            excluded: self.quant_excl_ions.clone(),
+        }
+    }
+
     /// The GUI searches with cutoff 0 and colours by score (algorithms.md §5.8), so `LS_CUTOFF` is not used.
     pub fn search(&self) -> SearchSettings {
         SearchSettings {
@@ -415,6 +440,32 @@ mod tests {
             (3, 0.5, 1.0)
         );
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn scan_and_quant_settings_follow_the_fields() {
+        let s = GcmsSettings {
+            quant_ion_number: 0,
+            quant_min_dist_ions: 1.5,
+            quant_quality_cutoff: 2.5,
+            quant_excl_ions: vec![(73.0, 73.0)],
+            ..Default::default()
+        };
+        let q = s.quant();
+        assert_eq!((q.ion_number, q.min_dist, q.quality_cutoff), (1, 1.5, 2.5));
+        assert_eq!(q.excluded, [(73.0, 73.0)]);
+        let cal = RiCalibration::new([(0.0, 0.0), (60.0, 100.0)]).unwrap();
+        let scan = s.scan(Some(cal.clone()));
+        assert_eq!((scan.peaks, scan.calibration), (s.peak(), Some(cal)));
+        // The library is prepared with cutoff 0, the scan itself cuts hits off.
+        assert_eq!(scan.search.cutoff, SearchSettings::default().cutoff);
+        assert_eq!(
+            SearchSettings {
+                cutoff: 0.0,
+                ..scan.search
+            },
+            s.search()
+        );
     }
 
     /// §5.2: 191 bytes for the defaults, checksum 20.5.

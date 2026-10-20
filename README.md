@@ -16,6 +16,13 @@ cargo run --release -p metabolite-detector -- example-data/TargetSearchData/inst
 
 Pass several files (or pick several in File → Open) to overlay them; TIC, SIC (m/z ± tolerance) or both.
 
+Big studies without a window: `md-cli` finds the library substances in many runs and writes the substance × run
+table as CSV (options in [docs/architecture.md](docs/architecture.md#command-line-md-cli), `md-cli --help`):
+
+```sh
+cargo run --release -p md-cli -- --library library.msl -o table.csv example-data/TargetSearchData/inst/gc-ms-data/*.cdf
+```
+
 ---
 
 ## Project template (workflow kit)

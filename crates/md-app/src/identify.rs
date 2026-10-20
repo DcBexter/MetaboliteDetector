@@ -6,15 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
 use eframe::egui;
-use md_core::library::{LibraryCompound, import_msl, read_lbr};
+use md_core::library::LibraryCompound;
 use md_core::ri::RiCalibration;
 use md_core::search::{
     Identification, PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
 };
 
-use crate::{App, Run, spawn};
+use crate::{App, Run, poll_job, spawn};
 
 pub struct Library {
+    pub path: PathBuf,
     pub name: String,
     pub compounds: Vec<LibraryCompound>,
     pub prepared: PreparedLibrary,
@@ -48,21 +49,17 @@ fn score_color(score: f64) -> egui::Color32 {
 
 /// Libraries are recognised by extension; everything else opens as a run.
 pub fn is_library(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr") || e.eq_ignore_ascii_case("msl"))
+    path.extension().is_some_and(|e| {
+        ["lbr", "msl", "mdlib"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
-    let lbr = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("lbr"));
-    let compounds = if lbr {
-        read_lbr(path)
-    } else {
-        import_msl(path)
-    }
-    .map_err(|e| format!("{}: {e}", path.display()))?;
+    let compounds = md_core::library::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Library {
+        path: path.to_path_buf(),
         name: path
             .file_name()
             .unwrap_or_default()
@@ -76,12 +73,15 @@ fn load(path: &Path, s: SearchSettings) -> Result<Library, String> {
 
 impl App {
     pub fn library_menu(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Open library (.lbr, .msl)…").clicked()
+        if ui.button("Open library (.mdlib, .lbr, .msl)…").clicked()
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("Library", &["lbr", "msl", "MSL"])
+                .add_filter("Library", &["mdlib", "lbr", "msl", "MSL"])
                 .pick_file()
         {
             self.open_library(ui.ctx(), path);
+        }
+        if ui.button("Library editor…").clicked() {
+            self.editor.open = true;
         }
     }
 
@@ -94,11 +94,15 @@ impl App {
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
-            && let Ok(result) = rx.try_recv()
+            && let Some(result) = poll_job(rx, "library search")
         {
             match result {
-                Ok(lib) => self.library = Some(lib),
-                Err(e) => self.error = Some(e),
+                Ok(Ok(lib)) => self.library = Some(lib),
+                Ok(Err(e)) => self.error = Some(e),
+                Err(e) => {
+                    self.error = Some(e);
+                    self.library_failed = Some(self.settings.applied.search());
+                }
             }
             self.library_job = None;
         }
@@ -108,10 +112,11 @@ impl App {
         // New search settings: prepare the library again, then every run is searched again.
         let wanted = self.settings.applied.search();
         if lib.settings != wanted {
-            if self.library_job.is_none() {
+            if self.library_job.is_none() && self.library_failed.as_ref() != Some(&wanted) {
                 let lib = lib.clone();
                 self.library_job = Some(spawn(ctx, move || {
                     Ok(Arc::new(Library {
+                        path: lib.path.clone(),
                         name: lib.name.clone(),
                         prepared: PreparedLibrary::new(&lib.compounds, &wanted),
                         compounds: lib.compounds.clone(),
@@ -134,8 +139,18 @@ impl App {
         };
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.ident_job
-                && let Ok((id, shifted)) = rx.try_recv()
+                && let Some(result) = poll_job(rx, &format!("{}: identification", run.name))
             {
+                // A crashed search is not retried for this key; the run shows no hits.
+                let (id, shifted) = result.unwrap_or_else(|e| {
+                    self.error = Some(e);
+                    let n = run.components.len();
+                    let none = Identification {
+                        hits: vec![Vec::new(); n],
+                        assigned: vec![None; n],
+                    };
+                    (none, None)
+                });
                 run.ident = Some((k.clone(), id, shifted));
                 run.ident_job = None;
             }

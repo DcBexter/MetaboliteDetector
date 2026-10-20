@@ -13,6 +13,7 @@ mod batch;
 mod calibration;
 mod identify;
 mod isotopes;
+mod library_editor;
 mod settings;
 
 fn main() -> eframe::Result {
@@ -62,6 +63,9 @@ struct App {
     isotopes: isotopes::Isotopes,
     library: Option<Arc<identify::Library>>,
     library_job: Option<identify::LibraryJob>,
+    /// Search settings whose library preparation crashed; not retried until they change.
+    library_failed: Option<md_core::search::SearchSettings>,
+    editor: library_editor::LibraryEditor,
     batch: batch::Batch,
 }
 
@@ -83,6 +87,8 @@ impl Default for App {
             isotopes: isotopes::Isotopes::default(),
             library: None,
             library_job: None,
+            library_failed: None,
+            editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
         }
     }
@@ -122,10 +128,24 @@ fn spawn<T: Send + 'static>(
     let (tx, rx) = mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        tx.send(job()).ok();
+        // Dropping `tx` before the repaint lets the UI see a panic as `Disconnected` right away.
+        if let Ok(v) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
+            tx.send(v).ok();
+        }
+        drop(tx);
         ctx.request_repaint();
     });
     rx
+}
+
+/// Polls a job from `spawn`: `None` while it runs, `Err` when its thread panicked (the sender is
+/// dropped unsent), so callers can report it and not wait or restart forever.
+fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, String>> {
+    match rx.try_recv() {
+        Ok(v) => Some(Ok(v)),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(format!("{what} crashed"))),
+    }
 }
 
 /// Same colour per run in every plot and in the run list (egui_plot's golden-ratio hues).
@@ -206,8 +226,13 @@ impl App {
         let key = (self.mz, self.tolerance);
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.sic_job
-                && let Ok(sic) = rx.try_recv()
+                && let Some(result) = poll_job(rx, &format!("{}: SIC", run.name))
             {
+                // A crashed SIC is not retried for this key; the trace stays empty.
+                let sic = result.unwrap_or_else(|e| {
+                    self.error = Some(e);
+                    Vec::new()
+                });
                 (run.sic, run.sic_for) = (sic, Some(*k));
                 run.sic_job = None;
             }
@@ -332,6 +357,7 @@ impl eframe::App for App {
         self.batch
             .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
         self.isotopes.window(ui.ctx());
+        self.library_editor(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {
@@ -521,5 +547,25 @@ impl eframe::App for App {
                 .y_axis_label(format!("Intensity — {}", run.name))
                 .show(ui, |p| p.bar_chart(BarChart::new(name, bars)));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panicking_job_is_reported_not_lost() {
+        let ctx = egui::Context::default();
+        let rx = spawn(&ctx, || -> u8 { panic!("boom") });
+        let started = Instant::now();
+        let result = loop {
+            if let Some(r) = poll_job(&rx, "test job") {
+                break r;
+            }
+            assert!(started.elapsed().as_secs() < 10, "job never finished");
+            std::thread::yield_now();
+        };
+        assert_eq!(result, Err("test job crashed".to_string()));
     }
 }
