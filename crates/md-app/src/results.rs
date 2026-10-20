@@ -328,7 +328,7 @@ fn export(run: &str, rows: &[ResultRow]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use md_core::Chromatogram;
@@ -339,7 +339,7 @@ mod tests {
     use super::*;
     use crate::settings;
 
-    fn run() -> Run {
+    pub(crate) fn run() -> Run {
         let s = SearchSettings::default();
         let compounds = vec![LibraryCompound::new("Alanine")];
         let lib = Arc::new(Library {
@@ -383,6 +383,7 @@ mod tests {
             sic_job: None,
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
+            peaks: Vec::new(),
             saved_calibration: None,
             analysis: settings::Analysis::default(),
             scan: 0,

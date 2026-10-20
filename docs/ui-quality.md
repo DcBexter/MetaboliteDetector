@@ -41,6 +41,5 @@ Findings from the first review (#102) that live in files other sessions are chan
 | TIC plot | #111 | Hit labels do not overlap; y axis is readable |
 | Spectrum, hit table | #77 / #78 | The spectrum says whether it shows a scan or a deconvoluted component; table headers are `strong` |
 | Library editor | #80 / #84 | No "RT 0.00" or "RI known 0" for compounds without RT/RI; inputs have names |
-| Calibration, isotopes | #112 | Inputs have names; isotope numbers right-aligned |
 | Settings, Analysis menu | #113 | Plain names, old key and explanation on hover; inputs have names |
 | Batch | #88 | A disabled Start button looks like a button and says why; inputs have names |
