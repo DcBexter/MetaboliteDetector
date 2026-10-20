@@ -31,12 +31,15 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
+  src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
+  src/csv.rs            CSV writer for plotted series
   examples/perf.rs      performance smoke test on synthetic large runs
   examples/batch.rs     batch quantification timing on real files
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
+  src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
   src/identify.rs       library loading, hit labels on the TIC and the hit list of a component
   src/batch.rs          batch quantification window and result table
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
@@ -353,6 +356,17 @@ checks that every cache has the same spectra as the original `.cdf`, and that it
 back unchanged. Times match to f32 precision: the old importer kept times as f32 seconds. The old binary
 also re-imports the exported NetCDF files with identical spectra and times; only the stored TIC differs,
 because the example `.cdf` files carry the instrument's `total_intensity`, not the sum of the spectrum.
+
+## Spectrum normalisation and export
+
+`md_core::spectrum::normalize` divides a spectrum by one norm: none, base peak, unit (vector length) or
+relative (total signal), like the old `SpectrumPlot` ([algorithms.md](reverse-engineering/algorithms.md) §7c).
+Spectra are centroid in this rewrite (NetCDF and `.bin` hold ions, not profile points), so there is no
+profile/centroid switch. File → Export (`crates/md-app/src/export.rs`) writes the shown chromatogram of the
+active run (TIC and/or SIC, every scan, not the decimated plot points) and the shown spectrum (with the
+chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plot as PNG. PNG is a crop of
+egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
+renamed.
 
 ## Settings
 

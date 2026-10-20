@@ -5,6 +5,7 @@ use rayon::prelude::*;
 
 pub mod andi;
 pub mod batch;
+pub mod csv;
 pub mod deconv;
 pub mod diskscan;
 pub mod isotope;
@@ -13,6 +14,7 @@ pub mod peaks;
 pub mod ri;
 pub mod search;
 pub mod settings;
+pub mod spectrum;
 
 /// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), else ANDI-MS NetCDF.
 pub fn read_run(path: &std::path::Path) -> Result<Chromatogram, String> {

@@ -1890,6 +1890,7 @@ dependencies = [
  "egui_extras",
  "egui_plot",
  "md-core",
+ "png",
  "rfd",
 ]
 
