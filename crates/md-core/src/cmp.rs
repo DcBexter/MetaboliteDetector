@@ -213,7 +213,9 @@ pub fn compounds_of_components(
                 ri: ris.get(i).copied().unwrap_or(-1.0),
                 bin_width: 1.0,
                 masses: c.spectrum.iter().map(|p| p.0 as f32).collect(),
-                values: c.spectrum.iter().map(|p| p.1 as i32).collect(),
+                values: (c.spectrum.iter())
+                    .map(|p| p.1.min(i32::MAX as u32) as i32)
+                    .collect(),
             };
             compound.peaks = ions;
             compound.model = Some(LibraryModel {

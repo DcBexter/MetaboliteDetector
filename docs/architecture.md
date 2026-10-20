@@ -390,6 +390,8 @@ numeric name when it reads it (Observed, `make-reference.sh --reread`; apart fro
 the check value it rewrites our files byte for byte). Settings changes re-analyse and replace loaded components.
 A `.cmp` is also a batch input (`batch::scan_runs`, file picker and `md-cli`): its components are searched
 as saved, with RI and shift correction from the apex times; there is no raw data, so `rescan_runs` skips it.
+A saved component keeps one peak per mass, so where a run has two peaks of a quant mass and only the second
+passes `--min-sn`, the table of the `.cmp` lacks that value.
 
 Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
 
