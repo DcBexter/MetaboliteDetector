@@ -154,9 +154,11 @@ precomputed kernel; `detect_peaks_matched` runs the same detector on a single tr
 Conscious deviations from the old app; the golden test (below) shows that none of them changes the
 peaks of the example runs:
 
-- **Traces per nominal mass.** m/z is rounded and points of one nominal mass in a scan are summed. The
-  old app's trace construction for ANDI data is unknown; the example runs are unit-resolution, so this
-  matches them. High-resolution data needs exact-mass traces and `reorderPeaks` (§4.2).
+- **Traces per nominal mass.** Not a deviation: `IonTraces::new` centroids every scan like the old CDF
+  import (§4.1), then sums the centroids per nominal mass. On unit-resolution runs with integer
+  intensities centroiding changes nothing. Exact-mass traces (`IonTraces::exact`) plus `reorder_peaks` (§4.2) are what the old app does
+  for FastFlight runs. The deconvolution still keys spectra by nominal mass, so exact masses merge there
+  (shortcut in `deconv.rs`).
 - **Noise factor 1.0.** `GCMSAnalyzer` sets the detector's noise factor from
   `DataProvider::getGlobalNoiseFactor` (§2.3). On all 15 example runs the old app logs
   "Error determining nf. Using nf=1", so 1.0 is what it uses there. Data where the old app finds another
@@ -450,6 +452,14 @@ tie: the filtered traces are integers with broad, smooth tops, so the parabola v
 a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
 deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
 all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
+
+A third reference, `old-md-3.3-high-resolution.tsv`, covers a synthetic high-resolution run made from 7235eg04:
+- every m/z moves up by 0.047;
+- a second fragment at 147.089 repeats the 147 trace 5 scans later.
+
+To regenerate it, run `make-reference.sh --high-resolution`. The run itself (`example-data/high-resolution/`) is not committed. The test builds the run in memory from eg04, and the script writes it as a CDF for the old app with an ignored test (`write_high_resolution_run`).
+
+The old CDF import centroids such scans to nominal masses (§4.1). The port does the same, so all peaks and components match with no known difference.
 
 The test fails when one of these counts grows.
 
