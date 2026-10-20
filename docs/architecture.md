@@ -538,7 +538,8 @@ Sonar scan, so Linux builds once for both; Windows only runs the tests, since no
 `main` always builds. CI builds without debug info. The summary job `CI` fails unless both OS jobs succeeded; it is the required CI
 result for `main`. It does not fetch the example data, so those tests skip themselves;
 run them locally. Only `main` saves the cargo cache; PRs restore it. The cache key
-follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall.
+follows `rust-toolchain.toml` and `Cargo.lock`, not the toolchains a runner image happens to preinstall
+(CI uninstalls those before restoring the cache).
 
 ## Compatibility goals
 
