@@ -260,6 +260,7 @@ fn run(a: Args) -> Result<bool, String> {
     how.extend([
         ("RT_ONLY", prepared.is_rt_only().to_string()),
         ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
+        ("RUNS_SCANNED", runs.len().to_string()),
         ("UNKNOWN_SUBSTANCES", more.extra.len().to_string()),
         ("IONS_ADDED_BY_RESCAN", more.rescanned.to_string()),
     ]);
@@ -518,6 +519,10 @@ NUM PEAKS: 12
             .map(|l| l.split(',').next().unwrap())
             .collect();
         assert_eq!(names, ["early", "Unknown 1"], "{csv}");
+        let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
+        assert!(settings.contains("\nUNTARGETED,true\n"), "{settings}");
+        assert!(settings.contains("\nUNKNOWN_SUBSTANCES,1\n"), "{settings}");
+        assert!(settings.contains("\nRUNS_SCANNED,1\n"), "{settings}");
 
         let shift = |extra: &str| run(args(&format!("{line} {extra}")).unwrap().unwrap());
         assert!(
