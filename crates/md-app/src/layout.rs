@@ -99,6 +99,12 @@ mod tests {
         run.analysis = settings::Analysis::new(app.settings.key());
         let lib = run.ident.as_ref().unwrap().0.0.clone();
         app.runs.push(run);
+        // Enough runs that the run list scrolls.
+        for i in 0..80 {
+            let mut more = results::tests::run();
+            more.name = format!("run_{i:02}");
+            app.runs.push(more);
+        }
         let found = |rt_s| md_core::batch::RunResult {
             path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
             found: vec![md_core::batch::Found {
@@ -160,8 +166,8 @@ mod tests {
         (ctx, nodes)
     }
 
-    /// Controls of one layer cut off at the side; clipped by a scroll area vertically is fine,
-    /// and so is cut off at the side above a horizontal scroll bar.
+    /// Controls of one layer cut off at the side; clipped by a scroll area vertically is fine (also
+    /// out of view entirely), and so is cut off at the side above a horizontal scroll bar.
     fn cut_off(widgets: &[egui::WidgetRect], nodes: &Nodes) -> Vec<String> {
         let name = |w: &egui::WidgetRect| nodes.names.get(&w.id.accesskit_id());
         let bars: Vec<egui::Rect> = (widgets.iter())
@@ -184,10 +190,38 @@ mod tests {
             if let Some(n) = name(w)
                 && !CONTAINERS.contains(&n.0.as_str())
                 && w.rect.width() > 0.0
+                // Scrolled out of view vertically: hidden, so not cut off.
+                // shortcut: assumes a scroll area did the hiding, so a row unique to the hidden
+                // part, or content hidden by a clip that does not scroll, goes unchecked; check
+                // the clip owner if such content appears.
+                && r.1.height() > 0.0
                 && (left || right)
                 && !bars.iter().any(scrolls)
             {
                 found.push(format!("{n:?} {:?} is cut off at {:?}", r.0, r.1));
+            }
+        }
+        found
+    }
+
+    /// Controls that reach past the screen edge where nothing scrolls them back: there the screen
+    /// clips them, not a scroll area inside it (a window wider or taller than the screen).
+    /// shortcut: a frameless scroll area right on the screen edge would count as the screen, and a
+    /// window with its own `constrain_to` rect escapes the check; neither exists in the app yet.
+    fn off_screen(widgets: &[egui::WidgetRect], nodes: &Nodes, screen: egui::Rect) -> Vec<String> {
+        let mut found = Vec::new();
+        for w in widgets {
+            let (r, i) = (w.rect, w.interact_rect);
+            let at_edge = |past: bool, clip: f32, edge: f32| past && (clip - edge).abs() <= 0.5;
+            let off = at_edge(r.min.x < screen.min.x - 0.5, i.min.x, screen.min.x)
+                || at_edge(r.max.x > screen.max.x + 0.5, i.max.x, screen.max.x)
+                || at_edge(r.min.y < screen.min.y - 0.5, i.min.y, screen.min.y)
+                || at_edge(r.max.y > screen.max.y + 0.5, i.max.y, screen.max.y);
+            if let Some(n) = nodes.names.get(&w.id.accesskit_id())
+                && !CONTAINERS.contains(&n.0.as_str())
+                && off
+            {
+                found.push(format!("{n:?} {r:?} reaches past the screen"));
             }
         }
         found
@@ -216,7 +250,7 @@ mod tests {
     }
 
     /// Draws the app with every window open and returns each control that another one in the same
-    /// layer covers or that is cut off at the side.
+    /// layer covers, that is cut off at the side or that reaches past the screen.
     fn overlaps(size: [f32; 2]) -> Vec<String> {
         let mut app = app_with_every_window();
         let (ctx, nodes) = draw(&mut app, size);
@@ -245,9 +279,16 @@ mod tests {
                 "{title} was not drawn; the test would check nothing there"
             );
         }
+        let screen = ctx.content_rect();
         ctx.viewport(|v| {
             (v.prev_pass.widgets.layers())
-                .flat_map(|(_, widgets)| [cut_off(widgets, &nodes), covered(widgets, &nodes)])
+                .flat_map(|(_, widgets)| {
+                    [
+                        cut_off(widgets, &nodes),
+                        covered(widgets, &nodes),
+                        off_screen(widgets, &nodes, screen),
+                    ]
+                })
                 .flatten()
                 .collect()
         })

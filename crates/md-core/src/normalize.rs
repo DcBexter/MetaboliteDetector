@@ -151,6 +151,7 @@ mod tests {
             rt_s: 0.0,
             ions: vec![],
             values: values.to_vec(),
+            rts_s: vec![None; values.len()],
         }
     }
 
