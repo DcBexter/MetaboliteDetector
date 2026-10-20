@@ -294,8 +294,10 @@ impl Batch {
     ) {
         self.poll(ctx);
         let mut open = self.open;
+        // As tall as the screen allows (egui keeps it on screen), so the result table gets the
+        // room the settings leave.
         egui::Window::new("Batch quantification")
-            .tool_window(ctx, 2, [900.0, 600.0])
+            .tool_window(ctx, 2, [900.0, 2000.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
@@ -573,7 +575,12 @@ impl Batch {
             }
             ui.label(format!("{} runs", self.paths.len()));
         });
-        self.settings_grid(ui);
+        // A short screen scrolls the settings, so the result table below stays on it. Measured on
+        // the screen: the window's own height follows its content and would shrink with the cap.
+        egui::ScrollArea::vertical()
+            .id_salt("batch settings")
+            .max_height(ui.ctx().content_rect().height() * 0.4)
+            .show(ui, |ui| self.settings_grid(ui));
         self.job_row(ui, lib, cal, reference);
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
