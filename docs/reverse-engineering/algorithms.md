@@ -808,6 +808,16 @@ Deviations of the rewrite (the table has `None` for "not found" instead of 0):
 
 The rewrite calls `SSUM` "Unit" (unit vector) and `SUM` "Relative" (fractions of the total signal), `md_core::spectrum::normalize`. A zero norm is not guarded in the old code (division by zero); the rewrite leaves such a spectrum unchanged. The toolbar label strings were not read, so the names Unit/Relative are inferred from the issue. `SplitSpectrumPlot` and `LibrarySpectrumPlot` reuse the same mode.
 
+## 7e. Result table of a run and Find Compound (Observed; ported in `crates/md-core/src/results.rs`)
+
+Observed with objdump on `DataTableModel::getData` (0x4c88a2), `CompoundExporter::run` (0x4b5bb8) and `CompoundMapper::findCompound` (0x4b6ca0).
+
+- Columns: Compound Name, RT, RI, Peak Area, Overall Score, Spec. Score, RI Score, Quant. Ions. A component without hit (or a hit below the model's cutoff) shows `No match: ` plus its own name, the scores as -1 and the area as -1.0. RT goes through `TimeMapper::mapTimeToUnit`.
+- Peak Area (`getIntegral`): sum over the hit library compound's quant ions of the component's integral of that ion (tolerance float constant at 0xa824e8, value not read). If the library compound has no quant ions, the component is asked for three ions (slot 0x88, argument 3; the meaning is Inferred, ported as the three largest peaks).
+- Quant. Ions: the library compound's quant ions as `QTextStream` floats, fixed notation, precision 4, joined by ` / `. The old code truncates two characters from the end, which leaves a trailing space. Empty when the set is empty.
+- `CompoundExporter` writes the model generically: the header row, then every cell's display text. The separator is a TAB (0xa810ab), the line end `\n`, no quoting, despite the `*.csv` file filter. The new export uses comma and RFC 4180 quoting and leaves missing values empty instead of -1.
+- Find Compound: for each component's list of hits, keep a hit whose library compound has the same name (string compare) as the chosen one and an overall score of at least `LS_CUTOFF`; list (score, component), sorted descending (`qSort` with `qGreater`).
+
 ## 8. Open gaps (ranked by impact on reproducing results)
 
 1. Default setting values. The storage format is known (Section 1); the values are not in code read so far. Find `fromDisk` callers and any shipped settings file, or the GUI defaults. This blocks golden-output comparison for every section.

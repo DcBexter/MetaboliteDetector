@@ -12,6 +12,7 @@ pub mod isotope;
 pub mod library;
 pub mod normalize;
 pub mod peaks;
+pub mod results;
 pub mod ri;
 pub mod search;
 pub mod settings;
