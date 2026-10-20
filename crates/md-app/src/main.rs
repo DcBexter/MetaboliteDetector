@@ -13,6 +13,7 @@ mod batch;
 mod calibration;
 mod identify;
 mod isotopes;
+mod library_editor;
 mod settings;
 
 fn main() -> eframe::Result {
@@ -64,6 +65,7 @@ struct App {
     library_job: Option<identify::LibraryJob>,
     /// Search settings whose library preparation crashed; not retried until they change.
     library_failed: Option<md_core::search::SearchSettings>,
+    editor: library_editor::LibraryEditor,
     batch: batch::Batch,
 }
 
@@ -86,6 +88,7 @@ impl Default for App {
             library: None,
             library_job: None,
             library_failed: None,
+            editor: library_editor::LibraryEditor::default(),
             batch: batch::Batch::default(),
         }
     }
@@ -354,6 +357,7 @@ impl eframe::App for App {
         self.batch
             .window(ui.ctx(), self.library.as_ref(), self.ri.cal.as_deref());
         self.isotopes.window(ui.ctx());
+        self.library_editor(ui.ctx());
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if !self.loading.is_empty() {

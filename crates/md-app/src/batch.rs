@@ -249,7 +249,23 @@ impl Batch {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         match self.table.as_ref().map(|t| &t.1) {
-            Some(Ok(t)) => table_view(ui, t),
+            Some(Ok(t)) => {
+                if ui.button("Export CSV…").clicked()
+                    && let Some(p) = rfd::FileDialog::new()
+                        .add_filter("CSV", &["csv"])
+                        .set_file_name("results.csv")
+                        .save_file()
+                {
+                    self.note = match std::fs::File::create(&p)
+                        .map(std::io::BufWriter::new)
+                        .and_then(|f| t.write_csv(f))
+                    {
+                        Ok(()) => format!("Saved {}", p.display()),
+                        Err(e) => format!("Export failed: {e}"),
+                    };
+                }
+                table_view(ui, t)
+            }
             Some(Err(e)) => {
                 ui.colored_label(
                     ui.visuals().error_fg_color,

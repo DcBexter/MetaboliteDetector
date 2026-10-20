@@ -58,7 +58,7 @@ impl Default for Calibration {
 impl Calibration {
     /// The run's calibration: shifted onto the reference when it was found there, else the global one.
     /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
-    fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
+    pub fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
         let ptr = |c: &Option<Arc<RiCalibration>>| c.as_ref().map(Arc::as_ptr);
         (run.ident.as_ref())
             .filter(|i| run.ident_job.is_none() && ptr(&i.0.1) == ptr(&self.cal))
