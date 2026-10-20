@@ -733,6 +733,11 @@ impl Batch {
         self.results(ui);
     }
 
+    /// Runs scanned and errors of the last scan, for the guided Start step.
+    pub fn summary(&self) -> Option<(usize, usize)> {
+        self.scan.as_ref().map(|s| (s.runs.len(), s.errors.len()))
+    }
+
     /// Whether runs are chosen; the guided steps go on once they are.
     pub fn has_runs(&self) -> bool {
         !self.paths.is_empty()
