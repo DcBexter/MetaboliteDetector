@@ -88,7 +88,13 @@ impl Results {
         });
         ui.horizontal(|ui| {
             ui.label("Find substance");
-            ui.text_edit_singleline(&mut self.filter);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .hint_text("Name in the table and the library"),
+            );
+            if !self.filter.is_empty() && ui.button("Clear").clicked() {
+                self.filter.clear();
+            }
         });
         let want = self.filter.to_lowercase();
         if !want.is_empty() {
@@ -109,6 +115,9 @@ impl Results {
             });
         }
         ui.label(format!("{} of {} components", order.len(), rows.len()));
+        if order.is_empty() && !rows.is_empty() {
+            ui.weak("No component matches. Clear the search to see all.");
+        }
         let mut clicked = selected;
         let current = run.component;
         let sort = &mut self.sort;
@@ -124,21 +133,24 @@ impl Results {
                 .header(20.0, |mut h| {
                     for (c, title) in HEAD.iter().enumerate() {
                         h.col(|ui| {
-                            let arrow = match *sort {
-                                Some((s, d)) if s == c => [" ▲", " ▼"][d as usize],
-                                _ => "",
-                            };
-                            let t = egui::RichText::new(format!("{title}{arrow}")).strong();
-                            if ui
-                                .add(egui::Label::new(t).sense(egui::Sense::click()))
-                                .clicked()
-                            {
-                                *sort = match *sort {
-                                    Some((s, false)) if s == c => Some((c, true)),
-                                    Some((s, true)) if s == c => None,
-                                    _ => Some((c, false)),
+                            ui.with_layout(align(c), |ui| {
+                                let arrow = match *sort {
+                                    Some((s, d)) if s == c => [" ▲", " ▼"][d as usize],
+                                    _ => "",
                                 };
-                            }
+                                let t = egui::RichText::new(format!("{title}{arrow}")).strong();
+                                let resp = ui
+                                    .add(egui::Label::new(t).sense(egui::Sense::click()))
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text("Click to sort: ascending, descending, off");
+                                if resp.clicked() {
+                                    *sort = match *sort {
+                                        Some((s, false)) if s == c => Some((c, true)),
+                                        Some((s, true)) if s == c => None,
+                                        _ => Some((c, false)),
+                                    };
+                                }
+                            });
                         });
                     }
                 })
@@ -146,9 +158,15 @@ impl Results {
                     body.rows(18.0, order.len(), |mut row| {
                         let r = &rows[order[row.index()]];
                         row.set_selected(current == Some(r.component));
-                        for text in cells(r) {
+                        for (c, text) in cells(r).into_iter().enumerate() {
                             row.col(|ui| {
-                                ui.label(text);
+                                ui.with_layout(align(c), |ui| {
+                                    // An unmatched component reads as a placeholder.
+                                    match r.compound.is_none() && c == 0 {
+                                        true => ui.weak(text),
+                                        false => ui.label(text),
+                                    };
+                                });
                             });
                         }
                         let resp = row.response();
@@ -205,6 +223,14 @@ impl Results {
             }
         });
         clicked
+    }
+}
+
+/// Numbers (RT to RI score) are right-aligned so digits line up; name and ions stay left.
+fn align(col: usize) -> egui::Layout {
+    match (1..=6).contains(&col) {
+        true => egui::Layout::right_to_left(egui::Align::Center),
+        false => egui::Layout::left_to_right(egui::Align::Center),
     }
 }
 
