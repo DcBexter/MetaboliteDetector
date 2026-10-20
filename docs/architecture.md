@@ -13,7 +13,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | File dialogs | rfd | Native dialogs on every OS. |
 | NetCDF | `netcdf3` (pure Rust) | ANDI-MS files are NetCDF-3; no libnetcdf/HDF5 C dependency to ship on Windows. |
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
-| R console | Not ported directly | RInside tied the old app to a Linux R install. Replace with CSV/R-script export first; optional embedded scripting later. |
+| R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and CLI) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
 
 ## Layout
 
@@ -291,7 +291,7 @@ Runs are `.cdf`/`.nc` or old `.bin` files (shell globs expand them). `--settings
 (`GcmsSettings::from_bytes`): its `AN_*`/`LS_*` values drive peak detection, deconvolution and search, its
 `QUANT_*` values are the quant defaults, which `--ions`, `--min-dist` and `--quality-cutoff` override.
 `--replicates`, `--min-reproducibility` and `--min-ions` are the batch window's filters. The CSV is
-`Table::write_csv` (`Substance,RT_min,Quant_ions,<run>...`, empty cell = not quantified); progress and
+`Table::write_csv` (`Substance,RT_s,Quant_ions,<run>...`, empty cell = not quantified); progress and
 failed runs go to stderr, and the exit code is 2 if the table is complete except for unreadable runs.
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.

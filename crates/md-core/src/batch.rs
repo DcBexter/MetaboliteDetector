@@ -266,34 +266,32 @@ pub struct Row {
 }
 
 impl Table {
-    /// CSV with a header `Substance,RT_min,Quant_ions,<run>...`; quant ions are space-separated and a
-    /// substance not quantified in a run leaves its cell empty. Values are full-precision sums.
-    pub fn write_csv(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
-        fn line(w: &mut impl std::io::Write, cells: &[String]) -> std::io::Result<()> {
-            let quoted: Vec<String> = cells
-                .iter()
-                .map(|c| match c.contains([',', '"', '\n', '\r']) {
-                    true => format!("\"{}\"", c.replace('"', "\"\"")),
-                    false => c.clone(),
-                })
-                .collect();
-            writeln!(w, "{}", quoted.join(","))
+    /// RFC 4180 CSV with `.` decimals and `,` separators, readable by R (`read.csv`) and Excel:
+    /// `Substance,RT_s,Quant_ions,<one column per run>`. Quant ions are space-separated; a value
+    /// that was not found is an empty cell, which R reads as `NA`.
+    pub fn write_csv(&self, mut w: impl std::io::Write) -> std::io::Result<()> {
+        fn field(s: &str) -> String {
+            match s.contains([',', '"', '\n', '\r']) {
+                true => format!("\"{}\"", s.replace('"', "\"\"")),
+                false => s.into(),
+            }
         }
-        let head = ["Substance", "RT_min", "Quant_ions"].map(String::from);
-        line(w, &[head.as_slice(), &self.runs].concat())?;
+        let head = ["Substance", "RT_s", "Quant_ions"].map(String::from);
+        let head: Vec<String> = head
+            .into_iter()
+            .chain(self.runs.iter().map(|r| field(r)))
+            .collect();
+        writeln!(w, "{}", head.join(","))?;
         for r in &self.rows {
             let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
-            let mut cells = vec![
-                r.name.clone(),
-                format!("{:.3}", r.rt_s / 60.0),
-                ions.join(" "),
-            ];
-            cells.extend(
-                r.values
-                    .iter()
-                    .map(|v| v.map(|v| v.to_string()).unwrap_or_default()),
-            );
-            line(w, &cells)?;
+            let cells = [field(&r.name), r.rt_s.to_string(), ions.join(" ")]
+                .into_iter()
+                .chain(
+                    r.values
+                        .iter()
+                        .map(|v| v.map(|v| v.to_string()).unwrap_or_default()),
+                );
+            writeln!(w, "{}", cells.collect::<Vec<_>>().join(","))?;
         }
         Ok(())
     }
@@ -407,6 +405,29 @@ mod tests {
     }
 
     #[test]
+    fn csv_quotes_fields_and_leaves_missing_values_empty() {
+        let t = Table {
+            runs: vec!["a,1.cdf".into(), "b.cdf".into()],
+            groups: vec![String::new(); 2],
+            rows: vec![Row {
+                compound: 0,
+                name: "Glucose \"1\"".into(),
+                rt_s: 12.5,
+                ions: vec![73, 147],
+                values: vec![Some(1500.0), None],
+            }],
+        };
+        let mut out = Vec::new();
+        t.write_csv(&mut out).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Substance,RT_s,Quant_ions,\"a,1.cdf\",b.cdf
+\"Glucose \"\"1\"\"\",12.5,73 147,1500,
+"
+        );
+    }
+
+    #[test]
     fn quant_ions_follow_old_rules() {
         let q = QuantSettings {
             excluded: vec![(73.0, 73.0)],
@@ -454,27 +475,6 @@ mod tests {
             path: PathBuf::from("data").join(name),
             found,
         }
-    }
-
-    #[test]
-    fn csv_quotes_names_and_leaves_missing_cells_empty() {
-        let t = Table {
-            runs: vec!["a.cdf".into(), "b,1.cdf".into()],
-            groups: vec![String::new(); 2],
-            rows: vec![Row {
-                compound: 0,
-                name: "2,3-\"X\"".into(),
-                rt_s: 90.0,
-                ions: vec![73, 147],
-                values: vec![Some(1.5), None],
-            }],
-        };
-        let mut out = Vec::new();
-        t.write_csv(&mut out).unwrap();
-        assert_eq!(
-            String::from_utf8(out).unwrap(),
-            "Substance,RT_min,Quant_ions,a.cdf,\"b,1.cdf\"\n\"2,3-\"\"X\"\"\",1.500,73 147,1.5,\n"
-        );
     }
 
     #[test]
