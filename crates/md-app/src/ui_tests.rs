@@ -40,10 +40,6 @@ fn ui_symbols() -> Vec<(String, char)> {
     found
 }
 
-// shortcut: `✕` in library_editor.rs has no glyph in any bundled font; drop it here once that window
-// uses `×` like the rest of the app (reported on #89).
-const KNOWN: [char; 1] = ['✕'];
-
 /// Symbols like arrows are not in egui's default font; without a fallback they draw as boxes.
 #[test]
 fn every_ui_symbol_has_a_glyph() {
@@ -55,7 +51,7 @@ fn every_ui_symbol_has_a_glyph() {
     let font = egui::FontId::proportional(13.0);
     let missing: Vec<String> = ui_symbols()
         .into_iter()
-        .filter(|(_, c)| !KNOWN.contains(c) && !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
+        .filter(|(_, c)| !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
         .map(|(file, c)| format!("{file}: {c} (U+{:04X})", c as u32))
         .collect();
     assert!(missing.is_empty(), "no glyph:\n{}", missing.join("\n"));

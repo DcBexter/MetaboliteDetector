@@ -2,6 +2,7 @@
 //! row per component, sortable, a click selects the component, a substance can be looked up in the
 //! library and the table exported as CSV.
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::results::{ResultRow, find_substance, result_rows, write_csv};
@@ -40,8 +41,8 @@ impl Results {
     pub fn window(&mut self, ctx: &egui::Context, runs: &mut [Run], active: usize) {
         let mut open = self.open;
         egui::Window::new("Results")
+            .tool_window(ctx, 6, [900.0, 500.0])
             .open(&mut open)
-            .default_size([900.0, 500.0])
             .show(ctx, |ui| self.contents(ui, runs.get_mut(active), active));
         self.open = open;
     }

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Plot};
 use md_core::library::{LibraryCompound, MslType, save_mdlib, write_msl_as};
@@ -392,7 +393,7 @@ fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut Stri
         for k in other {
             ui.label(&k);
             changed |= feature_field(ui, c, &k, false, "");
-            if ui.small_button("✕").on_hover_text("Remove").clicked() {
+            if ui.small_button("×").on_hover_text("Remove").clicked() {
                 c.features.remove(&k);
                 changed = true;
             }
@@ -477,9 +478,9 @@ impl App {
         );
         let (mut open, mut saved) = (true, None);
         egui::Window::new(title)
+            .tool_window(ctx, 8, [760.0, 520.0])
             .id(egui::Id::unique("library editor"))
             .open(&mut open)
-            .default_size([760.0, 520.0])
             .show(ctx, |ui| {
                 saved = ed.contents(ui, self.library.as_deref(), source);
             });
