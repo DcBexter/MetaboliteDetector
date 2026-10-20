@@ -91,7 +91,7 @@ mod tests {
             app.batch.open,
             app.isotopes.open,
         ) = (true, true, true, true);
-        (app.editor.open, app.view.info_open) = (true, true);
+        (app.editor.open, app.view.info_open, app.updater.open) = (true, true, true);
         app.tof = crate::tof_calibration::TofWindow::demo();
         (app.results.open, app.statistics.open, app.mid.open) = (true, true, true);
         let mut c = md_core::library::LibraryCompound::new("Phenylalanine 2TMS");

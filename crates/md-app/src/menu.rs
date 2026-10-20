@@ -1,4 +1,4 @@
-//! Top menu bar: File and Analysis.
+//! Top menu bar: File, Analysis and Help.
 
 use eframe::egui;
 
@@ -10,6 +10,7 @@ impl App {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| self.file_menu(ui));
                 ui.menu_button("Analysis", |ui| self.analysis_menu(ui));
+                ui.menu_button("Help", |ui| self.updater.menu(ui));
             });
         });
     }
