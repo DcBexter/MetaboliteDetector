@@ -166,8 +166,11 @@ impl App {
             .window(ctx, &self.runs, self.active, self.library.as_deref());
         self.settings.window(ctx);
         self.batch.analysis = self.settings.key();
-        self.batch
-            .window(ctx, self.library.as_ref(), self.ri.cal.as_deref());
+        // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.
+        let cal = (self.ri.cal.as_deref()).filter(|_| {
+            (self.library.as_ref()).is_some_and(|l| l.prepared.is_rt_only() == self.ri.rt_only)
+        });
+        self.batch.window(ctx, self.library.as_ref(), cal);
         self.isotopes.window(ctx);
         self.library_editor(ctx);
     }
