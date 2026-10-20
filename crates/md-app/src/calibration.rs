@@ -33,6 +33,7 @@ struct Saved {
     source: String,
     rows: Vec<Row>,
     applied: Vec<Row>,
+    error: Option<String>,
 }
 
 type RowsJob = (String, mpsc::Receiver<Result<Vec<Row>, String>>);
@@ -219,11 +220,13 @@ impl Calibration {
                 source: std::mem::take(&mut self.source),
                 rows: std::mem::take(&mut self.rows),
                 applied: std::mem::take(&mut self.applied),
+                error: self.error.take(),
             };
             self.set(RiCalibration::identity(), "retention time only".into());
             self.saved = Some(saved);
         } else if let Some(s) = self.saved.take() {
-            (self.cal, self.source, self.rows, self.applied) = (s.cal, s.source, s.rows, s.applied);
+            (self.cal, self.source, self.rows) = (s.cal, s.source, s.rows);
+            (self.applied, self.error) = (s.applied, s.error);
         }
     }
 
@@ -758,6 +761,25 @@ mod tests {
         c.rows[2].used = false;
         c.apply_edits();
         assert_eq!(c.cal.as_ref().unwrap().points().len(), 2);
+    }
+
+    #[test]
+    fn rt_only_toggle_keeps_the_error_of_an_unfinished_table() {
+        let mut c = Calibration::default();
+        c.add_point();
+        c.rows[0] = Row {
+            name: String::new(),
+            ri: 1000.0,
+            rt_min: 1.0,
+            used: true,
+        };
+        c.apply_edits();
+        let error = c.error.clone();
+        assert!(error.is_some());
+        c.set_rt_only(true);
+        c.set_rt_only(false);
+        assert_eq!(c.error, error);
+        assert!(c.cal.is_none());
     }
 
     #[test]
