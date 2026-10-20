@@ -441,10 +441,7 @@ fn result_view(ui: &mut egui::Ui, r: &Done, note: &mut String) {
                 1 => "1 substance".into(),
                 n => format!("{n} substances"),
             },
-            match r.took.as_millis() {
-                ms @ 0..1000 => format!("{ms} ms"),
-                _ => format!("{:.1} s", r.took.as_secs_f64()),
-            }
+            crate::view::took(r.took)
         ));
         export_buttons(ui, "MIDs", "mids.txt", &r.text, note);
         if let Some(text) = &r.stats_text {
