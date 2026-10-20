@@ -30,7 +30,8 @@ impl App {
             }
             if p.components {
                 let cal = (self.runs.get(self.active)).and_then(|r| self.ri.for_run(r).cloned());
-                (self.results).panel(ui, self.runs.get_mut(self.active), cal.as_ref());
+                let cutoff = self.settings.applied.ls_cutoff;
+                (self.results).panel(ui, self.runs.get_mut(self.active), cal.as_ref(), cutoff);
             }
         });
     }

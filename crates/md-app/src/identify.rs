@@ -14,6 +14,7 @@ use md_core::search::{
     map_compounds_to_library, shift_to_reference,
 };
 
+use crate::settings::Pick;
 use crate::{App, Run, poll_job, spawn};
 
 pub struct Library {
@@ -149,16 +150,29 @@ impl App {
                 "Load a mass spectral library; components are then identified against it",
             )
             .clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter(
-                    "Library",
-                    &[
-                        "mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF", "txt",
-                    ],
-                )
-                .pick_file()
         {
-            self.open_library(ui.ctx(), path);
+            self.pick_library(ui.ctx(), Pick::Library);
+        }
+    }
+
+    /// Asks for a compound or NIST library file and opens it (menu buttons and Settings).
+    pub fn pick_library(&mut self, ctx: &egui::Context, which: Pick) {
+        let dialog = rfd::FileDialog::new();
+        match which {
+            Pick::Library => {
+                let types = [
+                    "mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF", "txt",
+                ];
+                if let Some(path) = dialog.add_filter("Library", &types).pick_file() {
+                    self.open_library(ctx, path);
+                }
+            }
+            Pick::Nist => {
+                let types = ["sdf", "SDF", "msp", "MSP"];
+                if let Some(path) = dialog.add_filter("NIST text", &types).pick_file() {
+                    self.open_nist(ctx, path);
+                }
+            }
         }
     }
 
@@ -174,11 +188,8 @@ impl App {
                 "Load a NIST library for \"NIST search\" on the selected component; the normal library stays",
             )
             .clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter("NIST text", &["sdf", "SDF", "msp", "MSP"])
-                .pick_file()
         {
-            self.open_nist(ui.ctx(), path);
+            self.pick_library(ui.ctx(), Pick::Nist);
         }
     }
 

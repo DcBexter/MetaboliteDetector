@@ -100,12 +100,13 @@ struct Row {
     ions: usize,
 }
 
-/// What the cached rows were built from: the run's data, its `rev`, and the calibration used without
-/// a library. The data is held weakly, so a closed run never matches a new one at the same address.
-type Stamp = (Weak<Chromatogram>, u64, Option<RiCalibration>);
+/// What the cached rows were built from: the run's data, its `rev`, the calibration used without
+/// a library and the cutoff. The data is held weakly, so a closed run never matches a new one at the
+/// same address.
+type Stamp = (Weak<Chromatogram>, u64, Option<RiCalibration>, f64);
 
 fn same(a: &Stamp, b: &Stamp) -> bool {
-    a.0.ptr_eq(&b.0) && a.1 == b.1 && a.2 == b.2
+    a.0.ptr_eq(&b.0) && a.1 == b.1 && a.2 == b.2 && a.3 == b.3
 }
 
 #[derive(Default)]
@@ -122,18 +123,24 @@ pub struct Results {
 
 impl Results {
     /// The list of the active run; `cal` (the run's calibration) gives the RI while no library
-    /// identified the run.
-    pub fn panel(&mut self, ui: &mut egui::Ui, run: Option<&mut Run>, cal: Option<&RiCalibration>) {
+    /// identified the run. Hits below `cutoff` (`LS_CUTOFF`) are listed as no match.
+    pub fn panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        run: Option<&mut Run>,
+        cal: Option<&RiCalibration>,
+        cutoff: f64,
+    ) {
         ui.strong("Component list");
         let Some(run) = run else {
             return;
         };
         let lib = (run.ident.as_ref()).map(|((lib, ..), ..)| lib.clone());
         let cal = cal.filter(|_| lib.is_none());
-        let stamp = (Arc::downgrade(&run.data), run.rev, cal.cloned());
+        let stamp = (Arc::downgrade(&run.data), run.rev, cal.cloned(), cutoff);
         let mut cache = self.cache.take().filter(|c| same(&c.0, &stamp));
         if cache.is_none() {
-            cache = Some((stamp, build_rows(run, cal)));
+            cache = Some((stamp, build_rows(run, cal, cutoff)));
             self.looked_up = None;
         }
         let (stamp, rows) = cache.expect("filled above");
@@ -179,7 +186,7 @@ impl Results {
             if !want.is_empty() {
                 self.lookup(ui, lib, &want);
             }
-            selected = self.found_list(ui, run, lib);
+            selected = self.found_list(ui, run, lib, cutoff);
         }
         if !self.note.is_empty() {
             ui.label(&self.note);
@@ -267,8 +274,8 @@ impl Results {
     }
 
     /// Ctrl+E: the whole list of `run` as CSV, unfiltered, whether or not the list is on screen.
-    pub fn export_csv(&mut self, run: &Run, cal: Option<&RiCalibration>) {
-        let rows: Vec<ResultRow> = build_rows(run, cal.filter(|_| run.ident.is_none()))
+    pub fn export_csv(&mut self, run: &Run, cal: Option<&RiCalibration>, cutoff: f64) {
+        let rows: Vec<ResultRow> = build_rows(run, cal.filter(|_| run.ident.is_none()), cutoff)
             .into_iter()
             .map(|r| r.res)
             .collect();
@@ -297,9 +304,15 @@ impl Results {
     }
 
     /// Components with a hit for the looked-up substance, best first; returns the clicked one.
-    fn found_list(&self, ui: &mut egui::Ui, run: &Run, lib: &Library) -> Option<usize> {
+    fn found_list(
+        &self,
+        ui: &mut egui::Ui,
+        run: &Run,
+        lib: &Library,
+        cutoff: f64,
+    ) -> Option<usize> {
         let (i, ((..), id, _)) = (self.looked_up?, run.ident.as_ref()?);
-        let found = find_substance(id, &lib.compounds, i);
+        let found = find_substance(id, &lib.compounds, i, cutoff);
         let mut clicked = None;
         ui.horizontal_wrapped(|ui| {
             ui.strong(&lib.compounds[i].name);
@@ -343,7 +356,7 @@ pub fn component_ri(run: &Run, k: usize, cal: Option<&RiCalibration>) -> Option<
 }
 
 /// Rows of the active run. Without a library every row is "No match: N" (`result_rows`).
-fn build_rows(run: &Run, cal: Option<&RiCalibration>) -> Vec<Row> {
+fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
     let unnamed;
     let (id, compounds) = match &run.ident {
         Some(((lib, ..), id, _)) => (id, &lib.compounds[..]),
@@ -365,6 +378,7 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>) -> Vec<Row> {
         &run.peak_masses,
         id,
         compounds,
+        cutoff,
     );
     (rows.into_iter())
         .map(|res| {
@@ -678,7 +692,7 @@ pub(crate) mod tests {
             events,
             ..Default::default()
         };
-        ctx.run_ui(input, |ui| r.panel(ui, Some(run), cal))
+        ctx.run_ui(input, |ui| r.panel(ui, Some(run), cal, 0.0))
             .textures_delta
             .clear();
     }

@@ -42,14 +42,14 @@ is S4 (#253).
 | Tools: RI-Calibration Wizard, Compound Detection Wizard, Batch quantification wizard, MID wizard | Single windows: RI calibration, Batch (option "Save components as .cmp"), MID | No guided flow (see section 5) |
 | Tools: Detect Components (Ctrl+D) | Runs automatically on load / after Settings Apply | Fine; shortcut not needed |
 | Tools: Library Editor, Split spectrum window, Chromatogram overlay, Find Compound, Natural Isotope Calculator, Copy RT to target lib | Library editor, Split/Difference, run-list checkboxes (overlay), Results "Find substance", Natural isotopes, Copy retention times | Covered |
-| Toolbar: NIST search | Button in the right panel, only after "Open NIST library" | Covered, but hard to find: NIST path belongs in Settings like before |
+| Toolbar: NIST search | Button in the right panel, only after "Open NIST library" | Covered; the NIST path is also chosen in Settings (#254) |
 | Toolbar: Add selected compound to library (Ctrl+L) | Library editor → add component | Shortcut missing |
 | Toolbar: About | None | **Gap**: Help → About (version, licence, authors, source) |
 | Quit | None (window close only) | **Gap**: File → Quit (Ctrl+Q) |
-| Settings dialog: Appearance (time scale, axes labels, label highest peaks) | Time unit in the main view; no axes-labels or peak-label options | Small gap |
-| Settings: Identification: Compound Lib path, NIST path, Cutoff score (0.85), Similarity-score radio (combined / spectrum / RI), Use scaled lib | RI tolerance, pure/impure, use-RI/use-spec checkboxes; scaled lib and the SF_* values are "stored, not used" | Gap: cutoff, score-mode choice, persisted library paths, scaled lib; check against #242 first |
+| Settings dialog: Appearance (time scale, axes labels, label highest peaks) | Time unit in the main view; Settings → Appearance: axes labels, m/z of the 5 highest peaks in view | Covered (#254) |
+| Settings: Identification: Compound Lib path, NIST path, Cutoff score (0.85), Similarity-score radio (combined / spectrum / RI), Use scaled lib | Settings → Libraries (both paths), Score (combined / spectrum / RI), Cutoff score; scaled lib "stored, not used" | Covered (#254); scaled lib is dead in 3.3 too (algorithms.md §4b.4) |
 | Settings: Max. RI difference shown as 10.0 in the old dialog | New RI tolerance 20 | Check: same key `LS_RI_DIFF`? The RI wizard sets it to 20 during calibration |
-| Settings: Centroid (SF_*), baseline adjustment | SF_* "stored, not used"; baseline toggle missing | Gap if the centroid path is part of the detector |
+| Settings: Centroid (SF_*), baseline adjustment | SF_CENTROID_* shown as used (centroid export); SF_PEAK_*/SF_MAX_BASE_DEV dead in 3.3 too; SF_FWHM and baseline adjustment not wired | Gap for SF_FWHM and baseline adjustment (follow-ups of #254, algorithms.md §4b.4) |
 | QSettings: window size/position, dock state, recent files, library path persist | Settings, panels, panel sizes, window, recent runs and library paths persist (not the Qt dock blobs); 3.3 values are imported once (#253) | Fine |
 | Help button (F1) in Settings | Hover texts | Fine |
 | Context menus, drag and drop | None | Modern additions, not parity |
@@ -69,7 +69,7 @@ is S4 (#253).
 3. ~~Detected vs. library compound side by side, scan/RT entry.~~ Done in #251.
 4. Help → About, File → Quit, keyboard shortcuts.
 5. ~~Persisted settings, window layout, recent files, library paths.~~ Done in #253.
-6. Settings scope: cutoff score, score mode, scaled lib, centroid values, baseline adjustment, appearance options; settle the RI tolerance default.
+6. ~~Settings scope: cutoff score, score mode, scaled lib, centroid values, appearance options.~~ Done in #254; SF_FWHM and baseline adjustment are follow-ups.
 7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
 8. DE/EN language switch.
 9. GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.

@@ -546,8 +546,8 @@ in §6.3 (the two spectrum scores, vtable +0x18 and +0x10). 1 scores fragments (
 the query with bin width 2, then one virtual score call), 2 a dot product (`scaleCompound_dot` on both
 spectra, then mass overlap counts); both are unreachable in the shipped app and are not ported.
 
-Note: `LS_CUTOFF` (default 0.8) and the SQL fields are not persisted by this path. The brief asks whether
-they are stored elsewhere; this pass did not check that (Unknown).
+Note: `LS_CUTOFF` (default 0.8) and the SQL fields are not persisted by this path. They are QSettings values
+(`[Algorithm] LS_CUTOFF` in the old `.conf`/registry); the rewrite imports and saves `LS_CUTOFF` there (#254).
 
 ### 5.3 GCMSSettingsObject (instance copy) 0x7d6a1a (Observed)
 

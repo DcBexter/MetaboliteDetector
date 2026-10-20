@@ -77,7 +77,7 @@ enum Field<'a> {
 type Access = fn(&mut GcmsSettings) -> Field<'_>;
 
 /// Every setting under its old key; reading and writing both go through this one table.
-const FIELDS: [(&str, Access); 34] = [
+const FIELDS: [(&str, Access); 35] = [
     ("SF_PEAK_THRESHOLD_BEGIN", |s| {
         Field::F64(&mut s.sf_peak_threshold_begin)
     }),
@@ -135,6 +135,7 @@ const FIELDS: [(&str, Access); 34] = [
     }),
     ("LS_USE_SPEC", |s| Field::Bool(&mut s.ls_use_spec)),
     ("LS_MASS_FILTER", |s| Field::Ranges(&mut s.ls_mass_filter)),
+    ("LS_CUTOFF", |s| Field::F64(&mut s.ls_cutoff)),
     ("QUANT_ION_NUMBER", |s| Field::I32(&mut s.quant_ion_number)),
     ("QUANT_MIN_DIST_IONS", |s| {
         Field::F64(&mut s.quant_min_dist_ions)
@@ -415,11 +416,17 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     recent.extend(path(&v));
                     true
                 }
+                // The old app's Appearance checkboxes, saved under [GUI].
+                ("", "axes_labels") | ("GUI", "axes_label") => {
+                    put(&mut app.settings.appearance.axes_labels, &v)
+                }
+                ("", "peak_labels") | ("GUI", "peak_label") => {
+                    put(&mut app.settings.appearance.peak_labels, &v)
+                }
                 ("GUI", "size") => old_size(&v)
                     .map(|size| ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size)))
                     .is_some(),
-                // The old app's other settings stay for later versions (e.g. LS_CUTOFF for S5);
-                // its window state blobs do not.
+                // The old app's other settings stay for later versions; its window state blobs do not.
                 ("" | "Algorithm", _) => {
                     app.saved.extra.push((key.clone(), v));
                     true
@@ -470,6 +477,11 @@ pub fn text(app: &App) -> String {
         .collect();
     let mut panels = app.panels;
     lines.extend((panels.saved()).map(|(k, on)| (format!("panel.{k}"), on.to_string())));
+    let a = app.settings.appearance;
+    lines.extend([
+        ("axes_labels".to_owned(), a.axes_labels.to_string()),
+        ("peak_labels".to_owned(), a.peak_labels.to_string()),
+    ]);
     let library = (app.library.as_ref()).map(|l| l.path.clone());
     let nist = (app.nist.lib.as_ref()).map(|l| l.path.clone());
     let paths = [
@@ -608,7 +620,9 @@ rc_lib_file=
 rc_open_file=/data/run 1.bin
 
 [GUI]
+axes_label=false
 mw_state="@ByteArray(\0\0\0\xff\0\0\0\0\xfd)"
+peak_label=true
 size=@Size(1591 800)
 "#;
 
@@ -623,11 +637,14 @@ size=@Size(1591 800)
         );
         assert_eq!(s.ls_resolution, 0.3);
         assert_eq!(s.an_peak_threshold_end, -5.0);
+        assert_eq!(s.ls_cutoff, 0.85);
+        let shown = app.settings.appearance;
+        assert_eq!((shown.axes_labels, shown.peak_labels), (false, true));
         let run = std::path::absolute("/data/run 1.bin").unwrap();
         assert_eq!(app.saved.recent, [run]);
         assert_eq!(app.saved.library, None);
-        // Kept for later, the GUI blob is not.
-        assert_eq!(app.saved.extra, [("LS_CUTOFF".into(), "0.85".into())]);
+        // The GUI blob is not kept.
+        assert!(app.saved.extra.is_empty(), "{:?}", app.saved.extra);
     }
 
     /// Reads a real old `MetaboliteDetector.conf` copied into `example-data/old-results/`.
@@ -666,7 +683,8 @@ size=@Size(1591 800)
     fn own_lines_round_trip_and_keep_unknown_keys() {
         let mut app = App::default();
         let s = &mut app.settings.applied;
-        (s.ls_ri_diff, s.ls_use_ri) = (12.5, false);
+        (s.ls_ri_diff, s.ls_use_ri, s.ls_cutoff) = (12.5, false, 0.7);
+        app.settings.appearance.peak_labels = false;
         s.ls_mass_filter = vec![(73.0, 75.0), (147.0, 148.5)];
         s.peak_detector = Detector::Matched {
             width: 7,
@@ -680,6 +698,7 @@ size=@Size(1591 800)
         let (back, bad) = apply_text(&text, own_entries);
         assert!(bad.is_empty(), "{bad:?}");
         assert_eq!(back.settings.applied, app.settings.applied);
+        assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
         assert_eq!(back.saved.extra, app.saved.extra);

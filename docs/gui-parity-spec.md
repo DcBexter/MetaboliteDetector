@@ -88,6 +88,9 @@ Principle: every function of MetaboliteDetector 3.3 can be reached. The look may
   - Guided mode switch (also in Help)
 - **Baseline adjustment and the centroid values (SF_\*):** first confirm by RE that the old detector uses them; add them only if it does.
 - Check against #242 before changing the scoring.
+- **Result (#254):** RE shows `SF_PEAK_*`, `SF_MAX_BASE_DEV` and `LS_USE_SCALED_LIB` are dead in 3.3 (stored only);
+  `SF_CENTROID_*` steer the centroid export, `SF_FWHM` every centroiding, and baseline adjustment only type-1
+  caches (algorithms.md §4b.4). The guided-mode switch is left to S7 (#256).
 
 ## S6 GSL ties
 

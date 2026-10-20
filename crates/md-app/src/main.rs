@@ -257,7 +257,13 @@ impl App {
     fn windows(&mut self, ctx: &egui::Context) {
         self.ri
             .window(ctx, &self.runs, self.active, self.library.as_deref());
-        self.settings.window(ctx);
+        let libraries = [
+            (self.library.as_ref()).map(|l| l.path.as_path()),
+            (self.nist.lib.as_ref()).map(|l| l.path.as_path()),
+        ];
+        if let Some(which) = self.settings.window(ctx, libraries) {
+            self.pick_library(ctx, which);
+        }
         self.batch
             .use_settings(&self.settings.applied, self.ri.rt_only);
         // Not while the library is rebuilt after a switch of RT-only: its anchors would not match.

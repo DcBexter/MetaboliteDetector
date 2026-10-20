@@ -32,6 +32,7 @@ pub struct ResultRow {
 
 /// Rows of all components in component order (ascending RT). `peak_masses[p]` is the ion mass of
 /// peak `p` of the peak list the components were deconvoluted from; `ris` as in `map_compounds_to_library`.
+/// An assigned hit below `cutoff` (`LS_CUTOFF`) is shown as no match, like the old `DataTableModel`.
 pub fn result_rows(
     comps: &[Component],
     scan_times_s: &[f64],
@@ -39,12 +40,13 @@ pub fn result_rows(
     peak_masses: &[u32],
     id: &Identification,
     lib: &[LibraryCompound],
+    cutoff: f64,
 ) -> Vec<ResultRow> {
     comps
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let hit = id.assigned.get(i).copied().flatten();
+            let hit = (id.assigned.get(i).copied().flatten()).filter(|h| h.overall >= cutoff);
             let l = hit.map(|h| &lib[h.compound]);
             let ions = l.map_or(&[][..], |l| match l.quant_ions.is_empty() {
                 true => &l.auto_quant_ions,
@@ -118,13 +120,14 @@ pub fn write_csv(mut w: impl Write, rows: &[ResultRow]) -> io::Result<()> {
     w.flush()
 }
 
-/// Old `CompoundMapper::findCompound`: the components that have a hit with the same name as library
-/// compound `compound` (every hit is already above the cutoff), best score first. Returns
+/// Old `CompoundMapper::findCompound`: the components that have a hit of at least `cutoff`
+/// (`LS_CUTOFF`) with the same name as library compound `compound`, best score first. Returns
 /// (component index, overall score).
 pub fn find_substance(
     id: &Identification,
     lib: &[LibraryCompound],
     compound: usize,
+    cutoff: f64,
 ) -> Vec<(usize, f64)> {
     let name = &lib[compound].name;
     let mut found: Vec<(usize, f64)> = id
@@ -133,7 +136,7 @@ pub fn find_substance(
         .enumerate()
         .flat_map(|(i, hits)| {
             hits.iter()
-                .filter(|h| lib[h.compound].name == *name)
+                .filter(|h| h.overall >= cutoff && lib[h.compound].name == *name)
                 .map(move |h| (i, h.overall))
         })
         .collect();
@@ -201,6 +204,7 @@ mod tests {
             &[73, 73, 116, 147],
             &id,
             &lib,
+            0.8,
         );
         assert_eq!(rows[0].name, "Alanine, 2TMS");
         assert_eq!(rows[0].rt_s, 60.0);
@@ -208,6 +212,12 @@ mod tests {
         assert_eq!(rows[0].quant_ions, vec![73.0, 116.0]);
         assert_eq!(rows[1].name, "No match: 2");
         assert_eq!((rows[1].area, rows[1].overall), (None, None));
+        // Below the cutoff the assigned hit counts as no match.
+        let rows = result_rows(&comps, &[0.0, 60.0, 120.0], None, &[73; 4], &id, &lib, 0.95);
+        assert_eq!(
+            (rows[0].name.as_str(), rows[0].overall),
+            ("No match: 1", None)
+        );
     }
 
     #[test]
@@ -220,6 +230,7 @@ mod tests {
             &[73, 73, 116, 147],
             &id,
             &lib,
+            0.0,
         );
         let mut out = Vec::new();
         write_csv(&mut out, &rows).unwrap();
@@ -235,8 +246,12 @@ mod tests {
     #[test]
     fn find_lists_every_component_with_that_name_best_first() {
         let (_, id, lib) = setup();
-        assert_eq!(find_substance(&id, &lib, 1), vec![(0, 0.85), (1, 0.82)]);
-        assert_eq!(find_substance(&id, &lib, 0), vec![(0, 0.9)]);
+        assert_eq!(
+            find_substance(&id, &lib, 1, 0.8),
+            vec![(0, 0.85), (1, 0.82)]
+        );
+        assert_eq!(find_substance(&id, &lib, 1, 0.83), vec![(0, 0.85)]);
+        assert_eq!(find_substance(&id, &lib, 0, 0.8), vec![(0, 0.9)]);
     }
 
     #[test]

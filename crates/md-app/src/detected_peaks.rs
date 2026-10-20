@@ -30,9 +30,11 @@ impl App {
         let picked = |mass: u32| self.trace != Trace::Tic && self.mz == mass as f32;
         let first = f64::from(c.first_scan) + 1.0;
         // One plot memory per component, so a zoom on one never hides the next one's curves.
-        let shown = Plot::new(("detected peaks", Arc::as_ptr(&run.data), run.rev, k))
-            .x_axis_label("Scan")
-            .y_axis_label("Intensity")
+        let mut plot = Plot::new(("detected peaks", Arc::as_ptr(&run.data), run.rev, k));
+        if self.settings.appearance.axes_labels {
+            plot = plot.x_axis_label("Scan").y_axis_label("Intensity");
+        }
+        let shown = plot
             .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
             .show(ui, |p| {
                 for (i, ion) in profiles.iter().enumerate() {

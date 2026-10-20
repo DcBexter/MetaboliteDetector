@@ -16,7 +16,8 @@ use crate::search::SearchSettings;
 /// Fields marked "stored only" are kept for the file but no step of the rewrite reads them yet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcmsSettings {
-    // Spectrum filter (stored only).
+    // Spectrum filter. In 3.3 the first three are only stored (no analysis reads them), `SF_FWHM` steers
+    // every centroiding and `SF_CENTROID_*` the centroid export and FastFlight import (algorithms.md §4b.4).
     pub sf_peak_threshold_begin: f64,
     pub sf_peak_threshold_end: f64,
     pub sf_max_base_dev: f64,
@@ -58,6 +59,8 @@ pub struct GcmsSettings {
     pub an_modeled_values_for_integration: bool,
     /// `LS_MASS_FILTER`.
     pub ls_mass_filter: Vec<(f32, f32)>,
+    /// `LS_CUTOFF`: a hit below this overall score counts as no match (result table, Find substance, batch).
+    pub ls_cutoff: f64,
     /// `SQL_MAX_NUMBER_FRAGMENTS` and `SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS`: NIST pre-filter.
     pub sql_max_number_fragments: i32,
     pub sql_minimal_number_equal_fragments: i32,
@@ -99,6 +102,7 @@ impl Default for GcmsSettings {
             an_min_height_bp: 0.0,
             an_modeled_values_for_integration: true,
             ls_mass_filter: Vec::new(),
+            ls_cutoff: 0.8,
             sql_max_number_fragments: 5,
             sql_minimal_number_equal_fragments: 3,
             peak_detector: Detector::Default,
@@ -201,6 +205,7 @@ impl GcmsSettings {
             finite("Peak threshold", threshold as f64)?;
         }
         ranged("LS_RI_DIFF", self.ls_ri_diff, 1e-6, 1e9)?;
+        ranged("LS_CUTOFF", self.ls_cutoff, 0.0, 1.0)?;
         // A component has a few dozen fragments at most; the dialog uses the same limits.
         ranged(
             "SQL_MAX_NUMBER_FRAGMENTS",
@@ -392,14 +397,14 @@ impl GcmsSettings {
         }
     }
 
-    /// Settings of a batch scan: the library is prepared with `search()`, but hits are cut off at the
-    /// default `LS_CUTOFF` (the GUI colours by score, a table needs a decision).
+    /// Settings of a batch scan: the library is prepared with `search()`, but hits are cut off at
+    /// `LS_CUTOFF` like the old `BatchQuantificator`.
     pub fn scan(&self, calibration: Option<RiCalibration>) -> ScanSettings {
         ScanSettings {
             peaks: self.peak(),
             deconv: self.deconv(),
             search: SearchSettings {
-                cutoff: SearchSettings::default().cutoff,
+                cutoff: self.ls_cutoff,
                 ..self.search()
             },
             calibration,
@@ -418,7 +423,8 @@ impl GcmsSettings {
         }
     }
 
-    /// The GUI searches with cutoff 0 and colours by score (algorithms.md §5.8), so `LS_CUTOFF` is not used.
+    /// The GUI searches with cutoff 0 and colours by score (algorithms.md §5.8); `LS_CUTOFF` applies
+    /// later, to the result table and Find substance.
     pub fn search(&self) -> SearchSettings {
         SearchSettings {
             ri_diff: self.ls_ri_diff,
@@ -463,6 +469,7 @@ mod tests {
             (-10.0, 0.5, 30.0)
         );
         assert_eq!((s.ls_resolution, s.ls_use_scaled_lib), (0.3, true));
+        assert_eq!(s.ls_cutoff, SearchSettings::default().cutoff);
         assert_eq!(
             (
                 s.quant_ion_number,
@@ -493,6 +500,7 @@ mod tests {
     #[test]
     fn scan_and_quant_settings_follow_the_fields() {
         let s = GcmsSettings {
+            ls_cutoff: 0.6,
             quant_ion_number: 0,
             quant_min_dist_ions: 1.5,
             quant_quality_cutoff: 2.5,
@@ -506,7 +514,7 @@ mod tests {
         let scan = s.scan(Some(cal.clone()));
         assert_eq!((scan.peaks, scan.calibration), (s.peak(), Some(cal)));
         // The library is prepared with cutoff 0, the scan itself cuts hits off.
-        assert_eq!(scan.search.cutoff, SearchSettings::default().cutoff);
+        assert_eq!(scan.search.cutoff, 0.6);
         assert_eq!(
             SearchSettings {
                 cutoff: 0.0,
@@ -555,6 +563,7 @@ mod tests {
         let base = GcmsSettings {
             an_min_height_bp: 0.25,
             ls_mass_filter: vec![(1.0, 2.0)],
+            ls_cutoff: 0.85,
             sql_max_number_fragments: 7,
             sql_minimal_number_equal_fragments: 2,
             ..Default::default()
