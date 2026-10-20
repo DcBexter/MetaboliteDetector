@@ -54,7 +54,7 @@ impl App {
             None => format!("{} components (click a dot)", r.components.len()),
         };
         format!(
-            "{} — {} scans — scan {} at {:.3} {}{} (←/→ to step) — {shown} — {}",
+            "{} — {} scans — scan {} at {:.3} {}{} (←/→ scan, ↑/↓ component) — {shown} — {}",
             r.name,
             r.data.scan_count(),
             r.scan + 1,

@@ -5,6 +5,7 @@ use egui_plot::{Bar, BarChart, Line, Plot, Points, Text, VLine};
 
 use crate::plot_export::Area;
 use md_core::decimate;
+use std::sync::Arc;
 
 use crate::{App, Run, Trace, color, detail, export, identify, view::View};
 
@@ -54,13 +55,15 @@ fn run_points(
 /// Rough width of one label character and the gap between labels, in points.
 const LABEL_CHAR_PX: f32 = 7.0;
 const LABEL_GAP_PX: f32 = 6.0;
+/// A click this close to a component apex (along the time axis) selects the component.
+const SNAP_PX: f64 = 10.0;
 
-/// One chromatogram plot with a line per run and `marks` as dots; returns the clicked retention
-/// time in the view's unit.
+/// One chromatogram plot with a line per run and `marks` as dots, unzoomed when `reset`; returns
+/// the clicked retention time and the snap radius `SNAP_PX`, both in minutes.
 #[allow(clippy::too_many_arguments)]
 fn trace_plot(
     ui: &mut egui::Ui,
-    id: &str,
+    (id, reset): (&str, bool),
     label: &str,
     height: f32,
     runs: &[Run],
@@ -69,9 +72,13 @@ fn trace_plot(
     trace: fn(&Run) -> &[f64],
     marks: &[[f64; 2]],
     labels: &[identify::Label],
-) -> Option<f64> {
+) -> Option<(f64, f64)> {
     let link = egui::Id::unique("chromatograms");
-    let plot = Plot::new(id)
+    let mut plot = Plot::new(id);
+    if reset {
+        plot = plot.reset();
+    }
+    let plot = plot
         .height(height)
         // Same width in both plots, so their linked x axes line up.
         .y_axis_min_width(90.0)
@@ -126,11 +133,12 @@ fn trace_plot(
                 p.text(Text::new("hits", at.into(), text).anchor(egui::Align2::LEFT_BOTTOM));
             }
             p.vline(VLine::new("", view.time(cursor_min)));
-            p.pointer_coordinate()
+            (p.pointer_coordinate(), view.minutes(SNAP_PX / px_per_t))
         });
+    let (at, radius) = plot.inner;
     plot.response
         .clicked()
-        .then_some(view.minutes(plot.inner?.x))
+        .then_some((view.minutes(at?.x), radius))
 }
 
 impl App {
@@ -139,13 +147,6 @@ impl App {
             if self.runs.is_empty() {
                 return self.start_screen(ui);
             }
-            self.trace_controls(ui);
-            ui.horizontal_wrapped(|ui| {
-                self.view.controls(ui);
-                if ui.button("Run info").clicked() {
-                    self.view.info_open = true;
-                }
-            });
             if self.trace != Trace::Tic {
                 self.update_sics(ui.ctx());
             }
@@ -153,10 +154,69 @@ impl App {
                 return;
             }
             self.step_scan(ui);
-            let clicked = self.chromatogram_plots(ui);
-            self.select_clicked(clicked);
-            self.spectrum_plot(ui);
+            // The chromatogram on top, the spectrum and Detected Peaks side by side below; each
+            // split can be dragged, and the top leaves the spectrum at least 160 px.
+            let p = self.panels;
+            // A hidden plot has nothing on screen to save as a picture.
+            if !p.chromatogram {
+                self.export.chromatograms = Area::default();
+            }
+            if !p.spectrum {
+                self.export.spectrum = Area::default();
+            }
+            let below = p.spectrum || p.detected_peaks;
+            let none = egui::Frame::NONE;
+            if p.chromatogram && below {
+                let h = ui.available_height();
+                egui::Panel::top("chromatograms")
+                    .resizable(true)
+                    .frame(none.inner_margin(egui::Margin {
+                        bottom: 6,
+                        ..Default::default()
+                    }))
+                    .default_size(h * 0.55)
+                    .size_range((h * 0.25)..=(h - 160.0).max(h * 0.5))
+                    .show(ui, |ui| self.chromatogram_area(ui));
+                // The splitter's grab zone reaches 3 px into the area below.
+                ui.add_space(6.0);
+            } else if p.chromatogram {
+                self.chromatogram_area(ui);
+            }
+            if p.detected_peaks && p.spectrum {
+                let w = ui.available_width();
+                egui::Panel::right("detected peaks")
+                    .resizable(true)
+                    .frame(none.inner_margin(egui::Margin {
+                        left: 6,
+                        ..Default::default()
+                    }))
+                    .default_size(w * 0.4)
+                    .size_range((w * 0.2)..=(w * 0.8))
+                    .show(ui, |ui| self.detected_peaks(ui));
+            } else if p.detected_peaks {
+                self.detected_peaks(ui);
+            }
+            if p.spectrum {
+                let right = if p.detected_peaks { 6 } else { 0 };
+                (none.inner_margin(egui::Margin {
+                    right,
+                    ..Default::default()
+                }))
+                .show(ui, |ui| self.spectrum_plot(ui));
+            }
         });
+    }
+
+    fn chromatogram_area(&mut self, ui: &mut egui::Ui) {
+        self.trace_controls(ui);
+        ui.horizontal_wrapped(|ui| {
+            self.view.controls(ui);
+            if ui.button("Run info").clicked() {
+                self.view.info_open = true;
+            }
+        });
+        let clicked = self.chromatogram_plots(ui);
+        self.select_clicked(clicked);
     }
 
     /// Nothing open yet: the two ways in, instead of empty plots and controls. While the first runs
@@ -219,8 +279,11 @@ impl App {
         }
     }
 
-    /// Arrow keys move the scan cursor of the active run.
+    /// Arrow keys move the scan cursor of the active run, unless a text field takes them.
     fn step_scan(&mut self, ui: &egui::Ui) {
+        if ui.ctx().text_edit_focused() {
+            return;
+        }
         let run = &mut self.runs[self.active];
         let last = run.data.scan_count() - 1;
         ui.input(|i| {
@@ -233,13 +296,19 @@ impl App {
         });
     }
 
-    /// The TIC and/or SIC plots; returns the clicked retention time (min).
-    fn chromatogram_plots(&mut self, ui: &mut egui::Ui) -> Option<f64> {
+    /// The TIC and/or SIC plots, filling the room left; returns the clicked retention time and the
+    /// snap radius (min).
+    fn chromatogram_plots(&mut self, ui: &mut egui::Ui) -> Option<(f64, f64)> {
         let run = &self.runs[self.active];
         let cursor = run.minutes[run.scan];
-        // Both traces: a third each, so their axes keep enough room for tick labels.
-        let plots = if self.trace == Trace::Both { 3.0 } else { 2.0 };
-        let height = ui.available_height() / plots;
+        // A zoom belongs to the run it was made on.
+        let reset = !(self.plotted.as_ref()).is_some_and(|p| p.ptr_eq(&Arc::downgrade(&run.data)));
+        if reset {
+            self.plotted = Some(Arc::downgrade(&run.data));
+        }
+        let plots = if self.trace == Trace::Both { 2.0 } else { 1.0 };
+        let gap = ui.spacing().item_spacing.y * (plots - 1.0);
+        let height = ((ui.available_height() - gap) / plots).max(64.0);
         let mut clicked = None;
         let top = ui.cursor().min;
         if self.trace != Trace::Sic {
@@ -262,7 +331,7 @@ impl App {
             };
             clicked = trace_plot(
                 ui,
-                "tic",
+                ("tic", reset),
                 &self.derivative_label("TIC".into()),
                 height,
                 &self.runs,
@@ -278,7 +347,7 @@ impl App {
             let label = self.derivative_label(label);
             let sic = trace_plot(
                 ui,
-                "sic",
+                ("sic", reset),
                 &label,
                 height,
                 &self.runs,
@@ -295,29 +364,77 @@ impl App {
         clicked
     }
 
-    /// A click selects the scan at that time, snapping to a component apex within 3 scans.
-    fn select_clicked(&mut self, clicked: Option<f64>) {
+    /// A click selects the scan at that time, snapping to the nearest component apex within
+    /// `radius` (min).
+    fn select_clicked(&mut self, clicked: Option<(f64, f64)>) {
         let run = &mut self.runs[self.active];
-        if let Some(s) = clicked.and_then(|x| run.data.scan_at(x * 60.0)) {
+        let Some((x, radius)) = clicked else {
+            return;
+        };
+        if let Some(s) = run.data.scan_at(x * 60.0) {
+            let off = |k: &usize| (run.minutes[run.components[*k].apex_scan as usize] - x).abs();
             run.component = (0..run.components.len())
-                .min_by_key(|k| run.components[*k].apex_scan.abs_diff(s as u32))
-                .filter(|k| run.components[*k].apex_scan.abs_diff(s as u32) <= 3);
+                .min_by(|a, b| off(a).total_cmp(&off(b)))
+                .filter(|k| off(k) <= radius);
             run.scan = run
                 .component
                 .map_or(s, |k| run.components[k].apex_scan as usize);
         }
     }
 
+    /// The scan and its retention time, typed in or dragged; the nearest scan to a time is taken.
+    fn scan_entry(&mut self, ui: &mut egui::Ui) {
+        let run = &mut self.runs[self.active];
+        let mut scan = None;
+        ui.horizontal_wrapped(|ui| {
+            let label = ui.label("Scan");
+            let mut n = run.scan + 1;
+            if ui
+                .add(egui::DragValue::new(&mut n).range(1..=run.data.scan_count()))
+                .labelled_by(label.id)
+                .on_hover_text("Scan whose spectrum is shown; ←/→ step through the scans")
+                .changed()
+            {
+                scan = Some(n - 1);
+            }
+            let label = ui.label(format!("RT ({})", self.view.unit.label()));
+            let mut t = self.view.time(run.minutes[run.scan]);
+            if ui
+                .add(egui::DragValue::new(&mut t).max_decimals(3))
+                .labelled_by(label.id)
+                .on_hover_text("Retention time of the shown scan; the nearest scan is taken")
+                .changed()
+            {
+                scan = run.data.scan_at(self.view.minutes(t) * 60.0);
+            }
+        });
+        if let Some(s) = scan {
+            (run.scan, run.component) = (s, None);
+        }
+    }
+
     fn spectrum_plot(&mut self, ui: &mut egui::Ui) {
+        // The controls scroll in a narrow window, so the plot keeps most of the height.
+        let room = ui.available_height() * 0.4;
+        egui::ScrollArea::both()
+            .id_salt("spectrum controls")
+            .max_height(room)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                self.scan_entry(ui);
+                export::norm_picker(ui, &mut self.export.norm);
+                let run = &self.runs[self.active];
+                let (title, ..) = export::shown_spectrum(run, self.export.norm);
+                let cmp = detail::comparison(run, self.export.norm);
+                if let Some(e) =
+                    detail::controls(ui, &mut self.spectrum_mode, &title, cmp.as_ref(), &run.name)
+                {
+                    self.error = Some(e);
+                }
+            });
         let run = &self.runs[self.active];
-        export::norm_picker(ui, &mut self.export.norm);
         let (title, mz, y) = export::shown_spectrum(run, self.export.norm);
         let cmp = detail::comparison(run, self.export.norm);
-        if let Some(e) =
-            detail::controls(ui, &mut self.spectrum_mode, &title, cmp.as_ref(), &run.name)
-        {
-            self.error = Some(e);
-        }
         // Without a library hit only the found spectrum can be drawn.
         let mode = cmp
             .as_ref()
@@ -362,5 +479,23 @@ impl App {
         }
         // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
         self.export.spectrum = Area::since(ui, top);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::App;
+
+    #[test]
+    fn a_click_snaps_to_the_nearest_component_within_the_radius() {
+        let mut app = App::default();
+        // Components at 1 and 2 min.
+        app.runs.push(crate::results::tests::run());
+        app.select_clicked(Some((1.7, 0.2)));
+        assert_eq!((app.runs[0].component, app.runs[0].scan), (None, 2));
+        app.select_clicked(Some((1.85, 0.2)));
+        assert_eq!((app.runs[0].component, app.runs[0].scan), (Some(1), 2));
+        app.select_clicked(Some((0.2, 0.25)));
+        assert_eq!((app.runs[0].component, app.runs[0].scan), (None, 0));
     }
 }

@@ -44,15 +44,21 @@ settings with **Save…** and pass the file with `--settings`.
 Supported: ANDI-MS NetCDF (`.cdf`, `.nc`), old MetaboliteDetector caches (`.bin` + `.idx`) and FastFlight
 raw data (`MsData.FFT`). Pick several files to overlay them; each is analysed in the background.
 
-- **Run list** (left): tick a run to show it, click its name to make it the active run, × closes it.
-- **Chromatogram** (top): **TIC**, **SIC** (m/z ± tolerance) or **TIC + SIC**. Red dots are the detected
+- **Runs** (left, top): tick a run to show it, click its name to make it the active run, × closes it.
+- **Component list** (left, below the runs): every component of the active run, see
+  [Results of one run](#results-of-one-run).
+- **Chromatogram** (centre): **TIC**, **SIC** (m/z ± tolerance) or **TIC + SIC**. Red dots are the detected
   components; click near one to select it, ←/→ steps through scans. Scroll and drag move the view, Ctrl +
-  scroll zooms, double-click resets.
-- **Spectrum** (bottom): the selected component, deconvoluted. **Normalise spectrum** switches between raw,
-  base peak, unit and relative scale; with a library hit, **Split** and **Difference** compare both spectra.
-  Click an ion to show its SIC.
-- **Component panel** (right): S/N, sharpness and scores of the component, its ion peaks (click an ion to
-  show its SIC) and the library hits.
+  scroll zooms, double-click resets; another active run starts unzoomed.
+- **Spectrum** (below): the selected component, deconvoluted, or the scan typed in under **Scan** or
+  **RT**. **Normalise spectrum** switches between raw, base peak, unit and relative scale; with a library
+  hit, **Split** and **Difference** compare both spectra. Click an ion to show its SIC.
+- **Detected peaks** (beside the spectrum): each ion of the selected component over its scans; **Model**
+  adds the modelled peak profiles. Click a curve to show that ion's SIC.
+- **Component info** (right): the component next to its library entry (RT, RI, ions, S/N, sharpness,
+  scores), its ion peaks (click an ion to show its SIC) and the library hits.
+
+Drag the borders between the areas to resize them; **View** shows or hides each one.
 
 ![TIC and SIC of m/z 147 for 15 runs](docs/images/tic-sic.png)
 
@@ -87,11 +93,13 @@ the library, or **Load .calib…**. **Save .calib…** stores it next to the run
 
 ## Results of one run
 
-**Analysis → Results of the active run…** lists every component with RT, RI, peak area, scores and quant
-ions; type in **Find substance** to filter. **Export CSV…** saves the table, **Save components…** writes an
-old-style `.cmp`. **Analysis → Run info…** shows file, instrument and scan details.
+The **component list** on the left lists every component of the active run with RT, RI, peak area, S/N and
+number of ions, also without a library ("No match: 3"); with a library it adds the name, scores and quant
+ions. Click a header to sort, a row (or ↑/↓) to select the component; type in **Find substance** to
+filter. **Export CSV…** saves the list, **Save components…** writes an old-style `.cmp`.
+**Analysis → Run info…** shows file, instrument and scan details.
 
-![Results table of one run](docs/images/results.png)
+![Component list of a run without a library](docs/images/results.png)
 
 ## Quantify many runs
 

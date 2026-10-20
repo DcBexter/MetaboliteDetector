@@ -78,6 +78,10 @@ pub fn button(ui: &mut egui::Ui, area: Area, stem: &str) {
 
 /// The menu entries: pictures of the plot and their size.
 pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
+    if !area.rect.is_positive() {
+        ui.weak("Show the plot to save it as a picture (View menu).");
+        return;
+    }
     let ctx = ui.ctx().clone();
     let mut size: [f32; 2] = ctx.data(|d| d.get_temp(size_id())).unwrap_or_default();
     for (label, hint, kind, ext, name) in [

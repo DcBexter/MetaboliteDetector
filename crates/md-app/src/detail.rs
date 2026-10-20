@@ -118,90 +118,123 @@ pub fn controls(
     error
 }
 
-/// Right panel: values of the selected component, its peaks, the library hits and the NIST search.
-/// True when the NIST search was asked for.
+/// Right panel: the selected component next to its library entry, its peaks, the library hits and
+/// the NIST search; `cal` gives the RI while no library identified the run. True when the NIST
+/// search was asked for.
 pub fn panel(
     ui: &mut egui::Ui,
     run: &Run,
     nist: &identify::Nist,
-    mz: &mut f32,
-    trace: &mut Trace,
+    (mz, trace): (&mut f32, &mut Trace),
+    cal: Option<&md_core::ri::RiCalibration>,
 ) -> bool {
-    let Some(k) = run.component else {
-        return false;
-    };
     let mut search = false;
-    crate::layout::side_panel(ui, egui::Panel::right, "hits", |ui| {
-        body(ui, run, k, mz, trace);
-        if nist.lib.is_some() {
-            ui.separator();
-            search = identify::nist_list(ui, run, k, nist);
-        }
+    crate::layout::dock(egui::Panel::right("info"), ui, 340.0).show(ui, |ui| {
+        egui::ScrollArea::both().show(ui, |ui| {
+            let Some(k) = run.component else {
+                ui.strong("Component info");
+                ui.weak("Select a component in the list or on the chromatogram.");
+                return;
+            };
+            body(ui, run, k, (mz, trace), cal);
+            if nist.lib.is_some() {
+                ui.separator();
+                search = identify::nist_list(ui, run, k, nist);
+            }
+        });
     });
     search
 }
 
-fn body(ui: &mut egui::Ui, run: &Run, k: usize, mz: &mut f32, trace: &mut Trace) {
+/// A value or a dash.
+pub(crate) fn num(v: Option<f64>, decimals: usize) -> String {
+    v.map_or("–".into(), |v| format!("{v:.decimals$}"))
+}
+
+fn body(
+    ui: &mut egui::Ui,
+    run: &Run,
+    k: usize,
+    (mz, trace): (&mut f32, &mut Trace),
+    cal: Option<&md_core::ri::RiCalibration>,
+) {
     ui.strong(format!("Component {}", k + 1));
     let c = &run.components[k];
     let d = component_detail(c, &run.peaks, &run.peak_masses);
     let hit = shown_hit(run);
+    if let Some((l, _)) = hit {
+        ui.label(format!("Library: {}", l.name));
+    }
+    // The detected component beside its library entry, as in the old Compound Information.
     egui::Grid::new("component values").show(ui, |ui| {
-        let mut row = |name: &str, tip: &str, value: String| {
+        ui.label("");
+        number(ui, egui::RichText::new("Detected").strong());
+        if hit.is_some() {
+            number(ui, egui::RichText::new("Library").strong());
+        }
+        ui.end_row();
+        let mut row = |name: &str, tip: &str, found: String, lib: Option<String>| {
             ui.label(name).on_hover_text(tip);
-            ui.label(value);
+            number(ui, found);
+            if hit.is_some() {
+                number(ui, lib.unwrap_or_default());
+            }
             ui.end_row();
         };
+        let lib = |f: fn(&LibraryCompound, &LibraryHit) -> String| hit.map(|(l, h)| f(l, h));
+        row(
+            "RT (min)",
+            "Retention time of the apex",
+            format!("{:.2}", run.minutes[c.apex_scan as usize]),
+            lib(|l, _| num(Some(l.spectrum.rt_ms / 60_000.0).filter(|t| *t > 0.0), 2)),
+        );
+        row(
+            "RI",
+            "Retention index; needs an RI calibration",
+            num(crate::results::component_ri(run, k, cal), 1),
+            lib(|l, _| num(Some(l.spectrum.ri).filter(|ri| *ri >= 0.0), 1)),
+        );
+        // The rewrite reads centroid spectra only, so there is no profile count (architecture.md).
+        row(
+            "Ions (centroid)",
+            "Number of ions in the spectrum; spectra are centroided",
+            c.spectrum.len().to_string(),
+            lib(|l, _| l.spectrum.masses.len().to_string()),
+        );
         row(
             "Mean S/N",
             "Mean signal-to-noise of the ion peaks",
             stat(&d, d.mean_signal_to_noise, 1),
+            None,
         );
         row(
             "Peak sharpness",
             "Mean sharpness of the ion peaks",
             stat(&d, d.mean_sharpness, 2),
+            None,
         );
-        let disc = if d.discrepancy < 0.0 {
-            "–".into()
-        } else {
-            format!("{:.1}", d.discrepancy)
-        };
         row(
             "Peak discrepancy",
             "Mean peak quality (old \"Peak dis.indx\"); 0 is best",
-            disc,
+            num(Some(d.discrepancy).filter(|v| *v >= 0.0), 1),
+            None,
         );
-        // The rewrite reads centroid spectra only, so there is no profile count (architecture.md).
-        let ions = match hit {
-            Some((l, _)) => format!(
-                "{} found / {} library",
-                c.spectrum.len(),
-                l.spectrum.masses.len()
-            ),
-            None => format!("{} found", c.spectrum.len()),
-        };
-        row(
-            "Ions (centroid)",
-            "Number of ions in the spectrum; spectra are centroided",
-            ions,
-        );
-        if let Some((_, h)) = hit {
-            row(
-                "Overall score",
-                "Score of the compared library hit",
-                format!("{:.3}", h.overall),
+        if hit.is_some() {
+            let mut score =
+                |name: &str, tip: &str, f: fn(&LibraryCompound, &LibraryHit) -> String| {
+                    row(name, tip, String::new(), lib(f))
+                };
+            score(
+                "Score",
+                "Overall score of the compared library hit",
+                |_, h| format!("{:.3}", h.overall),
             );
-            row(
-                "Spectrum score",
-                "Similarity of the spectra",
-                format!("{:.3}", h.spec_sim),
-            );
-            row(
-                "RI score",
-                "Similarity of the retention indices",
-                h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")),
-            );
+            score("Spectrum score", "Similarity of the spectra", |_, h| {
+                format!("{:.3}", h.spec_sim)
+            });
+            score("RI score", "Similarity of the retention indices", |_, h| {
+                num(h.ri_sim, 3)
+            });
         }
     });
     ui.separator();
@@ -286,7 +319,7 @@ mod tests {
         let (mut mz, mut trace) = (147.0, Trace::Tic);
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            panel(ui, &run, &Default::default(), &mut mz, &mut trace);
+            panel(ui, &run, &Default::default(), (&mut mz, &mut trace), None);
         });
         out.textures_delta.clear();
         pick_ion(&mut mz, &mut trace, 73.0);
