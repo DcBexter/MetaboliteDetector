@@ -53,13 +53,17 @@ impl View {
         ui.checkbox(&mut self.auto_y, "Auto Y")
             .on_hover_text("Fit the Y axis to the visible time range");
         let before = self.unit;
+        let time = ui.label("Time:");
         egui::ComboBox::from_id_salt("time unit")
-            .selected_text(format!("Time: {}", self.unit.label()))
+            .selected_text(self.unit.label())
             .show_ui(ui, |ui| {
                 for u in TimeUnit::ALL {
                     ui.selectable_value(&mut self.unit, u, u.label());
                 }
-            });
+            })
+            .response
+            .labelled_by(time.id)
+            .on_hover_text("Unit of the time axis");
         if self.unit != before {
             self.bounds_in = Some(before);
         }

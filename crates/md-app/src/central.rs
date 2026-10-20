@@ -142,19 +142,23 @@ impl App {
             ui.selectable_value(&mut self.trace, Trace::Sic, "SIC");
             ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC");
             ui.add_enabled_ui(self.trace != Trace::Tic, |ui| {
-                ui.label("m/z");
+                let label = ui.label("m/z");
                 ui.add(
                     egui::DragValue::new(&mut self.mz)
                         .range(1.0..=2000.0)
                         .max_decimals(2),
-                );
-                ui.label("±");
+                )
+                .labelled_by(label.id)
+                .on_hover_text("Ion whose intensity the SIC trace shows");
+                let label = ui.label("±");
                 ui.add(
                     egui::DragValue::new(&mut self.tolerance)
                         .range(0.0..=10.0)
                         .speed(0.05)
                         .max_decimals(2),
-                );
+                )
+                .labelled_by(label.id)
+                .on_hover_text("Window around the m/z that the SIC trace adds up");
             });
         });
     }
