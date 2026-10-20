@@ -38,6 +38,13 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   examples/batch.rs     batch quantification timing on real files
   tests/                integration tests (example data, golden test against the old version)
 crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing only
+  src/main.rs           entry point, `App` state and one call per UI area in `ui`
+  src/menu.rs           top menu bar (File, Analysis)
+  src/status.rs         bottom status bar
+  src/run_list.rs       left list of the open runs
+  src/central.rs        centre: TIC/SIC plots, scan cursor, spectrum
+  src/loading.rs        opening files, load polling, SIC jobs
+  src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/export.rs         spectrum normalisation picker, CSV and PNG export of the shown plots
