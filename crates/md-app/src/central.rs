@@ -544,7 +544,8 @@ impl App {
             if look.peak_labels {
                 let b = p.plot_bounds();
                 for (m, v) in highest_in_view(&labelled, b.min()[0], b.max()[0]) {
-                    let text = Text::new("peak labels", PlotPoint::new(m, v), format!("{m}"))
+                    // No name: a named item would get a legend row. The f32 masses print without widening noise.
+                    let text = Text::new("", PlotPoint::new(m, v), format!("{}", m as f32))
                         .anchor(egui::Align2::CENTER_BOTTOM);
                     p.text(text);
                 }
