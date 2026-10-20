@@ -224,8 +224,12 @@ impl LibraryEditor {
                 .to_string_lossy()
                 .into_owned();
             self.export_menu(ui, &stem);
-            if ui.button("Save as…").clicked()
+            if ui
+                .button("Save as…")
+                .on_hover_text("Write a .mdlib file. For an .msl file use Export MSL.")
+                .clicked()
                 && let Some(path) = rfd::FileDialog::new()
+                    .set_title("Save as .mdlib (for .msl use Export MSL in the editor)")
                     .add_filter("MetaboliteDetector library", &["mdlib"])
                     .set_file_name(format!("{stem}.mdlib"))
                     .save_file()
@@ -235,7 +239,7 @@ impl LibraryEditor {
                     saved = self.save(path);
                 } else {
                     self.error = Some(format!(
-                        "{}: save as .mdlib; .lbr and .msl files are never overwritten.",
+                        "{}: save as .mdlib (use Export MSL for .msl); .lbr and .msl files are never overwritten.",
                         path.display()
                     ));
                 }

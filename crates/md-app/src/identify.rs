@@ -41,7 +41,7 @@ pub type Identified = (Key, Identification, Option<RiCalibration>);
 pub type Label = ([f64; 2], String, egui::Color32, f64);
 
 /// Old label colours: above 0.9, above 0.7, the rest.
-fn score_color(score: f64) -> egui::Color32 {
+pub fn score_color(score: f64) -> egui::Color32 {
     match score {
         s if s > 0.9 => egui::Color32::from_rgb(0, 150, 0),
         s if s > 0.7 => egui::Color32::from_rgb(220, 140, 0),

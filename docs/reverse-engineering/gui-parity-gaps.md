@@ -73,7 +73,7 @@ is S4 (#253).
 7. Simple mode with guided step flows (RI calibration, detection, batch, MID) next to the expert windows.
 8. DE/EN language switch.
 9. GSL tie deviations (section 1): decide whether to close them with a clean-room SVD.
-10. Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).
+10. ~~Component markers: keep the dots on the peaks, and add the old triangles on the x axis as larger click targets. Put a view toolbar above the plots, as in the old app (zoom/pan/reset, crosshair, info, marker filters by score).~~ Done in #243.
 11. ~~TIC zoom stays stale after switching runs; a click does not snap to a nearby component when it is just over 3 scans away.~~ Done in #251.
 
 Already covered elsewhere: #241, #242, #243 (zoom buttons, "?" help, MSL export, bigger Settings window), #244, #245, #246, #247, #248.

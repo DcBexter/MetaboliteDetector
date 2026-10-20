@@ -162,7 +162,7 @@ shadows or layering.
 ## Shapes
 
 Small, quiet corners: 4 px on static widgets, 6 px on controls, windows and menus. Plot markers are filled circles
-(component apexes, radius 3). The run swatch is a filled square.
+(component apexes, radius 3) with a filled triangle on the time axis (radius 5, a larger click target). The run swatch is a filled square.
 
 ## Components
 
@@ -174,7 +174,8 @@ Small, quiet corners: 4 px on static widgets, 6 px on controls, windows and menu
 
 ### Toggles (selectable values)
 - TIC / SIC / TIC + SIC and None / Base peak / Unit / Relative: text-only, selected one filled with
-  Selection Blue.
+  Selection Blue. The score triangles (▲ ≤ 0.7, > 0.7, > 0.9) are the exception: on shows the colour of the
+  names they switch, off greys the text, because Selection Blue behind orange or green text reads badly.
 
 ### Inputs
 - DragValues for numbers (with sensible ranges), single-line text edits with hint text showing an

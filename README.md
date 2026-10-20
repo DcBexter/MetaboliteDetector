@@ -48,8 +48,10 @@ raw data (`MsData.FFT`). Pick several files to overlay them; each is analysed in
 - **Component list** (left, below the runs): every component of the active run, see
   [Results of one run](#results-of-one-run).
 - **Chromatogram** (centre): **TIC**, **SIC** (m/z ± tolerance) or **TIC + SIC**. Red dots are the detected
-  components; click near one to select it, ←/→ steps through scans. Scroll and drag move the view, Ctrl +
-  scroll zooms, double-click resets; another active run starts unzoomed.
+  components, with a triangle for each on the time axis as a larger click target; click near one to select
+  it, ←/→ steps through scans. The buttons above the plot zoom (**+**, **−**, **All**), move (◀ ▶) and
+  toggle the crosshair; the coloured triangles filter the names by score; **?** explains the controls.
+  Scroll and drag move the view, Ctrl + scroll zooms, double-click resets; another active run starts unzoomed.
 - **Spectrum** (below): the selected component, deconvoluted, or the scan typed in under **Scan** or
   **RT**. **Normalise spectrum** switches between raw, base peak, unit and relative scale; with a library
   hit, **Split** and **Difference** compare both spectra. Click an ion to show its SIC.
@@ -73,7 +75,7 @@ for a "NIST search" of the selected component only; the normal library stays.
 
 **File → Library editor…** creates or changes a library: **New library** or **Edit open library**, then
 **Add component…** takes the selected component from the run. Per compound: name, RT, RI, quant ions,
-MID fragments and a comment. **Save** writes the text format `.mdlib`; **Export MSL** writes AMDIS MSL.
+MID fragments and a comment. **Save** and **Save as…** write the text format `.mdlib`; **Export MSL** (next to Save as…) writes AMDIS MSL.
 
 ![Library editor with a selected compound](docs/images/library-editor.png)
 
