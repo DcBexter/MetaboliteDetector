@@ -15,6 +15,7 @@ mod batch;
 mod calibration;
 mod central;
 mod detail;
+mod detected_peaks;
 mod export;
 mod export_all;
 mod identify;
@@ -29,6 +30,7 @@ mod plot_export;
 mod results;
 mod run_list;
 mod settings;
+mod shortcuts;
 mod statistics;
 mod status;
 mod style;
@@ -113,6 +115,12 @@ struct App {
     view: view::View,
     spectrum_mode: detail::Mode,
     updater: update::Updater,
+    panels: layout::Panels,
+    /// Detected Peaks also draws the modelled profile of each ion.
+    model_profile: bool,
+    about_open: bool,
+    /// Run whose TIC zoom is shown; another run starts unzoomed.
+    plotted: Option<std::sync::Weak<md_core::Chromatogram>>,
 }
 
 impl Default for App {
@@ -146,6 +154,10 @@ impl Default for App {
             view: view::View::default(),
             spectrum_mode: detail::Mode::default(),
             updater: update::Updater::default(),
+            panels: layout::Panels::default(),
+            model_profile: false,
+            about_open: false,
+            plotted: None,
         }
     }
 }
@@ -196,11 +208,19 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_jobs(ui.ctx());
         self.menu_bar(ui);
+        self.shortcuts(ui.ctx());
         self.windows(ui.ctx());
         self.status_bar(ui);
-        self.run_list(ui);
-        if let Some(run) = self.runs.get(self.active)
-            && detail::panel(ui, run, &self.nist, &mut self.mz, &mut self.trace)
+        self.left_panel(ui);
+        if self.panels.info
+            && let Some(run) = self.runs.get(self.active)
+            && detail::panel(
+                ui,
+                run,
+                &self.nist,
+                (&mut self.mz, &mut self.trace),
+                self.ri.for_run(run),
+            )
         {
             self.nist_search();
         }
@@ -241,10 +261,10 @@ impl App {
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
         self.tof.window(ctx);
-        self.results.window(ctx, &mut self.runs, self.active);
         self.info_window(ctx);
         self.library_editor(ctx);
         self.updater.window(ctx);
+        self.about_window(ctx);
         self.export_all_window(ctx);
     }
 }

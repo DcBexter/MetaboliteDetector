@@ -1,8 +1,9 @@
-//! Top menu bar: File, Analysis and Help.
+//! Top menu bar: File, Analysis, View and Help.
 
 use eframe::egui;
 
 use crate::App;
+use crate::shortcuts::{Action, REPO};
 
 impl App {
     pub fn menu_bar(&mut self, ui: &mut egui::Ui) {
@@ -10,32 +11,148 @@ impl App {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| self.file_menu(ui));
                 ui.menu_button("Analysis", |ui| self.analysis_menu(ui));
-                ui.menu_button("Help", |ui| self.updater.menu(ui));
+                ui.menu_button("View", |ui| {
+                    for (on, name, hint) in self.panels.toggles() {
+                        ui.checkbox(on, name).on_hover_text(hint);
+                    }
+                });
+                ui.menu_button("Help", |ui| self.help_menu(ui));
             });
         });
     }
 
     pub fn open_chromatograms_button(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .button("Open chromatograms…")
-            .on_hover_text("Load one or more GC-MS runs; each is analysed in the background")
-            .clicked()
-            && let Some(paths) = rfd::FileDialog::new()
-                .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
-                .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-                .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
-                .pick_files()
+        self.action_item(
+            ui,
+            "Open chromatograms…",
+            "Load one or more GC-MS runs; each is analysed in the background",
+            Action::Open,
+            true,
+        );
+    }
+
+    pub fn pick_chromatograms(&mut self, ctx: &egui::Context) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
+            .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+            .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+            .pick_files()
         {
             for path in paths {
-                self.open(ui.ctx(), path);
+                self.open(ctx, path);
             }
         }
+    }
+
+    /// A menu entry that shows the shortcut of `action` and runs it on a click.
+    fn action_item(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        hint: &str,
+        action: Action,
+        enabled: bool,
+    ) {
+        let shortcut = ui.ctx().format_shortcut(&action.shortcut());
+        let button = egui::Button::new(label).shortcut_text(shortcut);
+        if ui
+            .add_enabled(enabled, button)
+            .on_hover_text(hint)
+            .on_disabled_hover_text(if self.runs.is_empty() {
+                "Open a run first"
+            } else {
+                "Select a component first"
+            })
+            .clicked()
+        {
+            // A click closes the menu by itself; outside a menu there is nothing to close.
+            self.run_action(&ui.ctx().clone(), action);
+        }
+    }
+
+    fn help_menu(&mut self, ui: &mut egui::Ui) {
+        self.action_item(
+            ui,
+            "Manual",
+            "The README with screenshots, in the browser",
+            Action::Manual,
+            true,
+        );
+        if ui
+            .button("About MetaboliteDetector…")
+            .on_hover_text("Version, licence, authors and how to cite")
+            .clicked()
+        {
+            self.about_open = true;
+        }
+        ui.separator();
+        if ui
+            .button("Open log folder")
+            .on_hover_text("The folder where the app keeps its files; it writes no log yet")
+            .clicked()
+            && let Some(dir) = crate::update::config_path()
+                .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        {
+            // Opening fails quietly if the folder does not exist yet; make it first.
+            let _ = std::fs::create_dir_all(&dir);
+            // open_url would start the web browser on a file: address on Windows.
+            if cfg!(windows) {
+                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+            } else {
+                ui.ctx()
+                    .open_url(egui::OpenUrl::new_tab(dir.to_string_lossy()));
+            }
+        }
+        self.updater.menu(ui);
+        ui.separator();
+        // Seam for #256: the guided mode switches on here once it exists.
+        ui.add_enabled(false, egui::Button::new("Guided mode"))
+            .on_disabled_hover_text("Comes with the guided mode");
+    }
+
+    pub fn about_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("About MetaboliteDetector")
+            .open(&mut self.about_open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("MetaboliteDetector");
+                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                ui.label("MIT licence");
+                ui.separator();
+                ui.label("Rewrite by Milan Burgmann. Original program (3.3, 2009): Karsten Hiller et al.");
+                ui.label("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.");
+                ui.hyperlink_to("Source code", REPO);
+            });
     }
 
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         self.open_chromatograms_button(ui);
         self.open_library_button(ui);
         self.open_nist_button(ui);
+        let has_run = !self.runs.is_empty();
+        let has_component = (self.runs.get(self.active)).is_some_and(|r| r.component.is_some());
+        self.action_item(
+            ui,
+            "Save components…",
+            "Writes the components of the active run as a .cmp file (old format)",
+            Action::SaveComponents,
+            has_run,
+        );
+        self.action_item(
+            ui,
+            "Export results as CSV…",
+            "Save the component list of the active run as CSV",
+            Action::ExportCsv,
+            has_run,
+        );
+        self.action_item(
+            ui,
+            "Add component to library…",
+            "The selected component of the active run becomes a library entry",
+            Action::AddToLibrary,
+            has_component,
+        );
         if ui
             .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
             .on_hover_text("Close every open run")
@@ -70,6 +187,8 @@ impl App {
         {
             self.editor.open = true;
         }
+        ui.separator();
+        self.action_item(ui, "Quit", "Close the program", Action::Quit, true);
     }
 
     /// The three ways the old program wrote a run: all points, one point per peak, or per nominal mass.
@@ -131,20 +250,12 @@ impl App {
                     false,
                 ),
             ],
-            &[
-                (
-                    "Run info…",
-                    "File, instrument and scan details of the active run",
-                    |a| &mut a.view.info_open,
-                    true,
-                ),
-                (
-                    "Results of the active run…",
-                    "Table of every component with its library hit; sortable, exportable as CSV",
-                    |a| &mut a.results.open,
-                    false,
-                ),
-            ],
+            &[(
+                "Run info…",
+                "File, instrument and scan details of the active run",
+                |a| &mut a.view.info_open,
+                true,
+            )],
             &[
                 (
                     "Batch quantification…",

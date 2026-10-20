@@ -9,8 +9,9 @@ cargo test --release -p metabolite-detector screenshots -- --ignored
 ```
 
 This test needs the example data (`example-data/fetch.*`) and a GPU. It writes `target/ui-snapshots/`:
-- one PNG per screen: start and main window in dark and light, 15-run overlay, TIC + SIC, both menus,
-  settings, calibration, batch, isotopes, library editor with a selected compound, results, run info,
+- one PNG per screen: start and main window (with and without a library) in dark and light, the main
+  window at 800 × 600, 15-run overlay, TIC + SIC, both menus,
+  settings, calibration, batch, isotopes, library editor with a selected compound, run info,
   MID settings and results, and a batch table and statistics (group 0 against group 2) from made-up
   quantities (`Batch::finished`);
 - one `*.unnamed.txt` per PNG, listing the inputs a screen reader cannot name.

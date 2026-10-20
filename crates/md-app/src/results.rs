@@ -1,111 +1,192 @@
-//! Result table of the active run (old `DataTableModel` with `CompoundExporter` and Find Compound): one
-//! row per component, sortable, a click selects the component, a substance can be looked up in the
-//! library and the table exported as CSV.
+//! Component list of the active run, below the runs (old "Analysis Results" dock with
+//! `DataTableModel`, `CompoundExporter` and Find Compound): one row per component, also without a
+//! library, sortable; a click or ↑/↓ selects a component, a substance can be looked up in the library
+//! and the list exported as CSV.
 
-use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
+use md_core::Chromatogram;
 use md_core::results::{ResultRow, find_substance, result_rows, write_csv};
+use md_core::ri::RiCalibration;
+use md_core::search::Identification;
+use std::sync::{Arc, Weak};
 
 use crate::Run;
 use crate::identify::Library;
 
-/// Column titles in the app's spelling; the CSV keeps the old program's (`md_core::results::write_csv`).
-const HEAD: [&str; 8] = [
-    "Compound name",
-    "RT (min)",
-    "RI",
-    "Peak area",
-    "Score",
-    "Spectrum",
-    "RI score",
-    "Quant ions",
+/// A column of the list in the app's spelling; the CSV keeps the old program's
+/// (`md_core::results::write_csv`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Col {
+    Name,
+    Rt,
+    Ri,
+    Area,
+    Score,
+    Spectrum,
+    RiScore,
+    Sn,
+    Ions,
+    QuantIons,
+}
+
+/// Without a library there are no scores and no quant ions.
+const PLAIN: [Col; 6] = [Col::Name, Col::Rt, Col::Ri, Col::Area, Col::Sn, Col::Ions];
+const WITH_LIBRARY: [Col; 10] = [
+    Col::Name,
+    Col::Rt,
+    Col::Ri,
+    Col::Area,
+    Col::Score,
+    Col::Spectrum,
+    Col::RiScore,
+    Col::Sn,
+    Col::Ions,
+    Col::QuantIons,
 ];
 
-/// What the cached rows were built from: active run and its `rev`.
-type Stamp = (usize, u64);
+impl Col {
+    fn title(self) -> &'static str {
+        match self {
+            Col::Name => "Compound name",
+            Col::Rt => "RT (min)",
+            Col::Ri => "RI",
+            Col::Area => "Peak area",
+            Col::Score => "Score",
+            Col::Spectrum => "Spectrum",
+            Col::RiScore => "RI score",
+            Col::Sn => "S/N",
+            Col::Ions => "Ions",
+            Col::QuantIons => "Quant ions",
+        }
+    }
+
+    fn column(self) -> Column {
+        match self {
+            // The name takes the room the fixed columns leave; a longer one is cut (the row's
+            // tooltip has it whole) so the scores stay in view. Not resizable: egui keeps a resizable
+            // column's first width, so it would stop following the panel.
+            Col::Name => Column::remainder()
+                .at_least(106.0)
+                .clip(true)
+                .resizable(false),
+            // Each with room for the sort arrow (a column never shrinks again); right-aligned cells
+            // would make automatic columns grow to the panel.
+            Col::Rt => Column::initial(66.0).at_least(40.0),
+            Col::Ri | Col::Sn | Col::Ions => Column::initial(44.0).at_least(40.0),
+            Col::Area | Col::Spectrum => Column::initial(80.0).at_least(40.0),
+            Col::Score => Column::initial(60.0).at_least(40.0),
+            Col::RiScore => Column::initial(70.0).at_least(40.0),
+            Col::QuantIons => Column::initial(90.0).at_least(60.0).clip(true),
+        }
+    }
+
+    /// Numbers are right-aligned so digits line up; name and quant ions stay left.
+    fn align(self) -> egui::Layout {
+        match matches!(self, Col::Name | Col::QuantIons) {
+            false => egui::Layout::right_to_left(egui::Align::Center),
+            true => egui::Layout::left_to_right(egui::Align::Center),
+        }
+    }
+}
+
+/// A result row and what the list shows beyond the CSV.
+struct Row {
+    res: ResultRow,
+    /// Also without a match: then the three largest peaks (`md_core::results::area`).
+    area: f64,
+    /// Mean S/N of the ion peaks; `None` for a component without peaks (saved by the old program).
+    sn: Option<f64>,
+    ions: usize,
+}
+
+/// What the cached rows were built from: the run's data, its `rev`, and the calibration used without
+/// a library. The data is held weakly, so a closed run never matches a new one at the same address.
+type Stamp = (Weak<Chromatogram>, u64, Option<RiCalibration>);
+
+fn same(a: &Stamp, b: &Stamp) -> bool {
+    a.0.ptr_eq(&b.0) && a.1 == b.1 && a.2 == b.2
+}
 
 #[derive(Default)]
 pub struct Results {
-    pub open: bool,
     /// Only rows whose name contains this (case-insensitive), and the library names offered for a lookup.
     filter: String,
     /// Column and descending.
-    sort: Option<(usize, bool)>,
+    sort: Option<(Col, bool)>,
     /// Library compound whose components are listed.
     looked_up: Option<usize>,
     note: String,
-    cache: Option<(Stamp, Vec<ResultRow>)>,
+    cache: Option<(Stamp, Vec<Row>)>,
 }
 
 impl Results {
-    pub fn window(&mut self, ctx: &egui::Context, runs: &mut [Run], active: usize) {
-        let mut open = self.open;
-        egui::Window::new("Results")
-            .tool_window(ctx, 6, [900.0, 500.0])
-            .open(&mut open)
-            .show(ctx, |ui| self.contents(ui, runs.get_mut(active), active));
-        self.open = open;
-    }
-
-    fn contents(&mut self, ui: &mut egui::Ui, run: Option<&mut Run>, active: usize) {
+    /// The list of the active run; `cal` (the run's calibration) gives the RI while no library
+    /// identified the run.
+    pub fn panel(&mut self, ui: &mut egui::Ui, run: Option<&mut Run>, cal: Option<&RiCalibration>) {
+        ui.strong("Component list");
         let Some(run) = run else {
-            ui.label("Open a chromatogram first.");
             return;
         };
-        let Some(((lib, ..), _, _)) = &run.ident else {
-            ui.horizontal_wrapped(|ui| self.saved_buttons(ui, run));
-            if !self.note.is_empty() {
-                ui.label(&self.note);
-            }
-            ui.label("Open a library to identify the components of the run.");
-            return;
-        };
-        let lib = lib.clone();
-        let stamp = (active, run.rev);
-        let mut cache = self.cache.take().filter(|c| c.0 == stamp);
+        let lib = (run.ident.as_ref()).map(|((lib, ..), ..)| lib.clone());
+        let cal = cal.filter(|_| lib.is_none());
+        let stamp = (Arc::downgrade(&run.data), run.rev, cal.cloned());
+        let mut cache = self.cache.take().filter(|c| same(&c.0, &stamp));
         if cache.is_none() {
-            cache = Some((stamp, build_rows(run)));
+            cache = Some((stamp, build_rows(run, cal)));
             self.looked_up = None;
         }
         let (stamp, rows) = cache.expect("filled above");
 
         let mut loaded = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{} — library {}", run.name, lib.name));
-            if ui.button("Export CSV…").clicked() {
-                self.note = export(&run.name, &rows);
+            if ui
+                .button("Export CSV…")
+                .on_hover_text("Save the list as CSV, in the columns of the old program")
+                .clicked()
+            {
+                let res: Vec<ResultRow> = rows.iter().map(|r| r.res.clone()).collect();
+                self.note = export(&run.name, &res);
             }
-            loaded = self.saved_buttons(ui, run);
+            loaded = self.saved_buttons(ui, run, cal);
         });
-        // The table below was built from the components that were just replaced.
+        // The list below was built from the components that were just replaced.
         if loaded {
             ui.ctx().request_repaint();
             return;
         }
-        let lib = &lib;
         ui.horizontal_wrapped(|ui| {
-            ui.label("Find substance");
+            let label = ui.label("Find substance");
             ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Name in the table and the library"),
-            );
-            if !self.filter.is_empty() && ui.button("Clear").clicked() {
+                egui::TextEdit::singleline(&mut self.filter).hint_text(match lib {
+                    Some(_) => "Name in the list and the library",
+                    None => "Name in the list",
+                }),
+            )
+            .labelled_by(label.id);
+            if !self.filter.is_empty()
+                && (ui.button("Clear"))
+                    .on_hover_text("Clear the search and show every component")
+                    .clicked()
+            {
                 self.filter.clear();
                 self.looked_up = None;
             }
         });
         let want = self.filter.to_lowercase();
-        if !want.is_empty() {
-            self.lookup(ui, lib, &want);
+        let mut selected = None;
+        if let Some(lib) = &lib {
+            if !want.is_empty() {
+                self.lookup(ui, lib, &want);
+            }
+            selected = self.found_list(ui, run, lib);
         }
-        let selected = self.found_list(ui, run, lib);
         if !self.note.is_empty() {
             ui.label(&self.note);
         }
 
         let mut order: Vec<usize> = (0..rows.len())
-            .filter(|i| want.is_empty() || rows[*i].name.to_lowercase().contains(&want))
+            .filter(|i| want.is_empty() || rows[*i].res.name.to_lowercase().contains(&want))
             .collect();
         if let Some((col, desc)) = self.sort {
             order.sort_by(|a, b| {
@@ -113,11 +194,28 @@ impl Results {
                 if desc { o.reverse() } else { o }
             });
         }
-        ui.label(format!("{} of {} components", order.len(), rows.len()));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{} of {} components", order.len(), rows.len()));
+            if lib.is_none() {
+                ui.weak("Open a library to name them.");
+            }
+        });
         if order.is_empty() && !rows.is_empty() {
             ui.weak("No component matches. Clear the search to see all.");
         }
-        let clicked = table(ui, &mut self.sort, &rows, &order, run, lib).or(selected);
+        // ↑/↓ step through the list as it is shown, unless a text field takes the keys.
+        let step = ui.input(|i| {
+            i32::from(i.key_pressed(egui::Key::ArrowDown))
+                - i32::from(i.key_pressed(egui::Key::ArrowUp))
+        });
+        let at =
+            (run.component).and_then(|k| order.iter().position(|i| rows[*i].res.component == k));
+        let to = (step != 0 && !ui.ctx().text_edit_focused())
+            .then(|| stepped(order.len(), at, step))
+            .flatten();
+        let clicked = table(ui, &mut self.sort, &rows, &order, run, lib.as_deref(), to)
+            .or(selected)
+            .or(to.map(|p| rows[order[p]].res.component));
         if let Some(k) = clicked {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
@@ -127,17 +225,18 @@ impl Results {
 
     /// Two buttons: save the components of the run as a `.cmp` file the old program reads, or load such
     /// a file in place of them. Returns whether components were loaded.
-    fn saved_buttons(&mut self, ui: &mut egui::Ui, run: &mut Run) -> bool {
+    fn saved_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        run: &mut Run,
+        cal: Option<&RiCalibration>,
+    ) -> bool {
         if ui
             .button("Save components…")
             .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
             .clicked()
-            && let Some(p) = dialog(run).save_file()
         {
-            self.note = match save_components(run, &p) {
-                Ok(n) => format!("Saved {n} components to {}", p.display()),
-                Err(e) => format!("Save failed: {e}"),
-            };
+            self.save(run, cal);
         }
         let busy = run.analysis.busy();
         if ui
@@ -155,6 +254,25 @@ impl Results {
             return result.is_ok();
         }
         false
+    }
+
+    /// Asks for a `.cmp` file and writes the components of `run` there (button and Ctrl+S).
+    pub fn save(&mut self, run: &Run, cal: Option<&RiCalibration>) {
+        if let Some(p) = dialog(run).save_file() {
+            self.note = match save_components(run, &p, cal) {
+                Ok(n) => format!("Saved {n} components to {}", p.display()),
+                Err(e) => format!("Save failed: {e}"),
+            };
+        }
+    }
+
+    /// Ctrl+E: the whole list of `run` as CSV, unfiltered, whether or not the list is on screen.
+    pub fn export_csv(&mut self, run: &Run, cal: Option<&RiCalibration>) {
+        let rows: Vec<ResultRow> = build_rows(run, cal.filter(|_| run.ident.is_none()))
+            .into_iter()
+            .map(|r| r.res)
+            .collect();
+        self.note = export(&run.name, &rows);
     }
 
     /// Library names that contain the search text; a click lists the components that have it as a hit.
@@ -199,27 +317,72 @@ impl Results {
     }
 }
 
-/// Rows of the active run; the RI comes from the calibration the identification was made with.
-fn build_rows(run: &Run) -> Vec<ResultRow> {
-    let Some(((lib, ..), id, shifted)) = &run.ident else {
-        return Vec::new();
+/// Position in a list of `len` after one step of ↑ (-1) or ↓ (+1) from position `at`; without a
+/// selection ↓ starts at the top and ↑ at the bottom.
+pub(crate) fn stepped(len: usize, at: Option<usize>, step: i32) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    Some(match at {
+        None if step > 0 => 0,
+        None => last,
+        Some(p) => p.saturating_add_signed(step as isize).min(last),
+    })
+}
+
+/// The calibration whose RI the list shows: that of the identification, else `cal`.
+fn calibration<'a>(run: &'a Run, cal: Option<&'a RiCalibration>) -> Option<&'a RiCalibration> {
+    match &run.ident {
+        Some(((_, used, _), _, shifted)) => shifted.as_ref().or(used.as_deref()),
+        None => cal,
+    }
+}
+
+/// RI of component `k` as the list shows it; see `calibration`.
+pub fn component_ri(run: &Run, k: usize, cal: Option<&RiCalibration>) -> Option<f64> {
+    let rt = run.data.scan_times_s[run.components[k].apex_scan as usize];
+    calibration(run, cal).map(|c| c.ri(rt))
+}
+
+/// Rows of the active run. Without a library every row is "No match: N" (`result_rows`).
+fn build_rows(run: &Run, cal: Option<&RiCalibration>) -> Vec<Row> {
+    let unnamed;
+    let (id, compounds) = match &run.ident {
+        Some(((lib, ..), id, _)) => (id, &lib.compounds[..]),
+        None => {
+            let n = run.components.len();
+            unnamed = Identification {
+                hits: vec![Vec::new(); n],
+                assigned: vec![None; n],
+            };
+            (&unnamed, &[][..])
+        }
     };
     let times = &run.data.scan_times_s;
-    let ris = (shifted.as_ref())
-        .or(run.ident.as_ref().and_then(|i| i.0.1.as_deref()))
-        .map(|c| c.component_ris(times, &run.components));
-    result_rows(
+    let ris = calibration(run, cal).map(|c| c.component_ris(times, &run.components));
+    let rows = result_rows(
         &run.components,
         times,
         ris.as_deref(),
         &run.peak_masses,
         id,
-        &lib.compounds,
-    )
+        compounds,
+    );
+    (rows.into_iter())
+        .map(|res| {
+            let c = &run.components[res.component];
+            let d = md_core::detail::component_detail(c, &run.peaks, &run.peak_masses);
+            Row {
+                area: (res.area)
+                    .unwrap_or_else(|| md_core::results::area(c, &[], &run.peak_masses)),
+                sn: (!d.peaks.is_empty()).then_some(d.mean_signal_to_noise),
+                ions: c.spectrum.len(),
+                res,
+            }
+        })
+        .collect()
 }
 
 /// Click order of a column header: ascending, descending, off.
-fn next_sort(sort: Option<(usize, bool)>, col: usize) -> Option<(usize, bool)> {
+fn next_sort(sort: Option<(Col, bool)>, col: Col) -> Option<(Col, bool)> {
     match sort {
         Some((s, false)) if s == col => Some((col, true)),
         Some((s, true)) if s == col => None,
@@ -227,82 +390,76 @@ fn next_sort(sort: Option<(usize, bool)>, col: usize) -> Option<(usize, bool)> {
     }
 }
 
-/// The table of `order` (indices into `rows`); returns the component clicked in it.
+/// The table of `order` (indices into `rows`), scrolled to position `scroll` of `order`; returns the
+/// component clicked in it.
 fn table(
     ui: &mut egui::Ui,
-    sort: &mut Option<(usize, bool)>,
-    rows: &[ResultRow],
+    sort: &mut Option<(Col, bool)>,
+    rows: &[Row],
     order: &[usize],
     run: &Run,
-    lib: &Library,
+    lib: Option<&Library>,
+    scroll: Option<usize>,
 ) -> Option<usize> {
+    let cols = match lib {
+        Some(_) => &WITH_LIBRARY[..],
+        None => &PLAIN[..],
+    };
     let mut clicked = None;
-    // Scrolls sideways when the window is narrower than the columns, as the batch table does.
+    // Scrolls sideways when the panel is narrower than the columns, as the batch table does.
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-        TableBuilder::new(ui)
+        let mut t = TableBuilder::new(ui)
             .id_salt("results table")
             .striped(true)
             .sense(egui::Sense::click())
-            .resizable(true)
-            // The name takes the room the fixed columns leave; a longer one is cut (the row's
-            // tooltip has it whole) so the scores stay in view. Not resizable: egui keeps a resizable
-            // column's first width, so it would stop following the window.
-            .column(
-                Column::remainder()
-                    .at_least(106.0)
-                    .clip(true)
-                    .resizable(false),
-            )
-            // Widths that fit the 720 px a window gets at 1280 px, each with room for the sort
-            // arrow (a column never shrinks again); right-aligned cells would make automatic
-            // columns grow to the window.
-            .column(Column::initial(66.0).at_least(40.0))
-            .column(Column::initial(44.0).at_least(40.0))
-            .column(Column::initial(80.0).at_least(40.0))
-            .column(Column::initial(60.0).at_least(40.0))
-            .column(Column::initial(80.0).at_least(40.0))
-            .column(Column::initial(70.0).at_least(40.0))
-            .column(Column::initial(90.0).at_least(60.0).clip(true))
-            .header(20.0, |mut h| {
-                for (c, title) in HEAD.iter().enumerate() {
-                    h.col(|ui| {
-                        ui.with_layout(align(c), |ui| header_cell(ui, sort, c, title));
+            .resizable(true);
+        if let Some(row) = scroll {
+            t = t.scroll_to_row(row, None);
+        }
+        for c in cols {
+            t = t.column(c.column());
+        }
+        t.header(20.0, |mut h| {
+            for c in cols {
+                h.col(|ui| {
+                    ui.with_layout(c.align(), |ui| header_cell(ui, sort, *c));
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(18.0, order.len(), |mut row| {
+                let r = &rows[order[row.index()]];
+                row.set_selected(run.component == Some(r.res.component));
+                for c in cols {
+                    row.col(|ui| {
+                        ui.with_layout(c.align(), |ui| {
+                            let text = cell(r, *c);
+                            // An unmatched component reads as a placeholder.
+                            match r.res.compound.is_none() && *c == Col::Name {
+                                true => ui.weak(text),
+                                false => ui.label(text),
+                            };
+                        });
                     });
                 }
-            })
-            .body(|body| {
-                body.rows(18.0, order.len(), |mut row| {
-                    let r = &rows[order[row.index()]];
-                    row.set_selected(run.component == Some(r.component));
-                    for (c, text) in cells(r).into_iter().enumerate() {
-                        row.col(|ui| {
-                            ui.with_layout(align(c), |ui| {
-                                // An unmatched component reads as a placeholder.
-                                match r.compound.is_none() && c == 0 {
-                                    true => ui.weak(text),
-                                    false => ui.label(text),
-                                };
-                            });
-                        });
-                    }
-                    let resp = row.response();
-                    if resp.clicked() {
-                        clicked = Some(r.component);
-                    }
-                    resp.on_hover_ui(|ui| hover(ui, r, run, lib));
-                });
+                let resp = row.response();
+                if resp.clicked() {
+                    clicked = Some(r.res.component);
+                }
+                resp.on_hover_ui(|ui| hover(ui, &r.res, run, lib));
             });
+        });
     });
     clicked
 }
 
-fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(usize, bool)>, col: usize, title: &str) {
+fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(Col, bool)>, col: Col) {
     let arrow = match *sort {
         Some((s, d)) if s == col => [" ▲", " ▼"][d as usize],
         _ => "",
     };
-    let t = egui::RichText::new(format!("{title}{arrow}")).strong();
+    let t = egui::RichText::new(format!("{}{arrow}", col.title())).strong();
     let resp = ui
         .add(egui::Label::new(t).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -312,55 +469,55 @@ fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(usize, bool)>, col: usize, 
     }
 }
 
-/// Numbers (RT to RI score) are right-aligned so digits line up; name and ions stay left.
-fn align(col: usize) -> egui::Layout {
-    match (1..=6).contains(&col) {
-        true => egui::Layout::right_to_left(egui::Align::Center),
-        false => egui::Layout::left_to_right(egui::Align::Center),
+/// Cell text as the old table showed it (a missing value as a dash).
+fn cell(r: &Row, col: Col) -> String {
+    use crate::detail::num;
+    let res = &r.res;
+    match col {
+        Col::Name => res.name.clone(),
+        Col::Rt => format!("{:.2}", res.rt_s / 60.0),
+        Col::Ri => num(res.ri, 1),
+        Col::Area => format!("{:.0}", r.area),
+        Col::Score => num(res.overall, 3),
+        Col::Spectrum => num(res.spec_score, 3),
+        Col::RiScore => num(res.ri_score, 3),
+        Col::Sn => num(r.sn, 1),
+        Col::Ions => r.ions.to_string(),
+        Col::QuantIons => {
+            let ions: Vec<String> = res.quant_ions.iter().map(f32::to_string).collect();
+            ions.join(" ")
+        }
     }
 }
 
-/// Cell texts of one row, as the old table showed them (a missing score as a dash).
-fn cells(r: &ResultRow) -> [String; 8] {
-    let num = |v: Option<f64>, digits: usize| v.map_or("–".into(), |v| format!("{v:.digits$}"));
-    let ions: Vec<String> = r.quant_ions.iter().map(f32::to_string).collect();
-    [
-        r.name.clone(),
-        format!("{:.2}", r.rt_s / 60.0),
-        num(r.ri, 1),
-        num(r.area, 0),
-        num(r.overall, 3),
-        num(r.spec_score, 3),
-        num(r.ri_score, 3),
-        ions.join(" "),
-    ]
-}
-
 /// Missing values sort first.
-fn compare(a: &ResultRow, b: &ResultRow, col: usize) -> std::cmp::Ordering {
+fn compare(a: &Row, b: &Row, col: Col) -> std::cmp::Ordering {
     let num = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
+    let (x, y) = (&a.res, &b.res);
     match col {
-        0 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        1 => a.rt_s.total_cmp(&b.rt_s),
-        2 => num(a.ri).total_cmp(&num(b.ri)),
-        3 => num(a.area).total_cmp(&num(b.area)),
-        4 => num(a.overall).total_cmp(&num(b.overall)),
-        5 => num(a.spec_score).total_cmp(&num(b.spec_score)),
-        6 => num(a.ri_score).total_cmp(&num(b.ri_score)),
-        _ => a.quant_ions.len().cmp(&b.quant_ions.len()),
+        Col::Name => x.name.to_lowercase().cmp(&y.name.to_lowercase()),
+        Col::Rt => x.rt_s.total_cmp(&y.rt_s),
+        Col::Ri => num(x.ri).total_cmp(&num(y.ri)),
+        Col::Area => a.area.total_cmp(&b.area),
+        Col::Score => num(x.overall).total_cmp(&num(y.overall)),
+        Col::Spectrum => num(x.spec_score).total_cmp(&num(y.spec_score)),
+        Col::RiScore => num(x.ri_score).total_cmp(&num(y.ri_score)),
+        Col::Sn => num(a.sn).total_cmp(&num(b.sn)),
+        Col::Ions => a.ions.cmp(&b.ions),
+        Col::QuantIons => x.quant_ions.len().cmp(&y.quant_ions.len()),
     }
 }
 
 /// Old tooltip: scores, RI, RT and the alternative hits of the component.
-fn hover(ui: &mut egui::Ui, r: &ResultRow, run: &Run, lib: &Library) {
-    let Some(((..), id, _)) = &run.ident else {
-        return;
-    };
+fn hover(ui: &mut egui::Ui, r: &ResultRow, run: &Run, lib: Option<&Library>) {
     ui.strong(&r.name);
     ui.label(format!("RT {:.2} min", r.rt_s / 60.0));
     if let Some(ri) = r.ri {
         ui.label(format!("RI {ri:.1}"));
     }
+    let (Some(((..), id, _)), Some(lib)) = (&run.ident, lib) else {
+        return;
+    };
     for h in id.hits[r.component].iter().take(5) {
         let mark = if Some(h.compound) == r.compound {
             "→ "
@@ -386,11 +543,15 @@ fn dialog(run: &Run) -> rfd::FileDialog {
 }
 
 /// Writes the components of `run` to `path`; returns how many.
-fn save_components(run: &Run, path: &std::path::Path) -> Result<usize, String> {
-    // The RI is that of the identification, so the old program lists it too.
+fn save_components(
+    run: &Run,
+    path: &std::path::Path,
+    cal: Option<&RiCalibration>,
+) -> Result<usize, String> {
+    // The RI the list shows, so the old program lists it too.
     let mut ris = vec![-1.0; run.components.len()];
-    for r in build_rows(run) {
-        ris[r.component] = r.ri.unwrap_or(-1.0);
+    for (k, ri) in ris.iter_mut().enumerate() {
+        *ri = component_ri(run, k, cal).unwrap_or(-1.0);
     }
     let compounds = md_core::cmp::compounds_of_components(
         &run.components,
@@ -511,26 +672,67 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn window_draws_every_row_and_caches_them() {
+    fn draw(r: &mut Results, run: &mut Run, cal: Option<&RiCalibration>, events: Vec<egui::Event>) {
         let ctx = egui::Context::default();
-        let mut runs = vec![run()];
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| r.panel(ui, Some(run), cal))
+            .textures_delta
+            .clear();
+    }
+
+    #[test]
+    fn panel_draws_every_row_and_caches_them() {
+        let mut run = run();
         let mut r = Results {
-            open: true,
             filter: "ala".into(),
             looked_up: Some(0),
             ..Default::default()
         };
         for _ in 0..3 {
-            let mut out = ctx.run_ui(Default::default(), |ui| {
-                r.window(ui.ctx(), &mut runs, 0);
-            });
-            out.textures_delta.clear();
+            draw(&mut r, &mut run, None, Vec::new());
         }
         let rows = &r.cache.as_ref().unwrap().1;
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name, "Alanine");
-        assert_eq!(rows[0].area, Some(5.0));
+        assert_eq!(rows[0].res.name, "Alanine");
+        assert_eq!(rows[0].area, 5.0);
+    }
+
+    #[test]
+    fn without_a_library_every_component_is_listed_with_its_ri() {
+        let mut run = run();
+        run.ident = None;
+        let cal = RiCalibration::new([(0.0, 1000.0), (120.0, 1200.0)]).unwrap();
+        let mut r = Results::default();
+        draw(&mut r, &mut run, Some(&cal), Vec::new());
+        let rows = &r.cache.as_ref().unwrap().1;
+        let names: Vec<_> = rows.iter().map(|r| r.res.name.as_str()).collect();
+        assert_eq!(names, ["No match: 1", "No match: 2"]);
+        // The only peak (5.0) counts as the area also without a match.
+        assert_eq!((rows[0].res.ri, rows[0].area), (Some(1100.0), 5.0));
+    }
+
+    #[test]
+    fn arrow_keys_step_through_the_list() {
+        assert_eq!(stepped(3, None, 1), Some(0));
+        assert_eq!(stepped(3, None, -1), Some(2));
+        assert_eq!(stepped(3, Some(2), 1), Some(2));
+        assert_eq!(stepped(3, Some(0), -1), Some(0));
+        assert_eq!(stepped(0, None, 1), None);
+        let mut run = run();
+        let mut r = Results::default();
+        let down = egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(&mut r, &mut run, None, vec![down.clone()]);
+        draw(&mut r, &mut run, None, vec![down]);
+        assert_eq!((run.component, run.scan), (Some(1), 2));
     }
 
     #[test]
@@ -552,7 +754,7 @@ pub(crate) mod tests {
             sharpness: 3.0,
         }];
         let path = std::env::temp_dir().join(format!("md-app-save-{}.cmp", std::process::id()));
-        assert_eq!(save_components(&a, &path), Ok(2));
+        assert_eq!(save_components(&a, &path, None), Ok(2));
 
         let mut b = run();
         b.component = Some(1);
@@ -577,7 +779,7 @@ pub(crate) mod tests {
             ..(*other.data).clone()
         });
         let path = std::env::temp_dir().join(format!("md-app-save2-{}.cmp", std::process::id()));
-        save_components(&a, &path).unwrap();
+        save_components(&a, &path, None).unwrap();
         assert!(load_components(&mut other, &path).is_err());
         std::fs::remove_file(&path).ok();
         assert_eq!(other.components.len(), 2);
@@ -585,26 +787,22 @@ pub(crate) mod tests {
 
     #[test]
     fn a_new_result_rebuilds_the_rows() {
-        let ctx = egui::Context::default();
-        let mut runs = vec![run()];
-        let mut r = Results {
-            open: true,
-            ..Default::default()
-        };
-        let draw = |r: &mut Results, runs: &mut Vec<Run>| {
-            ctx.run_ui(Default::default(), |ui| r.window(ui.ctx(), runs, 0))
-                .textures_delta
-                .clear();
-        };
-        draw(&mut r, &mut runs);
+        let mut run = run();
+        let mut r = Results::default();
+        draw(&mut r, &mut run, None, Vec::new());
         assert_eq!(r.cache.as_ref().unwrap().1.len(), 2);
         // The hits shrink with the components; a stale cache would index past them.
-        runs[0].components.truncate(1);
-        let id = &mut runs[0].ident.as_mut().unwrap().1;
+        run.components.truncate(1);
+        let id = &mut run.ident.as_mut().unwrap().1;
         id.hits.truncate(1);
         id.assigned.truncate(1);
-        runs[0].rev += 1;
-        draw(&mut r, &mut runs);
+        run.rev += 1;
+        draw(&mut r, &mut run, None, Vec::new());
         assert_eq!(r.cache.as_ref().unwrap().1.len(), 1);
+        // Another run with the same `rev` (the active one was closed) gets its own rows.
+        let mut other = super::tests::run();
+        other.rev = run.rev;
+        draw(&mut r, &mut other, None, Vec::new());
+        assert_eq!(r.cache.as_ref().unwrap().1.len(), 2);
     }
 }

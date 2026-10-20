@@ -71,7 +71,7 @@ pub fn result_rows(
 /// Old `getIntegral`: the sum over the quant ions of the largest peak of that ion (a duplicate peak
 /// counts once, §4.5). Without quant ions the old code asks the component for three ions; here these are
 /// the three largest peaks (Inferred).
-fn area(c: &Component, ions: &[f32], peak_masses: &[u32]) -> f64 {
+pub fn area(c: &Component, ions: &[f32], peak_masses: &[u32]) -> f64 {
     let mut by_mass: Vec<(u32, f64)> = c
         .peaks
         .iter()
