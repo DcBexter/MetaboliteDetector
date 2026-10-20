@@ -283,6 +283,7 @@ impl App {
     }
 
     pub fn start_flow(&mut self, f: Flow) {
+        self.cancel_flow();
         self.guided.cmp_switched_on = f == Flow::Detection && self.batch.save_cmp_by_default();
         self.guided.flow = Some((f, 0));
     }
@@ -386,9 +387,7 @@ impl App {
             });
         self.guided.flow = match go {
             _ if !open => {
-                if self.guided.cmp_switched_on {
-                    self.batch.stop_saving_cmp();
-                }
+                self.cancel_flow();
                 None
             }
             Some(n) if n == steps.len() => {
@@ -398,6 +397,13 @@ impl App {
             Some(n) => Some((flow, n)),
             None => Some((flow, i)),
         };
+    }
+
+    /// Ends the running flow unfinished; a detection takes back the ".cmp" saving it switched on.
+    fn cancel_flow(&mut self) {
+        if self.guided.flow.take().is_some() && self.guided.cmp_switched_on {
+            self.batch.stop_saving_cmp();
+        }
     }
 
     /// Whether Next may go on; Skip always can.

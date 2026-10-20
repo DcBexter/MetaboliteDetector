@@ -436,4 +436,17 @@ fn guided_mode_asks_folds_advanced_and_ends_in_the_expert_window() {
     h.run_steps(2);
     assert!(h.state().guided.flow.is_none());
     assert!(h.state().ri.open);
+
+    // A detection switches .cmp saving on; leaving it unfinished switches it off, Finish keeps it.
+    let app = h.state_mut();
+    app.start_flow(Flow::Detection);
+    assert!(app.batch.saves_cmp());
+    app.start_flow(Flow::Batch);
+    assert!(!app.batch.saves_cmp());
+    app.start_flow(Flow::Detection);
+    app.guided.flow = Some((Flow::Detection, 3));
+    h.run_steps(2);
+    h.get_by_label("Finish").click();
+    h.run_steps(2);
+    assert!(h.state().batch.open && h.state().batch.saves_cmp());
 }

@@ -750,6 +750,11 @@ impl Batch {
         self.options.save_cmp = None;
     }
 
+    #[cfg(test)]
+    pub fn saves_cmp(&self) -> bool {
+        self.options.save_cmp.is_some()
+    }
+
     /// The `.cmp` choice alone, for the guided component detection.
     pub fn cmp_grid(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("batch cmp").show(ui, |ui| save_cmp_row(ui, &mut self.options.save_cmp));
