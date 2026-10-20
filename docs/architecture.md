@@ -23,16 +23,19 @@ rust-toolchain.toml     pinned Rust version with clippy and rustfmt; Renovate ra
 crates/md-core/         library: data model, import/export, analysis algorithms (no GUI deps)
   src/lib.rs            Chromatogram (flat ANDI-style arrays), TIC/SIC, plot decimation
   src/andi.rs           ANDI-MS NetCDF import with input validation, NetCDF export
-  src/diskscan.rs       old raw-data cache (.bin + .idx) reader
+  src/diskscan.rs       old raw-data cache (.bin + .idx) reader, RI calibration stored in the .idx
   src/library.rs        compound libraries: old .lbr (versions 2-5) reader, AMDIS MSL import/export,
                         library text format (.mdlib) read/write
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
-  src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file
+  src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file,
+                        binary RICalculator record
+  src/cmp.rs            saved components of the old version (.cmp): read and write
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
+  src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
   examples/perf.rs      performance smoke test on synthetic large runs
   examples/batch.rs     batch quantification timing on real files
@@ -52,6 +55,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/library_editor.rs library editor window (compounds, RI, quant ions, FRAG, comments; saves .mdlib)
   src/library_editor/add.rs  its "Add component" and "Copy RTs" dialogs (#80)
   src/batch.rs          batch quantification window and result table
+  src/statistics.rs     biomarker statistics window: two-group table, box plots, PCA plots
   src/style.rs          app-wide look egui lacks (symbol font fallback); rules in DESIGN.md
   src/ui_tests.rs       glyph check for UI strings; ignored headless screenshot test (docs/ui-quality.md)
 crates/md-cli/          headless batch quantification (binary `md-cli`), depends on `md-core` only
@@ -60,7 +64,7 @@ crates/md-cli/          headless batch quantification (binary `md-cli`), depends
 docs/reverse-engineering/  evidence from the old binary (features, algorithms, file formats)
 ```
 
-Planned additions: modules in `md-core` for normalisation, MID and statistics.
+Planned additions: modules in `md-core` for normalisation and MID.
 All analysis code lives in `md-core` so the GUI, CLI and tests share it.
 
 Each crate follows the Cargo layout: `src/` for code, `tests/` for integration tests, `examples/` and
@@ -127,8 +131,17 @@ plain `File`).
 detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
 0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
-`detect_peaks_matched` and `matched_filter` port the old `MatchedPeakDetector` and its filter, which the
-old app only uses in the RI calibration dialog (and deconvolution, §4.5).
+`matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
+
+`PeakSettings::detector` selects the old "Matched Filtering" method instead (`Detector::Matched`, old
+`MatchedPeakDetector`, §3.3). The old app offers it only in its *Calibration Setter* window, with peak
+width 10 and threshold 3 as the values after switching (`Detector::MATCHED`); the main window always uses
+the default detector, and the old settings file has no field for it. Here it is a field of `GcmsSettings`
+(not saved in the old file) and a choice in the app's settings window, so the app, the batch scan and the
+deconvolution all use the chosen detector. In the old code the matched peaks hold the filtered values and
+the deconvolution reads those, so `IonTraces::detect_peaks` overwrites each trace in place with its filtered
+values (one row copy per worker, no second index). The filter is computed per trace in parallel with one
+precomputed kernel; `detect_peaks_matched` runs the same detector on a single trace (RI markers).
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 
@@ -324,6 +337,33 @@ failed runs go to stderr, and the exit code is 2 if the table is complete except
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 
+## Old result files
+
+`md_core::cmp` reads and writes the old `.cmp` files (saved components, version 4 of MetaboliteDetector 3.3;
+[file-formats.md](reverse-engineering/file-formats.md) §3) with every field, including the ion peaks and the
+model peak, as `library::LibraryCompound` records (the reader is shared with `.lbr`). `LibraryCompound::component` turns one into the `deconv::Component` the app shows. A `.calib` is
+read by `RiCalibration::read_calib`; the binary calibration the old RI wizard stores in a run's `.idx` by
+`diskscan::read_calibration` (`ri::StoredCalibration`, values kept in ms so it writes back the same bytes).
+Opening a run in the app uses `cmp::saved_components` and `ri::saved_calibration`: components from
+`<run>.cmp` replace the analysis until the settings change, and `<run>.calib` (else the `.idx` calibration)
+becomes the run's own calibration. A `.calib` has no RT shift, so it drops a shift stored in the `.idx`;
+it wins because it is the file the user saved last (the app's "Save .calib" suggests that name). A `.cmp`
+whose apex times do not match the run's scan times, a broken file and versions 1 to 3 of `.cmp` (no sample
+to decode them from) only give a warning: the run opens with its own analysis.
+
+Test `crates/md-core/tests/old_results.rs` checks files the old binary wrote itself (never committed):
+
+```sh
+# Linux/WSL with the old binary; writes example-data/old-results/ (ignored by git)
+MD_RESULTS=$PWD/example-data/old-results docs/reverse-engineering/tools/golden/make-reference.sh
+cargo test -p md-core --test old_results
+# the old program reads what md-core wrote (the test saves it to old-results/md-core/)
+docs/reverse-engineering/tools/golden/make-reference.sh --reread IN OUT [IN OUT]...
+```
+
+It compares every peak field with the old getters (9 digits), the spectra exactly, and the written
+payload byte for byte with the old one; it passes without checking anything when the files are missing.
+
 ## Golden test
 
 `crates/md-core/tests/golden_old_md.rs` compares peak detection and deconvolution with the old
@@ -337,8 +377,8 @@ How the reference is made: `docs/reverse-engineering/tools/golden/make-reference
 and calls the binary's own functions in the order of the GUI's "Detect components": `CdfImporter`,
 `GCMSDiskScan`, `GCMSAnalyzer::detectAllPeaks(true, 10, 0.05)`, `deconvoluteChromatogram`. It uses the
 static `AN_*` defaults compiled into the binary, which are also the values of a fresh config file. This
-is the old code itself, not a re-implementation. The GUI export and `.cmp` files were not used because
-they need clicks per run and `.cmp` holds no peak bounds. The script checks the binary's SHA-256, so
+is the old code itself, not a re-implementation. The GUI export was not used because it needs clicks
+per run. The script checks the binary's SHA-256, so
 another build cannot silently produce a different reference. Neither the binary nor the example data are
 committed.
 
@@ -356,6 +396,16 @@ Remaining differences, all in deconvolution: 1 old component is missing, 3 diffe
 and 1 has other heights. All 5 come from precise-apex ties that the old GSL fit rounds up (peak detection
 deviations above): fed with the old precise apex values, the port matches all 246 components exactly.
 A bit-exact copy of the GSL SVD would remove them, but GSL is GPL and this project is MIT.
+
+A second reference, `old-md-3.3-matched.tsv`, is made the same way with the old `MatchedPeakDetector(10, 3)`
+(`MD_MATCHED="10 3"` for the driver; the *Calibration Setter* values, §3.3) and compared with
+`Detector::MATCHED` under the same tolerances. Its peaks (12 590, 12 411 and 12 422 in eg04, eg20, eg32)
+match exactly, S/N included (the old default -1). Of 2 807 old components, 2 657 match; 43 are missing,
+38 new ones have no old partner, 66 differ by ions and 41 by heights. The cause is the same precise-apex
+tie: the filtered traces are integers with broad, smooth tops, so the parabola vertex lands exactly on
+a half bin much more often (61 of the 12 590 peaks of eg04), and the tied peaks fall into a neighbouring
+deconvolution bin. Checked on eg04 (11 of the 188 differences): fed with the old precise apex values,
+all of its components match (ions, apex scan, heights within ±1). The other runs were not checked this way.
 
 The test fails when one of these counts grows.
 
@@ -448,7 +498,9 @@ the open library or a new one: create, delete and rename compounds, add the sele
 active run ("Add component…", see below), copy RT and RI of the run's assigned components ("Copy RTs…"), view the spectrum, and edit RT, RI, quant ions, MID fragments,
 comments and other features. It saves only `.mdlib`. Save writes back only a `.mdlib` file it opened or
 saved before; every other target goes through the native save dialog, which asks before replacing a file,
-and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. After a
+and a target that is not `.mdlib` is refused, so `.lbr` and `.msl` files are never overwritten. "Export MSL" writes the library as AMDIS text in the three
+types of the old export dialog (Nominal, Profile, FWHM; `library::write_msl_as`, file-formats.md §6.2) and only to a
+`.msl` file. After a
 save the app opens the saved library, so the next search uses the edits.
 
 **Growing a library from runs** (`md_core::library_add`, old `DialogAddLib` and `copyRT`, algorithms.md §7e).
@@ -495,6 +547,22 @@ active run (TIC and/or SIC, every scan, not the decimated plot points) and the s
 chosen normalisation) as CSV through `md_core::csv::write_columns`, and each plot as PNG. PNG is a crop of
 egui's own window screenshot, so it looks exactly like the screen. Files are written to `<name>.part` and
 renamed.
+
+## Biomarker statistics and PCA
+
+`md_core::stats` works on the batch table as shown (after normalisation, so the same numbers as the
+Batch window). `compare` takes two lists of replicate groups and gives, per substance, hits, mean, SD,
+ratio and a two-sided p-value: Welch's t-test over all runs (old "independent"), over one mean per
+replicate group (old "not independent"), or a paired t-test (new). A missing value counts as 0 by
+default, like the old program. The t distribution is our own regularised incomplete beta function; no
+statistics crate. `five_numbers` gives min, quartiles (R type 7) and max for the box plots. `pca`
+excludes the pool runs, z-scores each substance, and takes the SVD of the runs × substances matrix with
+`nalgebra` (pure Rust, `std` only, no BLAS). This equals the old covariance eigen-decomposition and
+scales with the number of runs squared, not the number of substances squared, which matters for
+non-targeted tables. The sign of a component is chosen so its largest loading is positive. Values are
+tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
+[algorithms.md](reverse-engineering/algorithms.md) §7f. The window
+(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
 
 ## Settings
 

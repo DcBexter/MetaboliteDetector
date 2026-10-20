@@ -383,6 +383,7 @@ mod tests {
             sic_job: None,
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
+            saved_calibration: None,
             analysis: settings::Analysis::default(),
             scan: 0,
             component: None,

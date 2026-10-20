@@ -82,6 +82,8 @@ pub struct Batch {
     norm: Norm,
     /// `table` normalised as `norm` says.
     shown: Option<(Norm, Table)>,
+    /// Counts the tables `shown` has held, so windows reading it know when it changed.
+    generation: u64,
     /// File dates of the table's runs and how many could not be read; read once per table.
     times: Option<(Vec<i64>, usize)>,
     note: String,
@@ -101,6 +103,7 @@ impl Default for Batch {
             table: None,
             norm: Norm::default(),
             shown: None,
+            generation: 0,
             times: None,
             note: String::new(),
         }
@@ -108,6 +111,16 @@ impl Default for Batch {
 }
 
 impl Batch {
+    /// The table as shown (normalised) with a number that changes whenever it is rebuilt.
+    pub fn shown_table(&self) -> Option<(u64, &Table)> {
+        self.shown.as_ref().map(|s| (self.generation, &s.1))
+    }
+
+    /// Whether the shown table is z-scored; a missing value cannot count as 0 there.
+    pub fn z_scored(&self) -> bool {
+        self.shown.as_ref().is_some_and(|s| s.0.z_score)
+    }
+
     pub fn window(
         &mut self,
         ctx: &egui::Context,
@@ -301,6 +314,7 @@ impl Batch {
                     let times = self.times.as_ref().map(|t| t.0.as_slice());
                     let shown = apply(t, &mode(n, t, times.unwrap_or_default()), n.z_score);
                     self.shown = Some((n.clone(), shown));
+                    self.generation += 1;
                 }
                 if let Some((_, shown)) = &self.shown {
                     if let Some(note) = export_button(ui, shown) {

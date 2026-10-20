@@ -224,3 +224,31 @@ fn reads_old_version_5_libraries() {
         );
     }
 }
+
+/// Compares the three MSL exports with what the old program writes from the same library
+/// (docs/reverse-engineering/tools/golden/make-msl-export.sh). Needs `MD_LBR_SAMPLE` and `MD_MSL_GOLDEN`
+/// (the OUT_PREFIX of the script); passes without checking anything when one is not set.
+#[test]
+fn msl_export_matches_the_old_program() {
+    use md_core::library::{MslType, write_msl_as};
+    let (Ok(lbr), Ok(prefix)) = (
+        std::env::var("MD_LBR_SAMPLE"),
+        std::env::var("MD_MSL_GOLDEN"),
+    ) else {
+        eprintln!("skipped: MD_LBR_SAMPLE or MD_MSL_GOLDEN not set");
+        return;
+    };
+    let lib = read_lbr(&lbr).unwrap();
+    for (kind, name) in [
+        (MslType::Profile, "profile"),
+        (MslType::Nominal, "nominal"),
+        (MslType::Fwhm, "fwhm"),
+    ] {
+        let old = std::fs::read_to_string(format!("{prefix}.{name}.msl")).unwrap();
+        let new = write_msl_as(&lib, kind);
+        for (n, (a, b)) in new.lines().zip(old.lines()).enumerate() {
+            assert_eq!(a, b, "{kind:?} line {}", n + 1);
+        }
+        assert_eq!(new, old, "{kind:?}");
+    }
+}

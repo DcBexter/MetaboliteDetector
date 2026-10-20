@@ -81,6 +81,9 @@ impl App {
         if ui.button("Batch quantification…").clicked() {
             self.batch.open = true;
         }
+        if ui.button("Biomarker statistics…").clicked() {
+            self.statistics.open = true;
+        }
         if ui.button("Run info…").clicked() {
             self.view.info_open = true;
         }
