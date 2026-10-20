@@ -330,7 +330,8 @@ rescan:
   substance without any value left drops out of the table.
 - **Untargeted** (`ScanSettings::untargeted`, then `add_unknowns`): components without library hit are kept
   per run and pooled over all runs into a temporary library (`Unknown n`, the mean spectrum of its members);
-  `table` takes it as `extra`.
+  `table` takes it as `extra`. The components of a run are scored in parallel against the library as it
+  was before the run; 12 000 unknowns in 20 runs take 0.07 s on 32 logical cores and 0.47 s on one thread (`examples/perf.rs`).
 - **Rescan** (`rescan_runs`): a substance found in at least a quarter of the runs gets its missing quant ions
   from the ion traces of the runs' files, within ΔRI (`SearchSettings::ri_diff`) around the expected
   position (old `ResultSeries::scanIons`).
