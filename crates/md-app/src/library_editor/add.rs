@@ -321,18 +321,11 @@ impl LibraryEditor {
                             }
                             ui.end_row();
                             for p in &d.plan {
-                                let ri = |v: f64| {
-                                    if v >= 0.0 {
-                                        format!("{v:.1}")
-                                    } else {
-                                        "–".into()
-                                    }
-                                };
                                 ui.label(&p.name);
-                                ui.label(format!("{:.3}", p.rt_ms / 60_000.0));
-                                ui.label(format!("{:.3}", p.old_rt_ms / 60_000.0));
-                                ui.label(p.ri.map_or("–".into(), ri));
-                                ui.label(ri(p.old_ri));
+                                ui.label(rt_minutes(p.rt_ms));
+                                ui.label(rt_minutes(p.old_rt_ms));
+                                ui.label(p.ri.map_or("–".into(), ri_text));
+                                ui.label(ri_text(p.old_ri));
                                 ui.label(format!("{:.3}", p.score));
                                 ui.end_row();
                             }
@@ -360,5 +353,23 @@ impl LibraryEditor {
         if !open {
             self.rt = None;
         }
+    }
+}
+
+/// RI as shown in the copy dialog; a negative value is unknown.
+fn ri_text(v: f64) -> String {
+    if v >= 0.0 {
+        format!("{v:.1}")
+    } else {
+        "–".into()
+    }
+}
+
+/// RT in minutes from milliseconds; a negative value is unknown.
+fn rt_minutes(v: f64) -> String {
+    if v >= 0.0 {
+        format!("{:.3}", v / 60_000.0)
+    } else {
+        "–".into()
     }
 }

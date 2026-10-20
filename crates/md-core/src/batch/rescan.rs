@@ -98,6 +98,7 @@ pub fn rescan_runs(
                                 ions: Vec::new(),
                                 rescanned: true,
                                 rescued: Vec::new(),
+                                alternatives: Vec::new(),
                             });
                             found.len() - 1
                         });
@@ -283,6 +284,7 @@ mod tests {
             }],
             rescanned: false,
             rescued: Vec::new(),
+            alternatives: Vec::new(),
         };
         let shifted = RiCalibration::identity().shifted_to(120.0, 100.0);
         let run = |found: Vec<Found>, calibration| RunResult {

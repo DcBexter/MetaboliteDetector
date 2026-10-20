@@ -367,6 +367,20 @@ impl Settings {
                 "The spectrum score counts in the overall score.",
                 egui::Checkbox::without_text(&mut d.ls_use_spec),
             );
+            row(
+                ui,
+                "Number of fragments",
+                "SQL_MAX_NUMBER_FRAGMENTS",
+                "NIST search: how many of the component's strongest fragments are compared.",
+                num(&mut d.sql_max_number_fragments, 1..=100),
+            );
+            row(
+                ui,
+                "Minimum number of identical frag.",
+                "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS",
+                "NIST search: a library entry is scored only if it shares more than this many of them.",
+                num(&mut d.sql_minimal_number_equal_fragments, 0..=100),
+            );
         });
         ranges(
             ui,

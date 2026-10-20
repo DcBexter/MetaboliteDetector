@@ -34,6 +34,7 @@ impl App {
     fn file_menu(&mut self, ui: &mut egui::Ui) {
         self.open_chromatograms_button(ui);
         self.open_library_button(ui);
+        self.open_nist_button(ui);
         if ui
             .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
             .on_hover_text("Close every open run")
@@ -46,20 +47,8 @@ impl App {
         if !self.runs.is_empty() {
             ui.separator();
         }
-        if let Some(r) = self.runs.get(self.active)
-            && ui
-                .button("Export as NetCDF…")
-                .on_hover_text("Save the active run as an ANDI-MS NetCDF file")
-                .clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter("NetCDF (ANDI-MS)", &["cdf"])
-                .set_file_name(format!("{}.cdf", r.name))
-                .save_file()
-        {
-            // shortcut: writes on the UI thread (~50 ms per example run); spawn if runs grow.
-            self.error = md_core::andi::write(&path, &r.data)
-                .err()
-                .map(|e| format!("{}: {e}", path.display()));
+        if !self.runs.is_empty() {
+            ui.menu_button("Export as NetCDF", |ui| self.netcdf_menu(ui));
         }
         self.export_menu(ui);
         ui.separator();
@@ -69,6 +58,46 @@ impl App {
             .clicked()
         {
             self.editor.open = true;
+        }
+    }
+
+    /// The three ways the old program wrote a run: all points, one point per peak, or per nominal mass.
+    fn netcdf_menu(&mut self, ui: &mut egui::Ui) {
+        use md_core::centroid::{CentroidSettings, ExportKind, reduce};
+        for kind in ExportKind::ALL {
+            let hint = match kind {
+                ExportKind::Profile => {
+                    "Save every point of the active run as an ANDI-MS NetCDF file"
+                }
+                ExportKind::Centroid => "Save one point per detected peak (centroided spectra)",
+                ExportKind::Nominal => "Save the highest intensity per nominal mass (bins of 1)",
+            };
+            let Some(r) = self.runs.get(self.active) else {
+                return;
+            };
+            if ui
+                .button(format!("{}…", kind.label()))
+                .on_hover_text(hint)
+                .clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("NetCDF (ANDI-MS)", &["cdf"])
+                    .set_file_name(format!("{}{}.cdf", r.name, kind.suffix()))
+                    .save_file()
+            {
+                // shortcut: writes on the UI thread (~0.2 s per 10M points); spawn if runs grow.
+                let result = if kind == ExportKind::Profile {
+                    md_core::andi::write(&path, &r.data)
+                } else {
+                    let reduced = reduce(
+                        &r.data,
+                        kind,
+                        &CentroidSettings::from(&self.settings.applied),
+                    );
+                    md_core::andi::write_with_tic(&path, &reduced, &r.data.tic())
+                };
+                self.error = result.err().map(|e| format!("{}: {e}", path.display()));
+                ui.close();
+            }
         }
     }
 
@@ -125,12 +154,20 @@ impl App {
                     false,
                 ),
             ],
-            &[(
-                "Natural isotopes…",
-                "Isotope distribution (M+0, M+1, …) of a molecular formula",
-                |a| &mut a.isotopes.open,
-                false,
-            )],
+            &[
+                (
+                    "Natural isotopes…",
+                    "Isotope distribution (M+0, M+1, …) of a molecular formula",
+                    |a| &mut a.isotopes.open,
+                    false,
+                ),
+                (
+                    "TOF calibration…",
+                    "m/z calibration of FastFlight raw data from reference ions; saved as .mzcalib",
+                    |a| &mut a.tof.open,
+                    false,
+                ),
+            ],
         ];
         for (i, group) in groups.into_iter().enumerate() {
             if i > 0 {

@@ -3,7 +3,8 @@
 //! inline; `MD_MID_SERIES_DIR` (cases.txt and old.tsv from make-midseries.sh) checks all of them, and
 //! with `MD_LBR_SAMPLE` (lib_aa.lbr) the library spectrum comes from the old library itself. Group
 //! statistics and the text exports of the result window go against old_midstats.cpp the same way
-//! (one inline case, all with old-stats.txt and the library).
+//! (one inline case, all with old-stats.txt and the library), the group methods 0 and 1 and their
+//! export against old_midgroups.cpp (three inline cases, all with groups.txt and old-groups.txt).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -63,23 +64,51 @@ struct Case {
     name: String,
     compound: usize,
     tracer: String,
-    library: bool,
+    method: Method,
+    /// Runs of the groups GL and GUL (group methods only).
+    labelled: Vec<usize>,
+    unlabelled: Vec<usize>,
     runs: usize,
     frags: Vec<(u32, u32, String, u32)>,
     ints: Vec<(usize, u32, f64)>,
 }
 
-fn cases(text: &str) -> Vec<Case> {
+/// Cases of old_midseries.cpp (`case NAME COMPOUND TRACER FLAG RUNS`) or, with `group`, of
+/// old_midgroups.cpp (`case NAME COMPOUND METHOD M1 GL GUL RUNS`).
+fn cases(text: &str, group: bool) -> Vec<Case> {
     let mut out: Vec<Case> = Vec::new();
     for line in text.lines() {
         let w: Vec<&str> = line.split_whitespace().collect();
         let dash = |s: &str| if s == "-" { String::new() } else { s.into() };
+        let runs =
+            |s: &str| -> Vec<usize> { s.split(',').filter_map(|r| r.parse().ok()).collect() };
         match w.first().copied() {
+            Some("case") if group => out.push(Case {
+                name: w[1].into(),
+                compound: w[2].parse().unwrap(),
+                tracer: String::new(),
+                method: match w[3] {
+                    "0" => Method::Uncorrected,
+                    _ => Method::Reference {
+                        m1: w[4].parse().unwrap(),
+                    },
+                },
+                labelled: runs(w[5]),
+                unlabelled: runs(w[6]),
+                runs: w[7].parse().unwrap(),
+                frags: Vec::new(),
+                ints: Vec::new(),
+            }),
             Some("case") => out.push(Case {
                 name: w[1].into(),
                 compound: w[2].parse().unwrap(),
                 tracer: dash(w[3]),
-                library: w[4] == "1",
+                method: match w[4] {
+                    "1" => Method::Library,
+                    _ => Method::Formula,
+                },
+                labelled: Vec::new(),
+                unlabelled: Vec::new(),
                 runs: w[5].parse().unwrap(),
                 frags: Vec::new(),
                 ints: Vec::new(),
@@ -166,17 +195,21 @@ fn mids_of(
                     .collect(),
                 rescanned: false,
                 rescued: Vec::new(),
+                alternatives: Vec::new(),
             }],
             unknown: Vec::new(),
             calibration: None,
         })
         .collect();
-    let method = if k.library {
-        Method::Library
-    } else {
-        Method::Formula
-    };
-    let mids = determine(&runs, &[c.clone()], &[], &[], method, &k.tracer, table);
+    let mids = determine(
+        &runs,
+        &[c.clone()],
+        &k.labelled,
+        &k.unlabelled,
+        k.method,
+        &k.tracer,
+        table,
+    );
     assert!(mids.errors.is_empty(), "{}: {:?}", k.name, mids.errors);
     (mids, c)
 }
@@ -185,7 +218,7 @@ fn mids_of(
 fn check(cases_text: &str, old: &str, lib: Option<&[LibraryCompound]>) -> usize {
     let table = old_table();
     let mut compared = 0;
-    for k in cases(cases_text) {
+    for k in cases(cases_text, false) {
         let frags = &mids_of(&k, old, lib, &table).0.compounds[0].fragments;
         let mut rows = 0;
         for line in old.lines() {
@@ -229,13 +262,8 @@ fn check(cases_text: &str, old: &str, lib: Option<&[LibraryCompound]>) -> usize 
 fn check_exports(cases_text: &str, old: &str, stats: &str, lib: &[LibraryCompound]) -> usize {
     let table = old_table();
     let mut compared = 0;
-    for k in cases(cases_text) {
+    for k in cases(cases_text, false) {
         let (mids, c) = mids_of(&k, old, Some(lib), &table);
-        let method = if k.library {
-            Method::Library
-        } else {
-            Method::Formula
-        };
         let isotopomers: Vec<(&FragmentMid, usize)> = (mids.compounds[0].fragments.iter())
             .flat_map(|f| (0..f.isotopomers).map(move |n| (f, n)))
             .collect();
@@ -264,7 +292,7 @@ fn check_exports(cases_text: &str, old: &str, stats: &str, lib: &[LibraryCompoun
         let lib = [c];
         let columns: Vec<String> = (0..k.runs).map(|r| format!("run{r}")).collect();
         assert_eq!(
-            mids.run_text(&lib, method, &columns),
+            mids.run_text(&lib, k.method, &columns),
             block("data"),
             "{} data",
             k.name
@@ -273,6 +301,93 @@ fn check_exports(cases_text: &str, old: &str, stats: &str, lib: &[LibraryCompoun
         compared += lines;
     }
     compared
+}
+
+/// Compares the group methods 0 and 1 with the output of old_midgroups.cpp: `gmid`/`gr2` lines
+/// per fragment key and the export between `begin group NAME` and `end`. The old export writes no
+/// rows for a reversed key `(b, a)`; the port does (algorithms.md §7g.7), so those rows are left
+/// out before comparing. A case the old program fails on (`error`, method 0 without any labelled
+/// row) must give no MID here.
+fn check_groups(cases_text: &str, old: &str, lib: Option<&[LibraryCompound]>) -> usize {
+    let table = old_table();
+    let mut compared = 0;
+    for k in cases(cases_text, true) {
+        let (mids, c) = mids_of(&k, "", lib, &table);
+        let fields = |tag: &str| -> Vec<Vec<&str>> {
+            (old.lines())
+                .map(|l| l.split('\t').collect::<Vec<_>>())
+                .filter(|f| f[0] == tag && f[1] == k.name)
+                .collect()
+        };
+        let fits: Vec<Option<_>> = (mids.compounds.iter())
+            .flat_map(|c| &c.fragments)
+            .map(|f| f.fits[0].as_ref())
+            .collect();
+        // The port reports no errors for the group methods, so the old one must not either.
+        assert!(fields("gerror").is_empty(), "{}", k.name);
+        if !fields("error").is_empty() {
+            assert!(fits.iter().all(Option::is_none), "{}: {fits:?}", k.name);
+            continue;
+        }
+        let frags = &mids.compounds[0].fragments;
+        let close = |a: f64, e: f64| (a - e).abs() <= 1e-9 * e.abs().max(1.0);
+        for f in fields("gr2") {
+            let (frag, r2): (usize, f64) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            let gmid: Vec<[f64; 2]> = (fields("gmid").iter())
+                .filter(|g| g[2] == f[2])
+                .map(|g| [4, 5].map(|i| g[i].parse().unwrap()))
+                .collect();
+            compared += gmid.len();
+            let Some(fit) = &frags[frag].fits[0] else {
+                // The old solver's empty result.
+                assert_eq!((gmid, r2), (vec![[-1.0, -1.0]], -1.0), "{} {frag}", k.name);
+                continue;
+            };
+            assert_eq!(fit.mids.len(), gmid.len(), "{} {frag}", k.name);
+            assert!(
+                close(fit.r2.unwrap_or(-1.0), r2),
+                "{} {frag}: r2 {:?}",
+                k.name,
+                fit.r2
+            );
+            for (n, [mid, ci]) in gmid.into_iter().enumerate() {
+                assert!(
+                    close(fit.mids[n], mid),
+                    "{} {frag} M{n}: {}",
+                    k.name,
+                    fit.mids[n]
+                );
+                let got = fit.cis[n].unwrap_or(-1.0);
+                assert!(close(got, ci), "{} {frag} M{n}: ci {got}", k.name);
+            }
+        }
+        let mut shown = mids.clone();
+        for (f, key) in shown.compounds[0]
+            .fragments
+            .iter_mut()
+            .zip(fragment_keys(&k))
+        {
+            if key.0 > key.1 {
+                f.fits.clear();
+            }
+        }
+        let start = format!("begin\tgroup\t{}\n", k.name);
+        let rest = &old[old.find(&start).expect(&start) + start.len()..];
+        assert_eq!(
+            shown.group_text(&[c]),
+            &rest[..rest.find("\nend\n").unwrap()],
+            "{} export",
+            k.name
+        );
+    }
+    compared
+}
+
+/// Fragment keys of a case in the old map order.
+fn fragment_keys(k: &Case) -> Vec<(u32, u32)> {
+    let mut keys: Vec<(u32, u32)> = k.frags.iter().map(|f| (f.0, f.1)).collect();
+    keys.sort_unstable();
+    keys
 }
 
 #[test]
@@ -302,6 +417,9 @@ fn matches_old_mid_compound_series_on_all_cases() {
         &lib,
     );
     eprintln!("{n} statistics and their exports compared");
+    assert!(n > 0);
+    let n = check_groups(&read("groups.txt"), &read("old-groups.txt"), Some(&lib));
+    eprintln!("{n} values of the group methods and their exports compared");
     assert!(n > 0);
 }
 
@@ -347,6 +465,98 @@ const GAP_STATS: &str = concat!(
     "73 (M2)\t0.156987\t\t0.0292851\tHexatriacontane\t71\tM2\n",
     "\n\n\nend\n",
 );
+
+/// Group cases: method 0 with a reversed key, method 1 with M1 correction, and method 1 whose
+/// reference run lacks the substance (the old solver's empty result).
+const GROUP_CASES: &str = "\
+case m0_rev 0 0 0 0,1,2 - 3
+frag 99 97 - 0
+frag 57 58 - 0
+int 0 97 6840.373
+int 0 98 5156.745
+int 0 99 6993.943
+int 1 97 118349.324
+int 1 98 76121.941
+int 1 99 34373.447
+int 2 97 436361.024
+int 2 98 219773.602
+int 2 99 43200.077
+int 0 57 614958.851
+int 0 58 71311.902
+int 1 57 421034.15
+int 1 58 66007.769
+int 2 57 592328.252
+int 2 58 316825.716
+end
+case m1_m1 0 1 0.011 0,1,2 3,4 5
+frag 57 60 - 0
+int 0 57 719705.585
+int 0 58 95354.932
+int 0 59 181884.679
+int 0 60 140326.155
+int 1 57 394120.126
+int 1 58 220766.366
+int 1 59 127405.981
+int 1 60 112701.757
+int 2 57 112625.419
+int 2 58 93254.73
+int 2 59 8949.519
+int 2 60 28715.831
+int 3 57 102520.481
+int 3 58 27542.047
+int 3 59 40726.816
+int 3 60 12921.254
+int 4 57 159923.825
+int 4 58 137828.143
+int 4 59 108964.203
+int 4 60 50546.176
+end
+case m1_noref 0 1 0.011 0,1 2 3
+frag 57 59 - 0
+int 0 57 87522.67
+int 0 58 101263.838
+int 0 59 28742.928
+int 1 57 308824.623
+int 1 58 180046.262
+int 1 59 61481.868
+end
+";
+
+const OLD_GROUPS: &str = concat!(
+    "gmid\tm0_rev\t0\t0\t0.80402526214245984\t0.15052587657174457\n",
+    "gmid\tm0_rev\t0\t1\t0.19597473785754016\t0.15052587657174457\n",
+    "gr2\tm0_rev\t0\t-1\n",
+    "gmid\tm0_rev\t1\t0\t0.50043832771605301\t0.15014275629775259\n",
+    "gmid\tm0_rev\t1\t1\t0.30614404639917336\t0.035474163199280859\n",
+    "gmid\tm0_rev\t1\t2\t0.19341762588477365\t0.17851601649619903\n",
+    "gr2\tm0_rev\t1\t-1\n",
+    "begin\tgroup\tm0_rev\n",
+    "Hexatriacontane_57 (M0)\t0.804025\t0.150526\t-1\n",
+    "Hexatriacontane_58 (M1)\t0.195975\t0.150526\t-1\n",
+    "\n\n\nend\n",
+    "gmid\tm1_m1\t0\t0\t1.0397111386668942\t0.13211151180386915\n",
+    "gmid\tm1_m1\t0\t1\t0.029990961785648917\t0.14322119978946884\n",
+    "gmid\tm1_m1\t0\t2\t-0.25407307419108482\t0.14618003078698663\n",
+    "gmid\tm1_m1\t0\t3\t0.16184218124501695\t0.15002564642316882\n",
+    "gr2\tm1_m1\t0\t0.64651089044429044\n",
+    "begin\tgroup\tm1_m1\n",
+    "Hexatriacontane_57 (M0)\t1.03971\t0.132112\t0.646511\n",
+    "Hexatriacontane_58 (M1)\t0.029991\t0.143221\t0.646511\n",
+    "Hexatriacontane_59 (M2)\t-0.254073\t0.14618\t0.646511\n",
+    "Hexatriacontane_60 (M3)\t0.161842\t0.150026\t0.646511\n",
+    "\n\nend\n",
+    "gmid\tm1_noref\t0\t0\t-1\t-1\n",
+    "gr2\tm1_noref\t0\t-1\n",
+    "begin\tgroup\tm1_noref\n",
+    "Hexatriacontane_57 (M0)\t-1\t-1\t-1\n",
+    "\n\nend\n",
+);
+
+#[test]
+fn matches_old_group_methods_and_export() {
+    let c = LibraryCompound::new("Hexatriacontane");
+    assert_eq!(check_groups(GROUP_CASES, OLD_GROUPS, Some(&[c])), 10);
+}
 
 #[test]
 fn matches_old_statistics_and_exports() {

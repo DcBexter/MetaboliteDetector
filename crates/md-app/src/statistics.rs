@@ -113,7 +113,13 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
                 ui.label(*g);
                 for side in 0..2 {
                     let mut on = sides[side].iter().any(|s| s == g);
-                    if ui.checkbox(&mut on, "").changed() {
+                    // The column title is not a label of the box, so name each one for screen readers.
+                    let name = format!("{g} in group {}", side + 1);
+                    let r = ui.add(egui::Checkbox::without_text(&mut on));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name)
+                    });
+                    if r.changed() {
                         sides.iter_mut().for_each(|s| s.retain(|s| s != g));
                         if on {
                             sides[side].push((*g).into());
@@ -128,8 +134,9 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
 /// Text field to paste group names and the buttons that fill a side from it.
 fn paste_box(ui: &mut egui::Ui, paste: &mut String, sides: &mut [Vec<String>; 2], all: &[&str]) {
     ui.vertical(|ui| {
-        ui.label("Paste group names (one per line), then fill a side:");
-        ui.add(egui::TextEdit::multiline(paste).desired_rows(4));
+        let label = ui.label("Paste group names (one per line), then fill a side:");
+        ui.add(egui::TextEdit::multiline(paste).desired_rows(4))
+            .labelled_by(label.id);
         ui.horizontal(|ui| {
             for side in 0..2 {
                 if ui.button(format!("Fill group {}", side + 1)).clicked() {
@@ -191,13 +198,14 @@ fn samples_picker(ui: &mut egui::Ui, samples: &mut Samples) {
 
 fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
     ui.horizontal(|ui| {
-        ui.label("Show only p ≤");
+        let label = ui.label("Show only p ≤");
         ui.add(
             egui::DragValue::new(p_max)
                 .range(0.0..=1.0)
                 .speed(0.001)
                 .max_decimals(4),
-        );
+        )
+        .labelled_by(label.id);
         ui.checkbox(sort_by_p, "sort by p");
         if c.samples == Samples::Paired && !stats::pairs_match(t, c) {
             ui.colored_label(
@@ -273,42 +281,53 @@ fn biomarker_table(
         "p-value",
     ];
     let mut clicked = None;
-    TableBuilder::new(ui)
-        .id_salt("biomarker table")
-        .striped(true)
-        .sense(egui::Sense::click())
-        .column(Column::auto().at_least(160.0))
-        .columns(Column::auto().at_least(60.0), 9)
-        .header(20.0, |mut h| {
-            for title in TITLES {
-                h.col(|ui| {
-                    ui.strong(title);
-                });
-            }
-        })
-        .body(|body| {
-            body.rows(18.0, shown.len(), |mut row| {
-                let r = shown[row.index()];
-                row.set_selected(selected == Some(r.row));
-                for (i, c) in cells_of(t, r).into_iter().enumerate() {
-                    row.col(|ui| {
-                        // Numbers right-aligned so the digits line up.
-                        let align = if i == 0 {
-                            egui::Layout::left_to_right(egui::Align::Center)
-                        } else {
-                            egui::Layout::right_to_left(egui::Align::Center)
-                        };
-                        ui.with_layout(align, |ui| {
-                            ui.add(egui::Label::new(c).selectable(false));
-                        });
+    // Scrolls sideways in a narrow window instead of widening it.
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        TableBuilder::new(ui)
+            .id_salt("biomarker table")
+            .striped(true)
+            .sense(egui::Sense::click())
+            .column(Column::auto().at_least(160.0))
+            .columns(Column::auto().at_least(60.0), 9)
+            .header(20.0, |mut h| {
+                for title in TITLES {
+                    h.col(|ui| {
+                        ui.strong(title);
                     });
                 }
-                if row.response().clicked() {
-                    clicked = Some(r.row);
-                }
+            })
+            .body(|body| {
+                body.rows(18.0, shown.len(), |mut row| {
+                    let r = shown[row.index()];
+                    row.set_selected(selected == Some(r.row));
+                    for (i, c) in cells_of(t, r).into_iter().enumerate() {
+                        row.col(|ui| {
+                            // Numbers right-aligned so the digits line up.
+                            let align = if i == 0 {
+                                egui::Layout::left_to_right(egui::Align::Center)
+                            } else {
+                                egui::Layout::right_to_left(egui::Align::Center)
+                            };
+                            ui.with_layout(align, |ui| {
+                                ui.add(egui::Label::new(c).selectable(false));
+                            });
+                        });
+                    }
+                    if row.response().clicked() {
+                        clicked = Some(r.row);
+                    }
+                });
             });
-        });
+    });
     clicked
+}
+
+#[cfg(test)]
+impl Statistics {
+    /// Compares replicate group `a` with `b`, for the screenshots.
+    pub fn compare(&mut self, a: &str, b: &str) {
+        self.sides = [vec![a.into()], vec![b.into()]];
+    }
 }
 
 impl Statistics {
@@ -368,6 +387,14 @@ impl Statistics {
         ui.separator();
         match self.tab {
             Tab::Pca => self.pca_tab(ui, generation, t),
+            // Without a regex every run sits in one group, and the picker could never be satisfied.
+            _ if all.len() < 2 => {
+                ui.label(
+                    "Two groups and Box plot compare replicate groups, but this batch has fewer than two. \
+                     Set \"Replicate groups (regex on file name)\" in the batch window; it applies \
+                     at once, without running the batch again.",
+                );
+            }
             _ => {
                 self.group_picker(ui, &all);
                 let c = TwoGroups {

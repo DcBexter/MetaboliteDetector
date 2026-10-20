@@ -49,6 +49,14 @@ pub fn compact(v: f64, step: f64) -> String {
     format!("{:.*}{suffix}", decimals, v / div)
 }
 
+/// How long work took, the same in every status text: `80 ms`, `12.3 s`.
+pub fn took(d: std::time::Duration) -> String {
+    match d.as_millis() {
+        ms @ 0..1000 => format!("{ms} ms"),
+        _ => format!("{:.1} s", d.as_secs_f64()),
+    }
+}
+
 impl View {
     /// Whether the old label switches let a name with this score through.
     pub fn shows(&self, score: f64) -> bool {
@@ -160,8 +168,9 @@ impl App {
             ),
             (
                 "Peak detection",
+                // The names of the Settings dialog.
                 format!(
-                    "slope begin {} / end {}, min height {} noise units, {} bins",
+                    "start slope {}, end slope {}, minimum S/N {}, {} apex steps per scan",
                     peak.threshold_begin,
                     peak.threshold_end,
                     peak.min_peak_height,
@@ -172,7 +181,12 @@ impl App {
         egui::Grid::new("run info").striped(true).show(ui, |ui| {
             for (k, v) in rows {
                 ui.strong(k);
-                ui.add(egui::Label::new(v).wrap());
+                // A grid column starts as narrow as its first frame; without a floor a long path
+                // wraps into a one-word-wide column.
+                ui.scope(|ui| {
+                    ui.set_min_width(240.0);
+                    ui.add(egui::Label::new(v).wrap());
+                });
                 ui.end_row();
             }
         });
@@ -194,6 +208,14 @@ mod tests {
         assert_eq!(compact(1_220_000.0, 2e4), "1.22 M");
         assert_ne!(compact(1_200_000.0, 2e4), compact(1_220_000.0, 2e4));
         assert_eq!(compact(999_999.0, 1e5), "1.0 M");
+    }
+
+    #[test]
+    fn durations_read_as_ms_or_s() {
+        use std::time::Duration;
+        assert_eq!(took(Duration::from_micros(80_460)), "80 ms");
+        assert_eq!(took(Duration::from_millis(999)), "999 ms");
+        assert_eq!(took(Duration::from_millis(12_340)), "12.3 s");
     }
 
     #[test]
