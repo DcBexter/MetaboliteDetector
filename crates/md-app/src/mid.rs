@@ -887,7 +887,6 @@ fn fragment_plot(
             }
         })
         .show(ui, |p| {
-            let mut errors = Vec::new();
             for (j, (key, name, values)) in series.iter().enumerate() {
                 let x = |k: usize| k as f64 - 0.4 + width * (j as f64 + 0.5);
                 let bars = (values.iter().enumerate())
@@ -898,18 +897,23 @@ fn fragment_plot(
                         .id(*key)
                         .color(crate::color(j)),
                 );
-                for (k, (v, e)) in values.iter().enumerate() {
-                    if let Some(e) = e.filter(|e| e.is_finite() && v.is_finite()) {
-                        errors.push(
-                            BoxElem::new(x(k), BoxSpread::new(v - e, *v, *v, *v, v + e))
-                                .box_width(0.0)
-                                .whisker_width(width * 0.5)
-                                .stroke(egui::Stroke::new(1.0, whisker)),
-                        );
-                    }
-                }
+                // Same name and id as the bars: one legend entry hides both.
+                let whiskers = (values.iter().enumerate())
+                    .filter_map(|(k, (v, e))| {
+                        Some((k, *v, e.filter(|e| e.is_finite() && v.is_finite())?))
+                    })
+                    .map(|(k, v, e)| {
+                        BoxElem::new(x(k), BoxSpread::new(v - e, v, v, v, v + e))
+                            .box_width(0.0)
+                            .whisker_width(width * 0.5)
+                            .stroke(egui::Stroke::new(1.0, whisker))
+                    });
+                p.box_plot(
+                    BoxPlot::new(*name, whiskers.collect())
+                        .id(*key)
+                        .allow_hover(false),
+                );
             }
-            p.box_plot(BoxPlot::new("", errors).allow_hover(false));
         });
     crate::plot_export::button(
         ui,
@@ -1024,6 +1028,63 @@ mod tests {
         assert_eq!(keys, ["x/s.2.cdf", "x/s.1.cdf", "Mean ± StdErr"]);
         // The key moved with its run's values (run 2 is 0.2 for Alanine).
         assert_eq!(series[0].2[0].0, 0.2);
+    }
+
+    /// Short line segments in the last frame with the whiskers' colour; the grid lines are as tall as the plot.
+    fn whisker_lines(h: &egui_kittest::Harness<'_, Done>) -> usize {
+        fn count(s: &egui::Shape, color: egui::Color32) -> usize {
+            match s {
+                egui::Shape::Vec(v) => v.iter().map(|s| count(s, color)).sum(),
+                egui::Shape::LineSegment { stroke, points } => {
+                    (stroke.color == color && (points[0] - points[1]).length() < 10.0) as usize
+                }
+                _ => 0,
+            }
+        }
+        let color = egui::Visuals::dark().text_color();
+        (h.output().shapes.iter())
+            .map(|c| count(&c.shape, color))
+            .sum()
+    }
+
+    #[test]
+    fn hiding_a_run_hides_its_bars_and_whiskers_only() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut d = done(Method::Formula, &["s", "s"]);
+        d.paths = ["x/s.1.cdf", "x/s.2.cdf"].map(String::from).to_vec();
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, d: &mut Done| {
+                let f = &d.mids.compounds[0].fragments[0];
+                fragment_plot(ui, f, (&d.columns, &d.paths), &[], (0, 0));
+            },
+            d,
+        );
+        h.run();
+        let toggled = |h: &egui_kittest::Harness<'_, Done>| {
+            let boxes = h.get_all_by_role_and_label(egui::accesskit::Role::CheckBox, "s");
+            boxes
+                .map(|n| n.accesskit_node().toggled())
+                .collect::<Vec<_>>()
+        };
+        // Two legend entries although both runs are called `s`: a legend by name would merge them.
+        let on = Some(egui::accesskit::Toggled::True);
+        let off = Some(egui::accesskit::Toggled::False);
+        assert_eq!(toggled(&h), [on, on]);
+        let both = whisker_lines(&h);
+        let click = |h: &mut egui_kittest::Harness<'_, Done>, i: usize| {
+            let node = (h.get_all_by_role_and_label(egui::accesskit::Role::CheckBox, "s")).nth(i);
+            node.unwrap().click();
+            h.run();
+        };
+        click(&mut h, 1);
+        assert_eq!(toggled(&h), [on, off]);
+        let one = whisker_lines(&h);
+        click(&mut h, 0);
+        assert_eq!(toggled(&h), [off, off]);
+        // Each run has the same number of whisker lines.
+        let none = whisker_lines(&h);
+        assert!(one > 0, "no whiskers drawn");
+        assert_eq!((both, none), (2 * one, 0));
     }
 
     #[test]
