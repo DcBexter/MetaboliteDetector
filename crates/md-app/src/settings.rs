@@ -125,7 +125,8 @@ impl Settings {
         let correct = self.applied.baseline_correction;
         let mut error = None;
         for run in runs {
-            if run.data.baseline.corrected != correct {
+            // Runs without stored means (CDF, other caches) stay as they are, components included.
+            if !run.data.baseline.means.is_empty() && run.data.baseline.corrected != correct {
                 // Copies the run only while a worker still reads the old data.
                 std::sync::Arc::make_mut(&mut run.data).set_baseline_correction(correct);
                 // Components, SIC and the shown spectrum come from the corrected values; the TIC does not.
@@ -419,7 +420,7 @@ impl Settings {
                 ui,
                 "Baseline correction",
                 "baseline_correction",
-                "Subtract each scan's stored baseline from its intensities. Only old type 1 caches                 (FastFlight .bin/.idx) store one; other runs stay unchanged.",
+                "Subtract each scan's stored baseline from its intensities. Only old type 1 caches (FastFlight .bin/.idx) store one; other runs stay unchanged.",
                 egui::Checkbox::without_text(&mut d.baseline_correction),
             );
         });

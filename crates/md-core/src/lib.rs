@@ -91,11 +91,16 @@ impl Chromatogram {
             return;
         }
         let sign = if on { -1.0 } else { 1.0 };
-        for (s, mean) in self.baseline.means.iter().enumerate() {
-            let r = self.offsets[s]..self.offsets[s + 1];
-            // Means and intensities are integers, so subtracting and adding back is exact.
-            self.intensity[r].iter_mut().for_each(|v| *v += sign * mean);
+        let mut rest = &mut self.intensity[..];
+        let mut scans = Vec::with_capacity(self.baseline.means.len());
+        for w in self.offsets.windows(2) {
+            let (scan, tail) = std::mem::take(&mut rest).split_at_mut(w[1] - w[0]);
+            scans.push(scan);
+            rest = tail;
         }
+        // Integers below 2^24 (f32's exact range), so subtracting and adding back is exact there.
+        (scans.into_par_iter().zip(&self.baseline.means))
+            .for_each(|(scan, mean)| scan.iter_mut().for_each(|v| *v += sign * mean));
         self.baseline.corrected = on;
     }
 
