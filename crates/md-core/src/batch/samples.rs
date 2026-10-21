@@ -15,6 +15,11 @@ pub fn run_key(name: &str) -> String {
     }
 }
 
+/// Key of one run by hand: the whole path, so same-named runs in different folders stay apart.
+pub fn path_key(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
 /// The cells of one line; a delimiter inside double quotes stays in the cell and `""` is a quote.
 /// shortcut: a quoted cell cannot span lines, upgrade when a table needs that.
 fn split_cells(line: &str, sep: char) -> Vec<String> {

@@ -13,7 +13,7 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
     Completed, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference, Table,
-    TableSettings, complete_scan, run_key, scan_runs, table,
+    TableSettings, complete_scan, path_key, run_key, scan_runs, table,
 };
 use md_core::batch::{
     cell_ions, group_label, group_names, group_stats_path, hit_list, ions_path, settings_path,
@@ -348,12 +348,24 @@ fn samples_row(
     ui.end_row();
 }
 
+/// What a run without a group by hand gets: the table's group, else the pattern's, else (like
+/// `table`) a group of its own or "all runs".
+fn hint_text(from_table: Option<&String>, has_pattern: bool, has_table: bool) -> &str {
+    match (from_table, has_pattern, has_table) {
+        (Some(g), ..) => g,
+        (None, true, _) => "pattern",
+        (None, false, true) => "own group",
+        (None, false, false) => "all runs",
+    }
+}
+
 /// "Group per run": type a replicate group for a run; it wins over the table and the pattern. An
 /// empty field takes the run back to them. `table` only fills the field's hint.
 fn manual_groups_row(
     ui: &mut egui::Ui,
     manual: &mut SampleGroups,
     table: &SampleGroups,
+    has_pattern: bool,
     paths: &[PathBuf],
 ) {
     let hint = "Set the replicate group of single runs by hand. It wins over the table and the \
@@ -375,13 +387,17 @@ fn manual_groups_row(
                 .show_rows(ui, height, paths.len(), |ui, rows| {
                     for path in &paths[rows] {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        let key = run_key(&name);
+                        let key = path_key(path);
                         let mut text = manual.get(&key).cloned().unwrap_or_default();
                         ui.horizontal(|ui| {
                             let label = ui.label(name.as_ref());
                             let edit = egui::TextEdit::singleline(&mut text)
                                 .desired_width(100.0)
-                                .hint_text(table.get(&key).map_or("pattern", String::as_str));
+                                .hint_text(hint_text(
+                                    table.get(&run_key(&name)),
+                                    has_pattern,
+                                    !table.is_empty(),
+                                ));
                             if ui.add(edit).labelled_by(label.id).changed() {
                                 if text.trim().is_empty() {
                                     manual.remove(&key);
@@ -611,7 +627,13 @@ impl Batch {
                 &self.paths,
                 &mut self.note,
             );
-            manual_groups_row(ui, &mut s.manual_groups, &s.sample_groups, &self.paths);
+            manual_groups_row(
+                ui,
+                &mut s.manual_groups,
+                &s.sample_groups,
+                !s.replicates.is_empty(),
+                &self.paths,
+            );
             row(
                 ui,
                 "Min. reproducibility in a group",
@@ -846,6 +868,8 @@ impl Batch {
             }
             if ui.button("Clear").clicked() {
                 self.paths.clear();
+                // Groups of removed runs would still be counted.
+                self.settings.manual_groups.clear();
             }
             ui.label(format!("{} runs", self.paths.len()));
         });
@@ -891,6 +915,11 @@ impl Batch {
                                     "GROUP_SOURCE",
                                     self.settings.group_source(
                                         self.samples.as_ref().and_then(Samples::source).as_deref(),
+                                        &scan
+                                            .runs
+                                            .iter()
+                                            .map(|r| r.path.clone())
+                                            .collect::<Vec<_>>(),
                                     ),
                                 )],
                                 shown_settings(&self.norm, shown, t.runs.len()),
