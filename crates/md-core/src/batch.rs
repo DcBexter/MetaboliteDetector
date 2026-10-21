@@ -49,6 +49,10 @@ pub struct ScanSettings {
     pub untargeted: bool,
     /// Also save the components of every deconvoluted run as `.cmp` (old Compound Detection Wizard).
     pub save_cmp: Option<CmpTarget>,
+    /// The wizard's own "baseline correction" switch (`CompoundDetector::detect` calls
+    /// `setBaselineCorrectionEnabled` on the run, algorithms.md §4b.4): [`crate::Chromatogram::set_baseline_correction`]
+    /// on every read run. 3.3's batch quantification never sets it, so the default is off.
+    pub baseline_correction: bool,
 }
 
 /// Where `scan_runs` saves the components of a run.
@@ -289,6 +293,13 @@ fn scan_components(
     }
 }
 
+/// Reads a run the way the wizard's detection opens it: with its baseline switch applied.
+fn read_scan_run(path: &Path, s: &ScanSettings) -> Result<Chromatogram, String> {
+    let mut c = crate::read_run(path)?;
+    c.set_baseline_correction(s.baseline_correction);
+    Ok(c)
+}
+
 /// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
 /// (rayon) as well. A `.cmp` file stands for a run already analysed: its saved components are searched
 /// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
@@ -362,7 +373,7 @@ pub fn scan_runs(
                             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 match crate::cmp::is_cmp(path) {
                                     true => scan_saved(path, lib, s),
-                                    false => crate::read_run(path).and_then(|c| {
+                                    false => read_scan_run(path, s).and_then(|c| {
                                         let (r, e) = scan_and_save(c, lib, s, target)
                                             .map_err(|e| e.to_string())?;
                                         failed = failed.take().or(e);
@@ -1385,6 +1396,33 @@ NUM PEAKS: 1
         )
         .unwrap();
         assert_eq!((added, errors.len()), (0, 0));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_baseline_switch_corrects_the_runs_a_scan_reads() {
+        // #337: the wizard's own switch; a type 1 cache (FastFlight) carries the scan means.
+        let (mut idx, bin) = crate::diskscan::tests::files(&[(1500.0, &[73.0, 147.0], &[10, 5])]);
+        let e = idx.len() - 84;
+        idx[e + 40..e + 44].copy_from_slice(&1u32.to_le_bytes()); // DataType 1
+        idx[e + 44..e + 52].copy_from_slice(&2.0f64.to_le_bytes()); // mean
+        let dir = std::env::temp_dir().join(format!("md-baseline-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("r.idx"), idx).unwrap();
+        std::fs::write(dir.join("r.bin"), bin).unwrap();
+        let intensity = |baseline_correction| {
+            let s = ScanSettings {
+                baseline_correction,
+                ..Default::default()
+            };
+            read_scan_run(&dir.join("r.bin"), &s).unwrap().intensity
+        };
+        assert_eq!(
+            intensity(false),
+            [10.0, 5.0],
+            "3.3's batch stays uncorrected"
+        );
+        assert_eq!(intensity(true), [8.0, 3.0]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

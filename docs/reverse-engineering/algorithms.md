@@ -581,7 +581,13 @@ form (0x642af0), called by `getSignals` and so by `GCMSDiskScan::getSpectrum`: d
 `getTIC` reads the stored per-scan TIC (`getTotalSignal`), so the TIC is not. Only `GCMSScanLoader::loadGCMSDiskScan`
 (main window) passes the setting; every other `GCMSDiskScan` ctor call (batch, RI wizard, Calibration Setter, FastFlight
 batch import) passes false. The RI wizard has its own checkbox (`CompoundDetectionPage::baselineCorrection`, read by
-`RICalibrationWizard::detectCompounds`); where it takes effect is not analysed.
+`RICalibrationWizard::detectCompounds`). It is live (#337, objdump): `CompoundDetector` ctor (0x3f42b2) stores it at
+`this+0x10`; `detect` (0x3f4420) opens the run as `GCMSMemoryScan(path, false)` up to 150 000 000 bytes
+(`cmp [..], 0x8f0d180`) and else as `GCMSDiskScan(path, false, false, 0)`, then calls vtable slot 0x38 of the scan with
+`this+0x10`, before `GCMSAnalyzer`/`detectAllPeaks`. Slot 0x38 is `setBaselineCorrectionEnabled(bool)` in both classes
+(the `GCMSMemoryScan` one, 0x5e5ff4, forwards to the `GCMSDiskScan` one, 0x5e476e, and reloads its `ChromatogramProvider`);
+`MainWindow::showSettingsDialog` calls the same slot (0x3c0daf). So the wizard corrects the runs it detects compounds in
+exactly like the main window's switch (type-1 caches only), independent of the Settings value.
 
 Appearance (`MainWindow::showSettingsDialog` 0x3c0b46; `readSettings`, QSettings group `GUI`, keys `axes_label` and
 `peak_label`, both default true):
@@ -595,7 +601,9 @@ Port (#254): `SF_CENTROID_*`, `LS_CUTOFF` and the two appearance switches are wi
 `peaks.rs`, `centroid.rs`, `library.rs` and `tof.rs` (#293). Baseline correction (#294): `diskscan.rs` keeps the per-scan
 means in `Chromatogram::baseline`, ion traces fill missing masses with them, and the app's switch (`baseline_correction`,
 imported from the old QSettings) calls `Chromatogram::set_baseline_correction` on every opened run; the TIC adds the means
-back. Batch runs stay uncorrected like 3.3.
+back. Batch runs stay uncorrected like 3.3, unless the batch option "Baseline correction" (`ScanSettings::baseline_correction`,
+`md-cli --baseline-correction`, #337) is on: the rewrite's batch does the wizard's detection (`.cmp`) and the search in one
+pass, so the wizard's switch corrects every run of that scan, rescans included.
 
 ## 5. Library search and scoring
 

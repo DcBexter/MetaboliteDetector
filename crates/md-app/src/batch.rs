@@ -195,6 +195,8 @@ struct ScanOptions {
     rescan: bool,
     /// Save the components of each run as `.cmp` (old Compound Detection Wizard).
     save_cmp: Option<md_core::batch::CmpTarget>,
+    /// The Compound Detection Wizard's own "baseline correction" switch (algorithms.md §4b.4).
+    baseline_correction: bool,
 }
 
 pub struct Batch {
@@ -515,6 +517,7 @@ impl Default for Batch {
                 untargeted: false,
                 rescan: false,
                 save_cmp: None,
+                baseline_correction: false,
             },
             settings: TableSettings::default(),
             samples: None,
@@ -643,6 +646,7 @@ impl Batch {
                 .and_then(|(name, cutoff)| ShiftReference::find(&lib.compounds, name, cutoff)),
             untargeted: self.options.untargeted,
             save_cmp: self.options.save_cmp.clone(),
+            baseline_correction: self.options.baseline_correction,
             ..self.applied.scan(cal.cloned())
         };
         let rescan = self.options.rescan;
@@ -731,6 +735,20 @@ impl Batch {
                 egui::Checkbox::without_text(&mut self.options.untargeted),
             );
             save_cmp_row(ui, &mut self.options.save_cmp);
+            row(
+                ui,
+                lang::t("Baseline correction", "Basislinien-Korrektur"),
+                "",
+                lang::t(
+                    "Subtract each scan's baseline from every run, like the switch in the old \
+                     Compound Detection Wizard. Only FastFlight runs carry a baseline; for CDF \
+                     runs it changes nothing. Applies to the next scan.",
+                    "Die Basislinie jedes Scans von jedem Lauf abziehen, wie der Schalter im alten \
+                     Compound Detection Wizard. Nur FastFlight-Läufe haben eine Basislinie; bei \
+                     CDF-Läufen ändert sich nichts. Gilt ab dem nächsten Scan.",
+                ),
+                egui::Checkbox::without_text(&mut self.options.baseline_correction),
+            );
         });
         crate::guided::advanced(ui, "batch settings", |ui| {
             egui::Grid::new("batch advanced").show(ui, |ui| {

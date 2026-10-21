@@ -229,7 +229,7 @@ impl<'a> Reader<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// What the old RI wizard stores in the index of a calibrated run.
@@ -242,7 +242,7 @@ mod tests {
     }
 
     /// Index and data file as `GCMSDiskScanWriter` lays them out, scans given as (rt_ms, m/z, values).
-    fn files(scans: &[(f64, &[f32], &[i32])]) -> (Vec<u8>, Vec<u8>) {
+    pub(crate) fn files(scans: &[(f64, &[f32], &[i32])]) -> (Vec<u8>, Vec<u8>) {
         files_with(scans, &[])
     }
 
