@@ -1104,8 +1104,11 @@ mod tests {
             series(crate::lang::Lang::De),
             ("labelled", "markiert", "markiert")
         );
-        assert!(!d.text.contains("markiert"));
+        // Rebuilt while German is on: the export must stay English.
+        let german = d.mids_text();
         crate::lang::set(crate::lang::Lang::En);
+        assert!(!german.contains("markiert"));
+        assert_eq!(german, d.text);
     }
 
     #[test]
