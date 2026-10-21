@@ -13,9 +13,9 @@ use md_core::batch::Table;
 use md_core::normalize::POOL_GROUP;
 use md_core::stats::{self, Biomarker, Pca, Samples, TwoGroups};
 
-use crate::batch::significant;
 use crate::export::write_file;
 use crate::plot_export::{self, Area};
+use md_core::view::{self, axis_index, biomarker_cells, biomarker_rows};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -269,30 +269,6 @@ fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) 
     note
 }
 
-fn p_text(p: Option<f64>) -> String {
-    match p {
-        None => "–".into(),
-        Some(p) if p < 1e-4 => format!("{p:.1e}"),
-        Some(p) => format!("{p:.4}"),
-    }
-}
-
-fn cells_of(t: &Table, r: &Biomarker) -> [String; 10] {
-    let s = &t.rows[r.row];
-    [
-        s.name.clone(),
-        format!("{:.2}", s.rt_s / 60.0),
-        r.hits[0].to_string(),
-        r.hits[1].to_string(),
-        significant(r.mean[0]),
-        significant(r.mean[1]),
-        significant(r.sd[0]),
-        significant(r.sd[1]),
-        format!("{:.4}", r.ratio),
-        p_text(r.p),
-    ]
-}
-
 /// Substance left, numbers right so the digits line up; the header uses the same layout, or its
 /// titles sit over the neighbouring column.
 fn cell_layout(col: usize) -> egui::Layout {
@@ -349,7 +325,7 @@ fn biomarker_table(
                     body.rows(18.0, shown.len(), |mut row| {
                         let r = shown[row.index()];
                         row.set_selected(selected == Some(r.row));
-                        for (i, c) in cells_of(t, r).into_iter().enumerate() {
+                        for (i, c) in biomarker_cells(t, r).into_iter().enumerate() {
                             row.col(|ui| {
                                 ui.with_layout(cell_layout(i), |ui| {
                                     ui.add(egui::Label::new(c).selectable(false));
@@ -397,7 +373,7 @@ impl Statistics {
     /// A missing value counts as 0, unless the table is z-scored: there 0 means "average", not
     /// "not found".
     fn zero(&self) -> bool {
-        self.missing_as_zero && !self.z_scored
+        view::missing_as_zero(self.missing_as_zero, self.z_scored)
     }
 
     fn contents(&mut self, ui: &mut egui::Ui, generation: u64, t: &Table) {
@@ -508,14 +484,7 @@ impl Statistics {
             return;
         }
         filter_row(ui, t, &mut self.p_max, &mut self.sort_by_p, &cache.1);
-        let mut shown: Vec<&Biomarker> = cache
-            .2
-            .iter()
-            .filter(|r| self.p_max >= 1.0 || r.p.is_some_and(|p| p <= self.p_max))
-            .collect();
-        if self.sort_by_p {
-            shown.sort_by(|a, b| a.p.unwrap_or(2.0).total_cmp(&b.p.unwrap_or(2.0)));
-        }
+        let shown = biomarker_rows(&cache.2, self.p_max, self.sort_by_p);
         if let Some(note) = export_row(ui, t, &shown, cache.2.len()) {
             self.note = note;
         }
@@ -582,12 +551,9 @@ impl Statistics {
             .x_axis_label(lang::t("Replicate group", "Replikatgruppe"))
             .y_axis_label(lang::t("Intensity", "Intensität"))
             .x_axis_formatter(move |m, _| {
-                let i = m.value.round();
-                if (m.value - i).abs() < 1e-6 && i >= 0.0 {
-                    names.get(i as usize).cloned().unwrap_or_default()
-                } else {
-                    String::new()
-                }
+                axis_index(m.value)
+                    .and_then(|i| names.get(i).cloned())
+                    .unwrap_or_default()
             })
             .show(ui, |p| p.box_plot(BoxPlot::new("boxes", boxes)));
         plot_export::button(ui, Area::since(ui, top), "box-plot");
@@ -723,12 +689,9 @@ fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) {
         .legend(Legend::default())
         .x_axis_label(lang::t("Loading", "Ladung"))
         .y_axis_formatter(move |m, _| {
-            let i = (-m.value).round();
-            if (-m.value - i).abs() < 1e-6 && i >= 0.0 {
-                names.get(i as usize).cloned().unwrap_or_default()
-            } else {
-                String::new()
-            }
+            axis_index(-m.value)
+                .and_then(|i| names.get(i).cloned())
+                .unwrap_or_default()
         })
         .show(ui, |plot| {
             plot.bar_chart(
