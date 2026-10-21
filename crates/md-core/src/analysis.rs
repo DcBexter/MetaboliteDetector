@@ -57,7 +57,7 @@ pub fn find_run_peaks(
 /// [`find_run_peaks`], then the deconvolution of all peaks; the ion index is dropped.
 pub fn analyze_run(
     run: impl Borrow<Chromatogram>,
-    peaks: &PeakSettings,
+    peak_settings: &PeakSettings,
     deconv: &DeconvSettings,
     pass: PeakPass,
 ) -> Result<RunAnalysis, TooLarge> {
@@ -65,7 +65,7 @@ pub fn analyze_run(
         traces,
         times,
         peaks,
-    } = find_run_peaks(run, peaks, pass)?;
+    } = find_run_peaks(run, peak_settings, pass)?;
     let components = deconvolute(&traces, &peaks, &times, deconv);
     let masses = (peaks.iter())
         .map(|p| traces.masses[p.row as usize])
@@ -125,6 +125,7 @@ mod tests {
     }
 
     #[test]
+    /// Pins the refactor: `analyze_run` gives what the callers built by hand before #361.
     fn analyze_run_is_the_chain_for_both_passes() {
         let (c, s, d) = (
             split_masses(),
@@ -156,5 +157,8 @@ mod tests {
                 assert_eq!(a.masses, masses);
             }
         }
+        // The pass reaches the result: the reordered apexes differ from the fresh ones.
+        let analyzed = |pass| analyze_run(&c, &s, &d, pass).unwrap().peaks;
+        assert_ne!(analyzed(PeakPass::Reordered), analyzed(PeakPass::Fresh));
     }
 }
