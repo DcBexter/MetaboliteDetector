@@ -371,6 +371,66 @@ mod tests {
     }
 
     #[test]
+    fn peak_without_fit_falls_to_the_next_peak_with_fit() {
+        // Two traces of mass 73 on an exact-mass run, one component: the weak peak at 41 s is the
+        // nearest but gets no fit next to the strong one at 42 s, so the strong one is taken (#344).
+        let todo = Todo {
+            compound: 0,
+            ions: vec![73],
+            from_s: 30.0,
+            to_s: 50.0,
+            expected: 41.0,
+            calibration: None,
+        };
+        let s = ScanSettings::default();
+        // Alone, the weak peak has a fit and wins.
+        let c = run(80, &[73.047, 73.08], &[(1, 41.0, 3000.0)]);
+        let out = rescan_run(c, std::slice::from_ref(&todo), &s).unwrap();
+        assert!((out[0].2 - 41.0).abs() <= 0.5, "{}", out[0].2);
+        let c = run(
+            80,
+            &[73.047, 73.08],
+            &[(0, 42.0, 50000.0), (1, 41.0, 3000.0)],
+        );
+        let out = rescan_run(c, &[todo], &s).unwrap();
+        assert!((out[0].2 - 42.0).abs() <= 0.5, "{}", out[0].2);
+        assert!(out[0].1[0].integral > 100_000.0, "{}", out[0].1[0].integral);
+    }
+
+    #[test]
+    fn no_fit_at_all_reports_the_raw_sum_of_the_nearest_peak() {
+        let c = run(80, &[73.0], &[(0, 40.0, 50000.0)]);
+        // A filter wider than the run finds no component, so no peak has a fit.
+        let mut s = ScanSettings::default();
+        s.deconv.width = Some(25.0);
+        let mut traces = IonTraces::new(&c, s.peaks.fwhm).unwrap();
+        let peaks = traces.detect_peaks(&s.peaks);
+        assert_eq!(peaks.len(), 1);
+        let local = DeconvSettings {
+            min_peak_number: 1,
+            width: Some(50.0),
+            ..s.deconv.clone()
+        };
+        assert!(deconvolute(&traces, &peaks, &c.scan_times_s, &local).is_empty());
+        let p = &peaks[0];
+        let raw: f64 = traces.trace(0)[p.first_scan as usize..=p.last_scan as usize]
+            .iter()
+            .map(|v| *v as f64)
+            .sum();
+        let todo = Todo {
+            compound: 0,
+            ions: vec![73],
+            from_s: 30.0,
+            to_s: 50.0,
+            expected: 40.0,
+            calibration: None,
+        };
+        let out = rescan_run(c, &[todo], &s).unwrap();
+        assert_eq!(out[0].1[0].integral, raw);
+        assert!((out[0].2 - 40.0).abs() <= 0.5, "{}", out[0].2);
+    }
+
+    #[test]
     fn glycine_177_takes_the_peak_the_old_detector_finds() {
         // #327/#336: Glycine 3TMS elutes at 313 s; without RI calibration the default ΔRI 20 gives the
         // window 302.9..323.1 s. In 7235eg04 the old `DefaultPeakDetector` finds m/z 177 inside it only
