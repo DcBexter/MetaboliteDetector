@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -279,7 +280,7 @@ impl Calibration {
     /// Why the last search, load or table edit failed.
     pub fn error_label(&self, ui: &mut egui::Ui) {
         if let Some(e) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, e);
+            ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
         }
     }
 

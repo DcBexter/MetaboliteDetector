@@ -2,6 +2,7 @@
 
 use eframe::egui;
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::{App, Run};
 
@@ -25,7 +26,7 @@ impl App {
                         "Neu analysieren mit den neuen Einstellungen…",
                     ));
                 });
-            } else if let Some(e) = self.error.clone() {
+            } else if let Some(e) = self.error.as_deref().map(errors::text) {
                 ui.horizontal(|ui| {
                     if ui
                         .small_button("×")
@@ -44,7 +45,7 @@ impl App {
                 // One line: a wrapped status changes the bar's height, which egui applies a frame
                 // late, so the second line would hang below the window for that frame (#200).
                 let mut status = self.run_status(r);
-                let note = self.hidden_list_note().map(str::to_owned);
+                let note = self.hidden_list_note().map(errors::text);
                 if let Some(n) = &note {
                     status = format!("{n} — {status}");
                 }

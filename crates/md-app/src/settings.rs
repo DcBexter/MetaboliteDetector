@@ -7,6 +7,7 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::mpsc;
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -337,7 +338,7 @@ impl Settings {
         });
         match (&valid, &self.note) {
             (Err(e), _) | (_, Some(Err(e))) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
             }
             (_, Some(Ok(m))) => {
                 ui.label(m);

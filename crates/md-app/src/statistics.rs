@@ -1,6 +1,7 @@
 //! Biomarker statistics window (F14, F15): two-group table, box plots and PCA of the batch table
 //! the user sees. The numbers come from `md_core::stats`.
 
+use crate::errors;
 use crate::lang::{self, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -607,7 +608,7 @@ impl Statistics {
         let p = match result {
             Ok(p) => p,
             Err(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
                 return;
             }
         };

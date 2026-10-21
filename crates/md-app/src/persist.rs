@@ -542,7 +542,7 @@ fn valid(mut s: GcmsSettings, bad: &mut Vec<String>) -> GcmsSettings {
         } else {
             e.split(':').next().unwrap_or_default()
         };
-        bad.push(e.clone());
+        bad.push(crate::errors::text(&e));
         let Some((_, field)) = FIELDS.iter().find(|(k, _)| *k == key) else {
             break;
         };

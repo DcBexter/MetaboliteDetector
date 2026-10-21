@@ -11,6 +11,7 @@ use egui_plot::{Line, Plot, VLine};
 use md_core::decimate;
 use md_core::tof::{TofCalibration, TofError, peak_bin};
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use crate::{poll_job, spawn};
@@ -90,7 +91,7 @@ impl TofWindow {
         if let Some(e) = &self.error {
             let mut clear = false;
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
                 clear = ui.small_button(t("Clear", "Leeren")).clicked();
             });
             if clear {

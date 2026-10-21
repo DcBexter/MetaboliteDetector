@@ -1,5 +1,6 @@
 //! Natural isotope calculator window: formula in, M+0, M+1, … out.
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -54,7 +55,7 @@ impl Isotopes {
         });
         match parse_formula(self.formula.trim()).and_then(|f| self.table.pattern(&f, self.len)) {
             Err(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(&e));
             }
             Ok(p) => {
                 ui.label(tf!(

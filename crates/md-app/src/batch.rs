@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::errors;
 use crate::lang::{self, tf};
 use crate::layout::ToolWindow;
 use crate::settings::row;
@@ -311,7 +312,7 @@ fn samples_row(
                     s.apply(groups);
                     *samples = Some(s);
                 }
-                Err(e) => *note = format!("{}: {e}", p.display()),
+                Err(e) => *note = format!("{}: {}", p.display(), errors::text(&e)),
             }
         }
         let Some(s) = samples else { return };
@@ -352,7 +353,7 @@ fn samples_row(
         }
         match &s.error {
             Some(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
             }
             None => {
                 let found = (paths.iter())
@@ -924,7 +925,7 @@ impl Batch {
                 if self.paths.is_empty() {
                     ui.label(lang::t("Add runs first.", "Läufe fehlen."));
                 }
-                ui.label(&self.note);
+                ui.label(errors::text(&self.note));
             }
         });
     }
@@ -1037,7 +1038,7 @@ impl Batch {
             scan.rescanned
         ));
         for e in &scan.errors {
-            ui.colored_label(ui.visuals().error_fg_color, e);
+            ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
         }
         match self.table.as_ref().map(|t| &t.1) {
             Some(Ok(t)) => {
@@ -1109,6 +1110,7 @@ impl Batch {
                 }
             }
             Some(Err(e)) => {
+                let e = errors::text(e);
                 ui.colored_label(
                     ui.visuals().error_fg_color,
                     tf!("Replicate pattern: {e}", "Replikatmuster: {e}"),
@@ -1158,11 +1160,11 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
             Err(err) => tf!("Export failed: {err}", "Export fehlgeschlagen: {err}"),
         };
         for m in &e.errors {
-            note += &format!("\n{m}");
+            note += &format!("\n{}", errors::text(m));
         }
         match e.warnings.len() {
             0 => {}
-            1 => note += &format!("\n{}", e.warnings[0]),
+            1 => note += &format!("\n{}", errors::text(&e.warnings[0])),
             n => {
                 note += &tf!(
                     "\n{n} substances have no fragment (FRAG) defined.",

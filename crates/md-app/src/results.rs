@@ -12,6 +12,7 @@ use md_core::search::Identification;
 use std::sync::{Arc, Weak};
 
 use crate::Run;
+use crate::errors;
 use crate::identify::Library;
 use crate::lang::{t, tf};
 
@@ -199,7 +200,7 @@ impl Results {
             selected = self.found_list(ui, run, lib, cutoff);
         }
         if !self.note.is_empty() {
-            ui.label(&self.note);
+            ui.label(errors::text(&self.note));
         }
 
         let mut order: Vec<usize> = (0..rows.len())

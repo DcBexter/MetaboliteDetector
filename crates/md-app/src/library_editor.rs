@@ -13,6 +13,7 @@ mod add;
 mod extras;
 
 use crate::App;
+use crate::errors;
 use crate::identify::Library;
 use crate::lang::{t, tf};
 use add::{AddDialog, RtDialog, Source};
@@ -295,7 +296,7 @@ impl LibraryEditor {
             });
         }
         if let Some(e) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, e);
+            ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
         }
         if let Some(w) = &self.warning {
             ui.colored_label(ui.visuals().warn_fg_color, w);

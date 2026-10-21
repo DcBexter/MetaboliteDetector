@@ -16,6 +16,7 @@ mod calibration;
 mod central;
 mod detail;
 mod detected_peaks;
+mod errors;
 mod export;
 mod export_all;
 mod guided;
