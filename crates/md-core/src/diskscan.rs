@@ -31,6 +31,8 @@ struct Entry {
     rt_ms: f64,
     n: usize,
     data_type: u32,
+    /// `(int)` of the scan's `BaselineStatistics` mean (non-zero only in type 1 caches).
+    mean: f32,
 }
 
 /// Reads a run from its `.bin` and `.idx` files; `path` may name either (or the bare stem).
@@ -97,6 +99,9 @@ fn parse(idx: &[u8], bin: &[u8]) -> Result<Chromatogram, DiskScanError> {
     })?;
     // Only the CDF import writes DataType 2 (nominal masses); FastFlight writes 0 or 1.
     run.exact_masses = entries.iter().any(|e| e.data_type != 2);
+    if entries.iter().any(|e| e.mean != 0.0) {
+        run.baseline.means = entries.iter().map(|e| e.mean).collect();
+    }
     Ok(run)
 }
 
@@ -155,16 +160,18 @@ fn read_index(
             let (scan, pos, masses_ptr) = (r.u32()?, r.u64()?, r.u64()?);
             let _tic = r.f64()?;
             let (rt_ms, n, data_type) = (r.f64()?, r.u32()? as usize, r.u32()?);
-            let e = Entry {
+            // Per-scan BaselineStatistics (mean, sd, msd, nf, n); `getSignal` reads `(int) mean`.
+            let mean = r.f64()? as i32 as f32;
+            r.take(4 * 8)?;
+            Ok(Entry {
                 scan,
                 pos,
                 masses_ptr,
                 rt_ms,
                 n,
                 data_type,
-            };
-            r.take(5 * 8)?; // per-scan BaselineStatistics
-            Ok(e)
+                mean,
+            })
         })
         .collect::<Result<_, _>>()
         .map(|entries| (calibration, tof, entries))
@@ -288,6 +295,39 @@ mod tests {
         let stored = read_index(&idx).unwrap().0;
         assert_eq!(stored, wizard_calibration());
         assert_eq!(stored.calibration().unwrap().ri(1.85), 1050.0);
+    }
+
+    #[test]
+    fn type_1_caches_fill_and_correct_with_the_scan_baseline() {
+        let (mut idx, bin) = files(&[(1500.0, &[73.0, 147.0], &[10, 5]), (2000.0, &[73.0], &[7])]);
+        let first = idx.len() - 2 * 84;
+        for (s, mean) in [2.7f64, 5.0].into_iter().enumerate() {
+            let e = first + 84 * s;
+            idx[e + 40..e + 44].copy_from_slice(&1u32.to_le_bytes()); // DataType 1
+            idx[e + 44..e + 52].copy_from_slice(&mean.to_le_bytes());
+        }
+        let mut c = parse(&idx, &bin).unwrap();
+        assert_eq!(c.baseline.means, vec![2.0, 5.0], "(int) of the mean");
+        let tic = c.tic();
+        // Without correction a missing mass reads the scan's mean (old `getSignal`).
+        let t = crate::peaks::IonTraces::new(&c, 0.5).unwrap();
+        assert_eq!(
+            (t.trace(0), t.trace(1)),
+            (&[10.0, 7.0][..], &[5.0, 5.0][..])
+        );
+        c.set_baseline_correction(true);
+        assert_eq!(c.spectrum(0).1, &[8.0, 3.0][..]);
+        let t = crate::peaks::IonTraces::new(&c, 0.5).unwrap();
+        assert_eq!((t.trace(0), t.trace(1)), (&[8.0, 2.0][..], &[3.0, 0.0][..]));
+        assert_eq!(c.tic(), tic, "the TIC stays uncorrected");
+        c.set_baseline_correction(false);
+        assert_eq!(c, parse(&idx, &bin).unwrap());
+        // CDF caches store zero means: nothing to keep, nothing to correct.
+        let (idx, bin) = files(&[(1500.0, &[73.0], &[10])]);
+        let mut cdf = parse(&idx, &bin).unwrap();
+        assert!(cdf.baseline.means.is_empty());
+        cdf.set_baseline_correction(true);
+        assert_eq!(cdf.spectrum(0).1, &[10.0][..]);
     }
 
     #[test]

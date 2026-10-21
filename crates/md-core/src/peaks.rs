@@ -252,6 +252,7 @@ fn centroided(c: &Chromatogram, fwhm: f64) -> Option<Chromatogram> {
         mz,
         intensity,
         exact_masses: false,
+        baseline: c.baseline.clone(),
     })
 }
 
@@ -281,7 +282,7 @@ impl IonTraces {
     }
 
     /// One trace per distinct m/z (the old `getSignal` takes the point of exactly that mass; a
-    /// missing mass reads 0). Masses outside the nominal mass range are dropped.
+    /// missing mass reads [`Chromatogram::missing_value`]). Masses outside the nominal mass range are dropped.
     pub fn exact(c: &Chromatogram) -> Result<Self, TooLarge> {
         Self::build(c, true)
     }
@@ -313,6 +314,10 @@ impl IonTraces {
             return Err(too_large);
         }
         let mut values = vec![0.0f32; cells];
+        // A mass missing from a scan reads the scan's baseline mean unless it is corrected (§4.1).
+        if !c.baseline.corrected && c.baseline.means.len() == scans && scans > 0 {
+            (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(&c.baseline.means));
+        }
         // Each task owns a block of rows and walks the matching m/z range of every scan once.
         const BLOCK: usize = 8;
         if scans > 0 {
@@ -323,12 +328,21 @@ impl IonTraces {
                     let (first, last) = (block[0], block[block.len() - 1]);
                     for s in 0..scans {
                         let (m, i) = c.spectrum(s);
+                        // The first point of a cell replaces the missing value, later ones add up.
+                        let mut prev = usize::MAX;
+                        let mut put = |cell: usize, v: f32| {
+                            match cell == prev {
+                                true => rows[cell] += v,
+                                false => rows[cell] = v,
+                            }
+                            prev = cell;
+                        };
                         if exact {
                             let a = m.partition_point(|x| *x < first);
                             for (mz, int) in
                                 m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last)
                             {
-                                rows[block.partition_point(|x| x < mz) * scans + s] += *int;
+                                put(block.partition_point(|x| x < mz) * scans + s, *int);
                             }
                             continue;
                         }
@@ -341,7 +355,7 @@ impl IonTraces {
                         {
                             let row = row_of[nominal(*mz).unwrap()] - first_row;
                             // Usually one point per nominal mass and scan, so f32 sums stay exact.
-                            rows[row * scans + s] += *int;
+                            put(row * scans + s, *int);
                         }
                     }
                 });
@@ -1070,6 +1084,7 @@ mod tests {
             mz: vec![73.0; v.len()],
             intensity: v.clone(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         let mut t = IonTraces::new(&c, 0.5).unwrap();
         let s = PeakSettings {
@@ -1098,6 +1113,7 @@ mod tests {
             mz: vec![-0.5, 0.3, 0.5, f32::INFINITY],
             intensity: vec![1.0, 2.0, 4.0, 8.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         let t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
@@ -1138,6 +1154,7 @@ mod tests {
             mz: vec![73.047, 73.089, 74.0],
             intensity: vec![10.0, 2.0, 5.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         let t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!((t.trace(0), t.trace(1)), (&[10.0][..], &[5.0][..]));
@@ -1160,6 +1177,7 @@ mod tests {
                 .flat_map(|s| [traces[0][s], traces[1][s], traces[2][s]])
                 .collect(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         let mut t = IonTraces::exact(&c).unwrap();
         let mut p = t.detect_peaks(&PeakSettings::default());
@@ -1199,6 +1217,7 @@ mod tests {
                 .flat_map(|s| [traces[0][s], traces[1][s]])
                 .collect(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         let t = IonTraces::exact(&c).unwrap();
         let peak = |row, first, apex, last| Peak {
@@ -1238,6 +1257,7 @@ mod tests {
                 .flat_map(|s| [traces[0][s], traces[1][s]])
                 .collect(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         let t = IonTraces::exact(&c).unwrap();
         let peak = |row, apex, precise| Peak {
@@ -1267,6 +1287,7 @@ mod tests {
             mz: vec![73.047, 73.089, 147.0, 73.047, 147.0],
             intensity: vec![1.0, 2.0, 3.0, 4.0, 5.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         assert_eq!(IonTraces::new(&c, 0.5).unwrap().trace(0), &[3.0, 4.0][..]);
         let t = IonTraces::exact(&c).unwrap();
@@ -1294,6 +1315,7 @@ mod tests {
             mz: (0..scans).flat_map(|_| [72.9f32, 73.2, 147.0]).collect(),
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         let mut t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
@@ -1309,6 +1331,7 @@ mod tests {
             mz: vec![],
             intensity: vec![],
             exact_masses: false,
+            baseline: Default::default(),
         };
         assert!(
             IonTraces::new(&empty, 0.5)
@@ -1330,6 +1353,7 @@ mod tests {
             mz: (0..65_536).map(|m| m as f32).collect(),
             intensity: vec![1.0; 65_536],
             exact_masses: false,
+            baseline: Default::default(),
         };
         assert_eq!(
             IonTraces::new(&c, 0.5),

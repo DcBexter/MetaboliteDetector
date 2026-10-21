@@ -307,7 +307,7 @@ Data type, mass traces and centroiding (Observed):
   - A missing mass reads `(int)` of the scan's first baseline statistic (0 for CDF), or 0 when baseline correction is on.
   - A found point is baseline-corrected (vtbl+0x48) when that is on.
 
-Port: `IonTraces::new` centroids like this (`centroided`; skipped when no scan has two points within 0.1, then fractional intensities and m/z in [-0.5, 0) stay as read) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z, with 0 where a scan lacks that mass; `reorder_peaks` is 4.2. `Chromatogram::exact_masses` marks runs with exact masses (FastFlight, caches with DataType 0 or 1); `IonTraces::new` then builds exact traces and `IonTraces::detect_all_peaks` runs `reorder_peaks(10, 0.05)`, like `detectAllPeaks(true, 10, 0.05)`. Components keep the exact masses in `Component::exact_spectrum` (the old `map<float,int>`). Golden check: `old-md-3.3-exact-masses.tsv`, a type 1 cache of the synthetic high-resolution run with per-scan statistics (0, 0, 0, nf = 1, 100).
+Port: `IonTraces::new` centroids like this (`centroided`; skipped when no scan has two points within 0.1, then fractional intensities and m/z in [-0.5, 0) stay as read) and sums the centroids per nominal mass. `IonTraces::exact` makes one trace per distinct m/z; where a scan lacks that mass it reads `Chromatogram::missing_value` (the scan's `(int)` baseline mean, 0 once corrected, §4b.4); `reorder_peaks` is 4.2. `Chromatogram::exact_masses` marks runs with exact masses (FastFlight, caches with DataType 0 or 1); `IonTraces::new` then builds exact traces and `IonTraces::detect_all_peaks` runs `reorder_peaks(10, 0.05)`, like `detectAllPeaks(true, 10, 0.05)`. Components keep the exact masses in `Component::exact_spectrum` (the old `map<float,int>`). Golden check: `old-md-3.3-exact-masses.tsv`, a type 1 cache of the synthetic high-resolution run with per-scan statistics (0, 0, 0, nf = 1, 100).
 
 ### 4.2 reorderPeaks(scan_dist, ion_dist) (0x5eac2c) - align apexes of split masses
 
@@ -575,8 +575,13 @@ Every reader of the setting's global (data addresses in `.data`/`.bss`), found b
 
 Baseline correction: `DataProvider<int,float>::baselineCorrection` (0x642af0) subtracts `(int)` of the scan's first
 `BaselineStatistics` field (its mean) from every value of the scan. Only type-1 caches (FastFlight compressed profile) store
-non-zero statistics; CDF and type-2 caches store zeros, so the switch does nothing for them. The rewrite's `diskscan.rs`
-skips the per-scan statistics, so it differs only for type-1 caches with a non-zero mean.
+non-zero statistics; CDF and type-2 caches store zeros, so the switch does nothing for them. Slot 0x48 of the vtable
+`DataProvider<int,float>` (0xca2be0) is `baselineCorrection(int&)` (0x642da2, one point in `getSignal`), slot 0x50 the array
+form (0x642af0), called by `getSignals` and so by `GCMSDiskScan::getSpectrum`: displayed spectra are corrected too.
+`getTIC` reads the stored per-scan TIC (`getTotalSignal`), so the TIC is not. Only `GCMSScanLoader::loadGCMSDiskScan`
+(main window) passes the setting; every other `GCMSDiskScan` ctor call (batch, RI wizard, Calibration Setter, FastFlight
+batch import) passes false. The RI wizard has its own checkbox (`CompoundDetectionPage::baselineCorrection`, read by
+`RICalibrationWizard::detectCompounds`); where it takes effect is not analysed.
 
 Appearance (`MainWindow::showSettingsDialog` 0x3c0b46; `readSettings`, QSettings group `GUI`, keys `axes_label` and
 `peak_label`, both default true):
@@ -587,8 +592,10 @@ Appearance (`MainWindow::showSettingsDialog` 0x3c0b46; `readSettings`, QSettings
   the visible x range.
 
 Port (#254): `SF_CENTROID_*`, `LS_CUTOFF` and the two appearance switches are wired; `SF_FWHM` reaches the centroiding of
-`peaks.rs`, `centroid.rs`, `library.rs` and `tof.rs` (#293). Baseline correction (needs the per-scan mean and trace
-filling) is a follow-up.
+`peaks.rs`, `centroid.rs`, `library.rs` and `tof.rs` (#293). Baseline correction (#294): `diskscan.rs` keeps the per-scan
+means in `Chromatogram::baseline`, ion traces fill missing masses with them, and the app's switch (`baseline_correction`,
+imported from the old QSettings) calls `Chromatogram::set_baseline_correction` on every opened run; the TIC adds the means
+back. Batch runs stay uncorrected like 3.3.
 
 ## 5. Library search and scoring
 

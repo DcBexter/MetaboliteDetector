@@ -268,6 +268,7 @@ pub fn reduce(c: &Chromatogram, kind: ExportKind, s: &CentroidSettings) -> Chrom
         mz: Vec::new(),
         intensity: Vec::new(),
         exact_masses: c.exact_masses && kind == ExportKind::Centroid,
+        baseline: Default::default(),
     };
     for scan in 0..c.scan_count() {
         let (mz, y) = c.spectrum(scan);
@@ -323,6 +324,7 @@ mod tests {
             mz: vec![72.9, 73.2, 74.6, 73.0, 73.4],
             intensity: vec![5.0, 9.0, 3.0, 4.0, 6.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         let n = reduce(&c, ExportKind::Nominal, &CentroidSettings::default());
         assert_eq!(n.offsets, [0, 2, 3]);

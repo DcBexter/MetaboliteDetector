@@ -255,6 +255,7 @@ mod tests {
             mz: vec![73.0, 72.6, 73.2, 73.4, 73.6, 116.0, 116.0],
             intensity: vec![9.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         let mut c = component(&[(0, 1.0), (1, 1.0), (2, 1.0)]);
         (c.first_scan, c.last_scan, c.model) = (1, 3, vec![1.0, 2.0, 1.0]);

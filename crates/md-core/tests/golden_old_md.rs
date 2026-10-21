@@ -124,6 +124,7 @@ fn high_resolution_run(c: &Chromatogram) -> Chromatogram {
         mz: Vec::new(),
         intensity: Vec::new(),
         exact_masses: false,
+        baseline: Default::default(),
     };
     let at_147 = |s: usize| {
         let (m, i) = c.spectrum(s);

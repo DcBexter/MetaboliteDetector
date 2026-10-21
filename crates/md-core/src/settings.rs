@@ -68,6 +68,9 @@ pub struct GcmsSettings {
     pub sql_minimal_number_equal_fragments: i32,
     /// Peak detection method (old Calibration Setter window, not saved by the old app).
     pub peak_detector: Detector,
+    /// QSettings `[Algorithm] baseline_correction` of the main window (algorithms.md §4b.4):
+    /// [`crate::Chromatogram::set_baseline_correction`] on every opened run. Batch runs stay uncorrected.
+    pub baseline_correction: bool,
 }
 
 impl Default for GcmsSettings {
@@ -108,6 +111,7 @@ impl Default for GcmsSettings {
             sql_max_number_fragments: 5,
             sql_minimal_number_equal_fragments: 3,
             peak_detector: Detector::Default,
+            baseline_correction: false,
         }
     }
 }

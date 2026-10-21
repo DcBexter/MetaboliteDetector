@@ -41,6 +41,7 @@ fn main() {
             })
             .collect(),
         exact_masses: false,
+        baseline: Default::default(),
     };
     let points = c.mz.len();
     println!(

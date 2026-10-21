@@ -1115,6 +1115,7 @@ mod tests {
                 })
                 .collect(),
             exact_masses: false,
+            baseline: Default::default(),
         }
     }
 

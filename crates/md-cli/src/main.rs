@@ -429,6 +429,7 @@ mod tests {
                 })
                 .collect(),
             exact_masses: false,
+            baseline: Default::default(),
         };
         std::fs::create_dir_all(dir).unwrap();
         md_core::andi::write(dir.join("ctrl_1.cdf"), &c).unwrap();
