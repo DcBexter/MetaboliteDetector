@@ -25,10 +25,10 @@ specific to it; the rest is here. Shared rules live in the workflow kit and are 
 ## Flow
 
 1. `node .vendor/workflow-kit/scripts/board.mjs start ISSUE` (only for issues in Ready), then work on the branch it opens.
-   In a fresh worktree run `scripts/link-example-data.ps1` (or `.sh`) before testing: without the example data the golden tests
+   In a fresh worktree run `node scripts/link-example-data.mjs` before testing (isolated worktrees block PowerShell, cmd and WSL; `.ps1`/`.sh` do the same): without the example data the golden tests
    only print "skipped" and stay green.
 2. `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` are green. A UI change also
-   gets the screenshot check from the [UI checklist](../ui-quality.md). It runs locally after `scripts/link-example-data.ps1` (or `.sh`):
+   gets the screenshot check from the [UI checklist](../ui-quality.md). It runs locally after `node scripts/link-example-data.mjs`:
    `cargo test --release -p metabolite-detector screenshots -- --ignored` (about 30 s; every image also in German as `*.de.png`, check both). Skip it only with the real error message in the handoff.
    CI does not have `lib_aa.lbr`, so the tests that need `MD_LBR_SAMPLE` only print "skipped" there (#327: red since #133, nobody saw it).
    A change in `md-core` `batch`, `search`, `deconv`, `peaks`, `library` or `mid` runs them locally, about 10 s:
@@ -39,8 +39,7 @@ specific to it; the rest is here. Shared rules live in the workflow kit and are 
    `/c/Windows/System32/tar.exe -xzf data.tar.gz ./usr/share/metabolitedetector/lib_aa.lbr`.
 3. `board.mjs done ISSUE PR` waits for CI and the automatic review; then `board.mjs done ISSUE PR FILE` with the handoff comment, then `board.mjs merge PR`.
 4. Open Sonar findings: `scripts/sonar-open.sh [PR]`.
-5. If CodeRabbit is rate limited, start a fresh `studio-core:reviewer` agent on the fixed head and say so in the handoff
-   and say so in the handoff. Fix every finding or link a follow-up issue: every unfixed finding gets its own follow-up
+5. If CodeRabbit is rate limited, start a fresh `studio-core:reviewer` agent on the fixed head and say so in the handoff. Fix every finding or link a follow-up issue: every unfixed finding gets its own follow-up
    (`board.mjs new`), minor ones too. Without a replacement reviewer, the handoff says "Eingeschränkte Reviewer" instead.
 6. The GraphQL quota is shared by all sessions. When it runs out, use `board.mjs quota-wait` instead of retrying.
 
