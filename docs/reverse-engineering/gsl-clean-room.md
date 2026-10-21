@@ -103,6 +103,14 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
 - **Very large x:** `x * x` stands in for glibc `pow(x, 2)`. The two are equal while `x² < 2^53`,
   i.e. while bins × scan stays below 9.4e7 (14 of 400 000 `make-cases.py` cases lie beyond and
   differ). Real runs stay far below; porting glibc's `pow` is not worth it.
+- **Zero on the diagonal (issue 314):** the port has no special step for a bidiagonal with an exact
+  zero in `d` before the end of an unreduced block (e.g. `d = [2, 0, 1]`, `e = [0, 1]`). The QR
+  sweep then changes nothing and the SVD is wrong; how the old program handles it was not
+  determined. A zero at the block's end converges. The apex fit never builds the bad case: three
+  distinct x give a full-rank Vandermonde matrix, and the small singular value lands at the end of
+  the block. `bins = 0` (all x zero) gives `d = [-√3, 0, 0]` with `e = 0`, which deflates at once
+  (the fit then returns no apex); the settings clamp bins to at least 1 anyway. A `debug_assert` in
+  `bidiagonal_svd` guards the case, and a test runs the fit for 0 to 100 bins at scans up to 10¹².
 
 ## Reproduce
 

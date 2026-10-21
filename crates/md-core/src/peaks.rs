@@ -949,6 +949,11 @@ mod tests {
         assert_eq!(precise_apex(&up, 3, 1, 10), Some(4.3));
         assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 0, 1, 10), Some(0.8));
         assert_eq!(precise_apex(&[3.0, 4.0, 1.0], 1, 1, 10), Some(1.7));
+        assert_eq!(
+            precise_apex(&up, 0, 1, 0),
+            None,
+            "0 bins: all x zero (issue 314)"
+        );
         assert_eq!(precise_apex(&up, 0, 1, 4), Some(1.25));
         // A flat top gives the rounding noise of the fit, as in the old program; zeros give NaN.
         assert_eq!(precise_apex(&[5.0, 5.0, 5.0], 0, 1, 10), Some(0.7));

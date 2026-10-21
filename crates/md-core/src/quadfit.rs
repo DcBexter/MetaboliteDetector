@@ -284,6 +284,13 @@ fn bidiagonal_svd(d: &mut [f64; 3], e: &mut [f64; 2], u: &mut M3, v: &mut M3) {
             rotate_2x2(u, a, b, u2);
             rotate_2x2(v, a, b, v2);
         } else {
+            // shortcut: a zero on the diagonal before the block's end stalls the sweep (issue 314);
+            // the apex fit never builds one (`gsl-clean-room.md`, "Known limit"). Port the old
+            // zero handling from oracle outputs if another caller can.
+            debug_assert!(
+                !d[a..b].contains(&0.0),
+                "zero inside the block: {d:?} {e:?}"
+            );
             qr_step(d, e, a, b, u, v);
         }
     }
@@ -496,6 +503,44 @@ mod tests {
                     let id = if i == j { 1.0 } else { 0.0 };
                     assert!((uu - id).abs() < 1e-14 && (vv - id).abs() < 1e-14);
                 }
+            }
+        }
+    }
+
+    /// Issue 314: a zero on the diagonal before the block's end trips the `debug_assert` (it would
+    /// stall); a trailing zero converges.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn zero_inside_the_block_is_caught() {
+        for (d, e) in [
+            ([2.0, 0.0, 1.0], [0.0, 1.0]),
+            ([1.0, 0.0, 1.0], [1.0, 1.0]),
+            ([0.0, 1.0, 1.0], [1.0, 1.0]),
+        ] {
+            let stalled = std::panic::catch_unwind(move || {
+                let (mut d, mut e, mut u, mut v) = (d, e, I3, I3);
+                bidiagonal_svd(&mut d, &mut e, &mut u, &mut v);
+            });
+            assert!(stalled.is_err(), "{d:?} {e:?}");
+        }
+        let (mut d, mut e, mut u, mut v) = ([1.0, 1.0, 0.0], [1.0, 1.0], I3, I3);
+        bidiagonal_svd(&mut d, &mut e, &mut u, &mut v);
+        assert_eq!((d[2], e), (0.0, [0.0, 0.0]), "{d:?}");
+    }
+
+    /// The apex fit never builds such a zero (issue 314): every bin count, 0 included, and scans
+    /// far beyond real runs pass the `debug_assert`. Small singular values land at the block's end.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn apex_fits_keep_zeros_at_the_block_end() {
+        for bins in 0..=100 {
+            let mut scan = 1.0f64;
+            while scan < 1e12 {
+                quadratic(
+                    [-1.0, 0.0, 1.0].map(|k| f64::from(bins) * (scan + k)),
+                    [1.0, 2.0, 1.0],
+                );
+                scan = (scan * 1.7).ceil();
             }
         }
     }
