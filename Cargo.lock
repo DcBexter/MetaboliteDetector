@@ -2048,14 +2048,14 @@ dependencies = [
 
 [[package]]
 name = "md-cli"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "md-core",
 ]
 
 [[package]]
 name = "md-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "nalgebra",
@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "metabolite-detector"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64",
  "eframe",
