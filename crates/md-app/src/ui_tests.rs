@@ -214,6 +214,16 @@ fn error_labels_translate_core_messages() {
         }
         let text = text.replace("\r\n", "\n");
         let text = &text[..text.find("#[cfg(test)]\nmod ").unwrap_or(text.len())];
+        // An error variable in a plain label skips the translation as well.
+        for bad in ["ui.label(e)", "ui.label(&e)", "ui.label(e.to_string())"] {
+            for (at, _) in text.match_indices(bad) {
+                found.push(format!(
+                    "{}:{}",
+                    path.display(),
+                    text[..at].lines().count() + 1
+                ));
+            }
+        }
         for key in [
             "colored_label(ui.visuals().error_fg_color,",
             "colored_label(error,",

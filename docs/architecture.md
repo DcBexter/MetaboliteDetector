@@ -796,7 +796,7 @@ translates them where the window shows them: `errors::text` matches a message ag
 English templates (`{}` for the changing parts, translated in turn; a file name before `: ` stays) and
 returns the English text when none fits (an operating system text). Every red error label goes through it
 (`error_labels_translate_core_messages`), and `real_core_messages_are_translated` runs real md-core errors
-through the table, so a changed md-core wording fails there. A new md-core error text needs a template.
+through the table, so a changed wording of one of those texts fails there. A new md-core error text needs a template.
 
 ## Guided mode
 

@@ -355,7 +355,7 @@ impl TofWindow {
         });
         match fit {
             Err(e) => {
-                ui.label(e.to_string());
+                ui.label(errors::text(&e.to_string()));
             }
             Ok(c) => {
                 let terms: Vec<String> = c

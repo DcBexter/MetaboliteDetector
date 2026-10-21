@@ -8,6 +8,7 @@ use eframe::egui;
 use md_core::csv::{write_columns, write_tsv};
 use md_core::spectrum::{Normalization, normalize};
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::plot_export::{self, Area};
 use crate::{App, Run, Trace};
@@ -212,7 +213,7 @@ impl App {
                     }
                     // The pictures do not need the numbers, only the table entries do.
                     Err(e) => {
-                        ui.label(e);
+                        ui.label(errors::text(e));
                     }
                 }
                 ui.separator();

@@ -365,6 +365,36 @@ const MESSAGES: &[(&str, &str)] = &[
     ),
     // batch.rs, batch/rescan.rs
     ("analysis crashed", "Die Analyse ist abgestürzt"),
+    (
+        "could not save {}: {}",
+        "{} konnte nicht gespeichert werden: {}",
+    ),
+    (
+        "not saved: {} is an input of this batch",
+        "Nicht gespeichert: {} ist eine Eingabe dieses Batches",
+    ),
+    (
+        "not saved: another run is also saved as {}",
+        "Nicht gespeichert: ein anderer Lauf wird auch als {} gespeichert",
+    ),
+    // settings.rs: from_bytes
+    ("settings file too large", "Einstellungsdatei zu groß"),
+    (
+        "not a readable gzip file: {}",
+        "Keine lesbare gzip-Datei: {}",
+    ),
+    (
+        "settings file too short ({} bytes)",
+        "Einstellungsdatei zu kurz ({} Bytes)",
+    ),
+    (
+        "settings file has {} bytes, not 191 + 8 x {}",
+        "Die Einstellungsdatei hat {} Bytes statt 191 + 8 x {}",
+    ),
+    (
+        "settings file checksum does not match",
+        "Die Prüfsumme der Einstellungsdatei stimmt nicht",
+    ),
     // batch/samples.rs
     ("the table is empty", "Die Tabelle ist leer"),
     (
@@ -519,7 +549,7 @@ mod tests {
     }
 
     const ENGLISH: [&str; 11] = [
-        "expected",
+        "expected `",
         "invalid",
         "missing",
         "twice",
@@ -629,6 +659,18 @@ mod tests {
                 .to_string(),
         );
         errors.push(AndiError::MissingVariable("mass_values").to_string());
+        let settings = md_core::settings::GcmsSettings::default();
+        errors.push(settings.from_bytes(&[]).unwrap_err());
+        errors.push(settings.from_bytes(&[0; 200]).unwrap_err());
+        errors.push(settings.from_bytes(&[0x1f, 0x8b, 0x08]).unwrap_err());
+        let mut bytes = settings.to_bytes();
+        errors.push(settings.from_bytes(&bytes[..bytes.len() - 1]).unwrap_err());
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x40;
+        errors.push(settings.from_bytes(&bytes).unwrap_err());
+        errors.push("could not save a.cmp: disk full".into());
+        errors.push("not saved: a.cmp is an input of this batch".into());
+        errors.push("not saved: another run is also saved as a.cmp".into());
         errors.push("Warning: No fragment (FRAG) defined for compound A".into());
         errors.push("Error: Can not parse \"x\". SYNTAX(e.g): (174/8)(261/5)".into());
         errors.push(AndiError::Inconsistent("one TIC per scan needed".into()).to_string());
