@@ -649,7 +649,7 @@ fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) 
     let hint = explain(
         &format!(
             "Width in scans of the matched filter over the apex histogram. Auto: {AUTO_WIDTH_S} s at \
-             each run's scan rate, at least 1 scan (3.3 always used 1). A width from a loaded or \
+             each run's scan rate, at least 1 scan, at most 100 and a tenth of the run (3.3 always used 1). A width from a loaded or \
              imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one)."
         ),
         "AN_DECONVOLUTION_WIDTH",

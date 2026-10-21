@@ -4,10 +4,9 @@
 //!
 //! Pure functions on `Vec<LibraryCompound>`; saving goes through `library::save_mdlib`.
 
-use crate::batch::{IonPeak, QuantSettings, ion_peaks, quant_ions};
-use crate::deconv::{Component, DeconvSettings, deconvolute};
+use crate::batch::{IonPeak, QuantSettings, quant_ions};
+use crate::deconv::Component;
 use crate::library::{LibraryCompound, LibrarySpectrum};
-use crate::peaks::{IonTraces, PeakSettings, TooLarge};
 use crate::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
 /// Source name the old dialog gives a compound it adds (`addCompound(c, "no source")`).
@@ -40,29 +39,6 @@ pub enum AddError {
 /// Index of the entry named `name` (the old `LibrarySearch::contains` compares names exactly).
 pub fn find(library: &[LibraryCompound], name: &str) -> Option<usize> {
     library.iter().position(|c| c.name == name)
-}
-
-/// The ion peaks of one component of `data`, found again by its scan range. The app does not keep
-/// the ion traces and peaks of a run, so this repeats peak detection and deconvolution with the
-/// settings the components were computed with (about as long as opening the run). `None` when no
-/// component has that range.
-pub fn component_ions(
-    data: &crate::Chromatogram,
-    peaks: &PeakSettings,
-    deconv: &DeconvSettings,
-    comp: &Component,
-) -> Result<Option<Vec<IonPeak>>, TooLarge> {
-    let mut traces = IonTraces::new(data, peaks.fwhm)?;
-    let found = traces.detect_all_peaks(peaks);
-    let same = |k: &&Component| {
-        (k.first_scan, k.apex_scan, k.last_scan)
-            == (comp.first_scan, comp.apex_scan, comp.last_scan)
-    };
-    let comps = deconvolute(&traces, &found, &data.scan_times_s, deconv);
-    Ok(comps
-        .iter()
-        .find(same)
-        .map(|k| ion_peaks(k, &found, &traces)))
 }
 
 /// The old `LibraryCompound(Compound, source)` for a found component: its deconvoluted spectrum,
@@ -302,7 +278,9 @@ pub fn check(c: &LibraryCompound) -> Vec<Issue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deconv::{DeconvSettings, deconvolute};
     use crate::library::{parse_mdlib, write_mdlib};
+    use crate::peaks::PeakSettings;
 
     fn comp(spectrum: &[(u32, u32)], apex: u32) -> Component {
         Component {
@@ -492,21 +470,29 @@ mod tests {
     }
 
     #[test]
-    fn a_found_component_is_found_again_from_a_run() {
+    fn a_component_keeps_its_ions_when_the_width_changes() {
+        use crate::batch::ion_peaks_by;
+        use crate::peaks::IonTraces;
+
+        // The components were found with width 1; at width 30 their scan ranges differ, so a search
+        // by range in a fresh deconvolution misses them (#312). The ions come from the stored peaks.
         let (run, _) = crate::deconv::tests::two_substances();
-        let (ps, ds) = (PeakSettings::default(), DeconvSettings::default());
+        let (ps, saved) = (PeakSettings::default(), DeconvSettings::default());
+        let wide = DeconvSettings {
+            width: Some(30.0),
+            ..saved.clone()
+        };
         let mut traces = IonTraces::new(&run, 0.5).unwrap();
         let found = traces.detect_peaks(&ps);
-        let comps = deconvolute(&traces, &found, &run.scan_times_s, &ds);
+        let comps = deconvolute(&traces, &found, &run.scan_times_s, &saved);
         assert_eq!(comps.len(), 2);
-        let ions = component_ions(&run, &ps, &ds, &comps[1])
-            .unwrap()
-            .expect("same component");
+        let now = deconvolute(&traces, &found, &run.scan_times_s, &wide);
+        let range = |k: &Component| (k.first_scan, k.apex_scan, k.last_scan);
+        assert!(!now.iter().any(|k| range(k) == range(&comps[1])));
+
+        let ions = ion_peaks_by(&comps[1], &found, |i| traces.masses[found[i].row as usize]);
         assert!(ions.iter().all(|p| (62..74).contains(&p.mass)), "{ions:?}");
         assert!(ions.windows(2).all(|w| w[0].integral >= w[1].integral));
-        let mut other = comps[1].clone();
-        other.apex_scan += 1;
-        assert_eq!(component_ions(&run, &ps, &ds, &other).unwrap(), None);
 
         let new = compound_from_component(
             "N",
