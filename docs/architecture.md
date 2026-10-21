@@ -793,7 +793,7 @@ sources for bare widget texts.
 
 md-core errors (#339): md-core, md-cli and files keep the English `Display` texts. `md-app/src/errors.rs`
 translates them where the window shows them: `errors::text` matches a message against a table of
-English templates (`{}` for the changing parts, translated in turn; a file name before `: ` stays) and
+English templates (`errors.txt`, `{}` for the changing parts, translated in turn; a file name before `: ` stays) and
 returns the English text when none fits (an operating system text). Every red error label goes through it
 (`error_labels_translate_core_messages`), and `real_core_messages_are_translated` runs real md-core errors
 through the table, so a changed wording of one of those texts fails there. A new md-core error text needs a template.
