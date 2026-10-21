@@ -587,6 +587,10 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
     let mut s = ScanSettings::default();
     // Without RI calibration the spectra alone decide; the weaker matches still are Glycine.
     s.search.cutoff = 0.6;
+    // #327: since #133 the rescan window of an uncalibrated run is ΔRI seconds wide, as in the old
+    // program. The default 20 s (303..323 s) also takes in the large m/z 177 peak of another substance
+    // at about 321 s, so the M+3 of Glycine came out as 0.81. 6 s is the window this test used before #133.
+    s.search.ri_diff = 6.0;
     let prepared = PreparedLibrary::new(&lib, &s.search);
     let no = AtomicBool::new(false);
     let (mut found, errors) =
