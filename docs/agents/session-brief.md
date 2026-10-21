@@ -30,6 +30,13 @@ specific to it; the rest is here. Shared rules live in the workflow kit and are 
 2. `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` are green. A UI change also
    gets the screenshot check from the [UI checklist](../ui-quality.md). It runs locally after `scripts/link-example-data.ps1` (or `.sh`):
    `cargo test --release -p metabolite-detector screenshots -- --ignored` (about 9 s, 42 images). Skip it only with the real error message in the handoff.
+   CI does not have `lib_aa.lbr`, so the tests that need `MD_LBR_SAMPLE` only print "skipped" there (#327: red since #133, nobody saw it).
+   A change in `md-core` `batch`, `search`, `deconv`, `peaks`, `library` or `mid` runs them locally, about 10 s:
+   `MD_LBR_SAMPLE=<path>/lib_aa.lbr cargo test -p md-core --test example_data --test lbr_sample --test mid_series`.
+   The file comes from the 3.3 package in the gitignored `Old/` of the main checkout. Use Windows `tar.exe`, because Git Bash's
+   GNU tar cannot read the `.deb`:
+   `/c/Windows/System32/tar.exe -xf Old/MetaboliteDetector-3.3.20200313-Linux_0.deb data.tar.gz`, then
+   `/c/Windows/System32/tar.exe -xzf data.tar.gz ./usr/share/metabolitedetector/lib_aa.lbr`.
 3. `board.mjs done ISSUE PR` waits for CI and the automatic review; then `board.mjs done ISSUE PR FILE` with the handoff comment, then `board.mjs merge PR`.
 4. Open Sonar findings: `scripts/sonar-open.sh [PR]`.
 5. If CodeRabbit is rate limited, start a fresh `studio-core:reviewer` agent on the fixed head and say so in the handoff
