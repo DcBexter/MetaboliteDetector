@@ -50,6 +50,8 @@ impl App {
                             sic: Vec::new(),
                             sic_for: None,
                             sic_job: None,
+                            d_tic: Default::default(),
+                            d_sic: Default::default(),
                             components,
                             saved_calibration,
                             peak_masses,
@@ -136,6 +138,7 @@ impl App {
                     Vec::new()
                 });
                 (run.sic, run.sic_for) = (sic, Some(*k));
+                run.d_sic.take();
                 run.sic_job = None;
             }
             if run.sic_for != Some(key) && run.sic_job.as_ref().map(|j| j.0) != Some(key) {

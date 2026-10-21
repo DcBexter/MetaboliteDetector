@@ -6,6 +6,7 @@ use egui_plot::{Bar, BarChart, Line, Plot, PlotPoint, Points, Text, VLine};
 use crate::lang::{t, tf};
 use crate::plot_export::Area;
 use md_core::decimate;
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use crate::view::{self, Nav, View};
@@ -88,19 +89,20 @@ fn visible_minutes(p: &mut egui_plot::PlotUi, view: &View) -> (f64, f64) {
     (to_min(b.min()[0]), to_min(b.max()[0]))
 }
 
+/// A run's trace and the cell holding its derivative.
+type Series<'a> = (&'a [f64], &'a OnceCell<Vec<f64>>);
+
 /// Points of one run in the view's unit: at most ~2 per pixel, optionally as the derivative.
 fn run_points(
     run: &Run,
-    ys: &[f64],
+    (ys, d): Series<'_>,
     view: &View,
     (lo, hi): (f64, f64),
     width: usize,
 ) -> Vec<[f64; 2]> {
-    // shortcut: the derivative is recomputed every frame (O(scans)); cache per run past ~1M scans.
-    let d;
+    // The derivative is computed once per trace (`Run::d_tic`, `Run::d_sic`), not per frame.
     let ys = if view.derivative {
-        d = md_core::first_derivative(ys);
-        &d
+        d.get_or_init(|| md_core::first_derivative(ys))
     } else {
         ys
     };
@@ -130,7 +132,7 @@ fn trace_plot(
     runs: &[Run],
     view: &View,
     cursor_min: f64,
-    trace: fn(&Run) -> &[f64],
+    trace: fn(&Run) -> Series<'_>,
     (marks, apexes): (&[[f64; 2]], &[f64]),
     labels: &[identify::Label],
 ) -> Option<(f64, f64)> {
@@ -161,10 +163,10 @@ fn trace_plot(
             let mut y_span: Option<(f64, f64)> = None;
             let width = p.response().rect.width().max(100.0) as usize;
             for (i, run) in runs.iter().enumerate() {
-                let ys = trace(run);
+                let tr = trace(run);
                 // A SIC is empty until its first job finishes.
-                if run.visible && ys.len() == run.minutes.len() {
-                    let points = run_points(run, ys, view, (lo, hi), width);
+                if run.visible && tr.0.len() == run.minutes.len() {
+                    let points = run_points(run, tr, view, (lo, hi), width);
                     for q in &points {
                         let (l, h) = y_span.unwrap_or((q[1], q[1]));
                         y_span = Some((l.min(q[1]), h.max(q[1])));
@@ -472,7 +474,7 @@ impl App {
                 &self.runs,
                 &self.view,
                 cursor,
-                |r| &r.tic,
+                |r| (&r.tic, &r.d_tic),
                 (&marks, &apexes),
                 &labels,
             );
@@ -492,7 +494,7 @@ impl App {
                 &self.runs,
                 &self.view,
                 cursor,
-                |r| &r.sic,
+                |r| (&r.sic, &r.d_sic),
                 (&[], &apexes),
                 &[],
             );
@@ -670,6 +672,65 @@ fn highest_in_view(peaks: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use crate::App;
+
+    fn run_of(n: usize) -> crate::Run {
+        let mut run = crate::results::tests::run();
+        run.minutes = (0..n).map(|i| i as f64 * 1e-3).collect();
+        run.tic = (0..n).map(|i| (i as f64 * 0.01).sin() * 1e6).collect();
+        run
+    }
+
+    #[test]
+    fn the_cached_derivative_gives_the_same_points_and_follows_new_data() {
+        let view = crate::view::View {
+            derivative: true,
+            ..Default::default()
+        };
+        let mut run = run_of(10_000);
+        let range = (f64::NEG_INFINITY, f64::INFINITY);
+        let direct = {
+            let d = md_core::first_derivative(&run.tic);
+            md_core::decimate(&run.minutes, &d, range.0, range.1, 800)
+                .into_iter()
+                .map(|p| [view.time(p[0]), p[1]])
+                .collect::<Vec<_>>()
+        };
+        let pts =
+            |run: &crate::Run| super::run_points(run, (&run.tic, &run.d_tic), &view, range, 800);
+        assert_eq!(pts(&run), direct);
+        assert_eq!(pts(&run), direct, "second frame reads the cache");
+        // A new SIC clears its cell (loading.rs); the cell then follows the new data.
+        run.tic = vec![1.0; 10_000];
+        run.d_tic.take();
+        assert_ne!(pts(&run), direct);
+    }
+
+    /// `cargo test --release -p metabolite-detector frame_time -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing only"]
+    fn frame_time_of_15_runs_in_derivative_view() {
+        use std::time::Instant;
+        let view = crate::view::View {
+            derivative: true,
+            ..Default::default()
+        };
+        let mut runs: Vec<_> = (0..15).map(|_| run_of(500_000)).collect();
+        let range = (f64::NEG_INFINITY, f64::INFINITY);
+        let mut time = |fresh: bool| {
+            let t = Instant::now();
+            for r in &mut runs {
+                if fresh {
+                    r.d_tic.take();
+                }
+                super::run_points(r, (&r.tic, &r.d_tic), &view, range, 1500);
+            }
+            t.elapsed()
+        };
+        let before = time(true); // every frame recomputes, as before the cache
+        time(false);
+        let after = time(false);
+        println!("15 runs x 500k scans: per frame before {before:?}, after {after:?}");
+    }
 
     #[test]
     fn labels_go_to_the_highest_peaks_in_view() {

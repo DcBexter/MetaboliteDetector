@@ -113,6 +113,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    results and shows progress. Long jobs must be cancellable.
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
+   The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
 5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Peak detection
    and deconvolution share one ion-major index per run (`IonTraces`) instead of rescanning spectra per ion.
