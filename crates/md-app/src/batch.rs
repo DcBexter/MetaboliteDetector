@@ -737,15 +737,15 @@ impl Batch {
             save_cmp_row(ui, &mut self.options.save_cmp);
             row(
                 ui,
-                lang::t("Baseline correction", "Basislinien-Korrektur"),
+                lang::t("Baseline correction", "Basislinienkorrektur"),
                 "",
                 lang::t(
-                    "Subtract each scan's baseline from every run, like the switch in the old \
-                     Compound Detection Wizard. Only FastFlight runs carry a baseline; for CDF \
-                     runs it changes nothing. Applies to the next scan.",
-                    "Die Basislinie jedes Scans von jedem Lauf abziehen, wie der Schalter im alten \
-                     Compound Detection Wizard. Nur FastFlight-Läufe haben eine Basislinie; bei \
-                     CDF-Läufen ändert sich nichts. Gilt ab dem nächsten Scan.",
+                    "Subtract each scan's stored baseline from every run, like the switch in the old \
+                     Compound Detection Wizard. Only old type 1 caches (FastFlight .bin/.idx) store \
+                     one; other runs stay unchanged. Applies to the next scan.",
+                    "Die gespeicherte Basislinie jedes Scans von jedem Lauf abziehen, wie der Schalter im \
+                     alten Compound Detection Wizard. Nur alte Typ-1-Caches (FastFlight .bin/.idx) \
+                     speichern eine; andere Läufe bleiben unverändert. Gilt ab dem nächsten Scan.",
                 ),
                 egui::Checkbox::without_text(&mut self.options.baseline_correction),
             );

@@ -53,7 +53,7 @@ Options:
                               commas (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
-      --baseline-correction   subtract each scan's baseline of every run (the old wizard's switch; FastFlight only)
+      --baseline-correction   subtract each scan's baseline of every run (the old wizard's switch; old type 1 .bin/.idx caches only)
       --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
       --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
       --shift-cutoff F        min. score of the reference in a run (default: the library search cutoff)
