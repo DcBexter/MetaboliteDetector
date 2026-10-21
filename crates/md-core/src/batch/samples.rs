@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-/// Run key (lower-case file name without extension) → replicate group.
+/// Run key (`run_key`: lower-case file name without extension; by hand `path_key`) → replicate group.
 pub type SampleGroups = BTreeMap<String, String>;
 
 /// Key of a run or table entry: path, the extension of a run file and the case (Windows) do not matter.
@@ -13,6 +13,11 @@ pub fn run_key(name: &str) -> String {
         Some((stem, "cdf" | "nc" | "bin" | "cmp" | "fft")) => stem.into(),
         _ => file,
     }
+}
+
+/// Key of one run by hand: the whole path, so same-named runs in different folders stay apart.
+pub fn path_key(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/").to_lowercase()
 }
 
 /// The cells of one line; a delimiter inside double quotes stays in the cell and `""` is a quote.
