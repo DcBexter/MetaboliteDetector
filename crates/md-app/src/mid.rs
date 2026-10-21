@@ -11,7 +11,7 @@ use crate::errors;
 use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
-use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, Plot};
+use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, LegendGrouping, Plot};
 use md_core::batch::{QuantSettings, ShiftReference, complete_scan, scan_runs};
 use md_core::isotope::IsotopeTable;
 use md_core::library::LibraryCompound;
@@ -861,7 +861,8 @@ fn fragment_plot(
     let top = ui.cursor().min;
     Plot::new(("mid plot", id))
         .height(160.0)
-        .legend(Legend::default())
+        // By id: the default groups by name, which would merge runs with the same short name again.
+        .legend(Legend::default().grouping(LegendGrouping::ById))
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
