@@ -69,11 +69,23 @@ So the order is filter, match, reproducibility, rescan. The rescan comes last an
   the peaks whose ion lies within +-0.5 of the wanted one and whose apex scan lies in the window.
   `INFORMATION: No peak found for ion: X` if none.
 - Builds a `GCMSAnalyzer` on the kept peaks with `setMinimumPeakNumberRequired(1)` and calls
-  `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)`. From the components it
-  takes the one closest to the expected position (`Compound_Compare(double, float)`, tolerance 0.5) and returns
-  the integral of the ion in it.
-- If the ion is not in that component, the peaks are grouped per ion, the raw values of the peaks in the window
-  are summed (`Peak::getValues`) and `INFORMATION: Found additional peak areas without deconvolution` is printed.
+  `deconvoluteChromatogram(peaks, scan_count, start_scan, 2 * AN_DECONVOLUTION_WIDTH)`, once per ion.
+- **Peak choice (#336).** The expected position is the **mean** of the series' positions (the same vector the
+  window comes from), not the middle of the window. `std::sort` with `Compound_Compare(mean, ion)` orders the
+  components by `|RI - mean|` when both have an RI >= 0, else by `|RT - mean|`; on equal distance the one with
+  the larger intensity of the ion (`getIntensity(ion, 0.5)`) comes first (`Compound_Compare::operator()`,
+  0x6b9c34). The 0.5 is the m/z tolerance of that lookup, **not** a limit on the distance: any component in
+  the window can be taken, however far from the mean.
+- It walks the sorted components and returns the first non-zero integral of the ion (`getIntensity(ion, 0.5)`
+  of the component's integral spectrum); a component without the ion prints a message and the next is tried.
+- If no component has the ion, the peaks are grouped per ion value; per group it keeps the one peak whose apex
+  scan is nearest to `rt2Scan(mean)` (`ri2Scan` in the RI branch, first one on a tie), sums the raw values of
+  the kept peaks (`Peak::getValues`) and prints `INFORMATION: Found additional peak areas without deconvolution`.
+- Port (`batch/rescan.rs`): per missing ion the peak nearest to the mean, the higher one on a tie. So with
+  ΔRI 20 and no RI calibration, Glycine 3TMS (313 s) gets the m/z 177 peak at 321 s in the example runs, as in
+  3.3: its own `DefaultPeakDetector` finds no other m/z 177 peak in 302.9..323.1 s (`old-md-3.3.tsv`, runs
+  7235eg04, 20 and 32). Left as is: the port deconvolutes the picked peaks of all missing ions together and
+  does not fall back to the next component when the fit loses the ion (it sums the raw values of the peak).
 - `ResultSeriesException("Not implemented yet")` is thrown when the byte at `ResultSeries+0x141` is false. The
   constructor stores its first bool there and both `createResultSeries` and `createReplicateResultSeries` pass 1,
   so batch quantification never reaches it.

@@ -23,6 +23,8 @@ struct Todo {
     /// Search window in the run's retention times.
     from_s: f64,
     to_s: f64,
+    /// Mean position of the series in this run: the old code takes the peak nearest to it.
+    expected_s: f64,
 }
 
 /// Ion peaks found for one substance: (compound, ions, mean apex time).
@@ -147,26 +149,28 @@ fn plan(
             if missing.is_empty() {
                 continue;
             }
-            let (from_s, to_s) = window(&run.calibration, &found, runs, ri_diff);
+            let (from_s, to_s, expected_s) = window(&run.calibration, &found, runs, ri_diff);
             todo.entry(i).or_default().push(Todo {
                 compound,
                 ions: missing,
                 from_s,
                 to_s,
+                expected_s,
             });
         }
     }
     todo
 }
 
-/// Old window of `scanIons`: the series' positions ± ΔRI/2. In RI when the run is calibrated and the
-/// series has RIs (those of the runs with a calibration), else in retention time, ΔRI s wide.
+/// Old window of `scanIons`: the series' positions ± ΔRI/2, and their mean. In RI when the run is
+/// calibrated and the series has RIs (those of the runs with a calibration), else in retention time,
+/// ΔRI s wide.
 fn window(
     mine: &Option<RiCalibration>,
     found: &[Option<&Found>],
     runs: &[RunResult],
     ri_diff: f64,
-) -> (f64, f64) {
+) -> (f64, f64, f64) {
     let others = found.iter().zip(runs).filter_map(|(f, r)| Some(((*f)?, r)));
     let ris: Vec<f64> = (others.clone())
         .filter_map(|(f, r)| Some(r.calibration.as_ref()?.ri(f.rt_s)))
@@ -174,20 +178,24 @@ fn window(
         .collect();
     match mine {
         Some(cal) if !ris.is_empty() => {
-            let (lo, hi) = span(&ris);
-            (cal.rt(lo - ri_diff / 2.0), cal.rt(hi + ri_diff / 2.0))
+            let (lo, hi, mean) = span(&ris);
+            // shortcut: the old code compares RIs; the RT of the mean RI ranks peaks the same unless
+            // they lie on different segments of the calibration. Compare in RI if that ever matters.
+            let rt = |ri| cal.rt(ri);
+            (rt(lo - ri_diff / 2.0), rt(hi + ri_diff / 2.0), rt(mean))
         }
         _ => {
             let rts: Vec<f64> = others.map(|(f, _)| f.rt_s).filter(|t| *t >= 0.0).collect();
-            let (lo, hi) = span(&rts);
-            (lo - ri_diff / 2.0, hi + ri_diff / 2.0)
+            let (lo, hi, mean) = span(&rts);
+            (lo - ri_diff / 2.0, hi + ri_diff / 2.0, mean)
         }
     }
 }
 
-fn span(v: &[f64]) -> (f64, f64) {
-    v.iter()
-        .fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)))
+/// Lowest, highest and mean value.
+fn span(v: &[f64]) -> (f64, f64, f64) {
+    let (lo, hi) = (v.iter()).fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+    (lo, hi, v.iter().sum::<f64>() / v.len() as f64)
 }
 
 fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
@@ -208,8 +216,11 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
     };
     let mut out = Vec::new();
     for t in todo {
-        let middle = (t.from_s + t.to_s) / 2.0;
-        // The peak of each missing ion nearest to the middle of the window.
+        // The peak of each missing ion nearest to the series' mean position, the higher one on a tie
+        // (old `Compound_Compare`; no limit on the distance besides the window, see
+        // batch-quantification.md).
+        let dist = |k: usize| (at(k) - t.expected_s).abs();
+        let height = |k: usize| traces.trace(peaks[k].row as usize)[peaks[k].apex_scan as usize];
         let picked: Vec<(u32, usize)> = t
             .ions
             .iter()
@@ -223,7 +234,9 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
                     .flatten()
                     .copied()
                     .filter(|k| (t.from_s..=t.to_s).contains(&at(*k)))
-                    .min_by(|a, b| (at(*a) - middle).abs().total_cmp(&(at(*b) - middle).abs()))?;
+                    .min_by(|a, b| {
+                        (dist(*a).total_cmp(&dist(*b))).then(height(*b).total_cmp(&height(*a)))
+                    })?;
                 Some((*m, k))
             })
             .collect();
@@ -271,39 +284,88 @@ mod tests {
     use super::*;
     use crate::ri::RiCalibration;
 
-    #[test]
-    fn exact_mass_runs_search_every_trace_of_the_ion() {
-        // Three traces of nominal mass 73; only the first has a peak.
-        let (scans, mz) = (100, [73.047f32, 73.08, 73.09]);
-        let c = Chromatogram {
+    /// A run of `scans` scans at 1 s with traces of masses `mz` and the given Gaussian peaks
+    /// (trace, apex scan, height) on a noisy baseline.
+    fn run(scans: usize, mz: &[f32], peaks: &[(usize, f32, f32)]) -> Chromatogram {
+        Chromatogram {
             scan_times_s: (0..scans).map(|s| s as f64).collect(),
             offsets: (0..=scans).map(|s| s * mz.len()).collect(),
-            mz: (0..scans).flat_map(|_| mz).collect(),
+            mz: (0..scans).flat_map(|_| mz.iter().copied()).collect(),
             intensity: (0..scans * mz.len())
                 .map(|k| {
                     let (s, i) = ((k / mz.len()) as f32, k % mz.len());
                     let noise = ((k as u32).wrapping_mul(2_654_435_761) >> 16) % 41;
-                    let peak = if i == 0 {
-                        50000.0 * (-0.5 * ((s - 50.0) / 2.5).powi(2)).exp()
-                    } else {
-                        0.0
-                    };
+                    let peak: f32 = (peaks.iter())
+                        .filter(|p| p.0 == i)
+                        .map(|p| p.2 * (-0.5 * ((s - p.1) / 2.5).powi(2)).exp())
+                        .sum();
                     980.0 + noise as f32 + peak
                 })
                 .collect(),
             exact_masses: true,
             baseline: Default::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn exact_mass_runs_search_every_trace_of_the_ion() {
+        // Three traces of nominal mass 73; only the first has a peak.
+        let c = run(100, &[73.047, 73.08, 73.09], &[(0, 50.0, 50000.0)]);
         let todo = Todo {
             compound: 0,
             ions: vec![73],
             from_s: 40.0,
             to_s: 60.0,
+            expected_s: 50.0,
         };
         let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1[0].mass, 73);
         assert!((out[0].2 - 50.0).abs() <= 1.0, "{}", out[0].2);
+    }
+
+    #[test]
+    fn takes_the_peak_nearest_to_the_mean_position() {
+        // #336: series at 30, 32 and 40 s give the window 20..50 s with its middle at 35 s, but the
+        // old `scanIons` sorts by the distance to the mean, 34 s: the peak at 31 s wins over 38 s.
+        let todo = || Todo {
+            compound: 0,
+            ions: vec![73],
+            from_s: 20.0,
+            to_s: 50.0,
+            expected_s: 34.0,
+        };
+        let c = run(80, &[73.0], &[(0, 31.0, 50000.0), (0, 38.0, 50000.0)]);
+        let out = rescan_run(c, &[todo()], &ScanSettings::default()).unwrap();
+        assert!((out[0].2 - 31.0).abs() <= 1.0, "{}", out[0].2);
+        // On equal distance the higher peak wins.
+        let c = run(80, &[73.0], &[(0, 30.0, 20000.0), (0, 38.0, 50000.0)]);
+        let out = rescan_run(c, &[todo()], &ScanSettings::default()).unwrap();
+        assert!((out[0].2 - 38.0).abs() <= 1.0, "{}", out[0].2);
+    }
+
+    #[test]
+    fn glycine_177_takes_the_peak_the_old_detector_finds() {
+        // #327/#336: Glycine 3TMS elutes at 313 s; without RI calibration the default ΔRI 20 gives the
+        // window 302.9..323.1 s. In 7235eg04 the old `DefaultPeakDetector` finds m/z 177 inside it only
+        // at apex scan 2427, 321 s (crates/md-core/tests/data/old-md-3.3.tsv), the peak of another
+        // substance, and `scanIons` has no other limit on the distance: it takes that peak, so do we.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../example-data/TargetSearchData/inst/gc-ms-data/7235eg04.cdf");
+        let Ok(c) = crate::read_run(&path) else {
+            eprintln!("skipped: {} not found", path.display());
+            return;
+        };
+        let apex = c.scan_times_s[2427];
+        let todo = Todo {
+            compound: 0,
+            ions: vec![177],
+            from_s: 302.9,
+            to_s: 323.1,
+            expected_s: 313.0,
+        };
+        let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
+        assert!((out[0].2 - apex).abs() < 0.11, "{} vs {apex}", out[0].2);
     }
 
     #[test]
@@ -333,7 +395,7 @@ mod tests {
         let q = QuantSettings::default();
         let window = |runs: &[RunResult]| {
             let t = &plan(runs, std::slice::from_ref(&lib), &[], &q, 20.0)[&1][0];
-            (t.from_s, t.to_s)
+            (t.from_s, t.to_s, t.expected_s)
         };
         let id = Some(RiCalibration::identity());
         let a = run(vec![found.clone()], id.clone());
@@ -341,13 +403,13 @@ mod tests {
         // 20 s later.
         assert_eq!(
             window(&[a.clone(), run(vec![], Some(shifted))]),
-            (110.0, 130.0)
+            (110.0, 130.0, 120.0)
         );
-        assert_eq!(window(&[a, run(vec![], id)]), (90.0, 110.0));
+        assert_eq!(window(&[a, run(vec![], id)]), (90.0, 110.0, 100.0));
         // Without calibrations the retention times are taken as they are, ΔRI seconds wide.
         assert_eq!(
             window(&[run(vec![found], None), run(vec![], None)]),
-            (90.0, 110.0)
+            (90.0, 110.0, 100.0)
         );
     }
 }
