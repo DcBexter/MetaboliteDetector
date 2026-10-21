@@ -30,7 +30,9 @@ fn formula_error(text: &str) -> Option<String> {
             .into(),
         );
     }
-    parse_formula(text.trim()).err()
+    parse_formula(text.trim())
+        .err()
+        .map(|e| crate::errors::text(&e))
 }
 
 /// Automatic quant ions: show them, take them over as fixed quant ions or clear them.

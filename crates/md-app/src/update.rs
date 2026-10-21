@@ -9,6 +9,7 @@ use std::sync::mpsc::Receiver;
 use eframe::egui;
 use semver::Version;
 
+use crate::errors;
 use crate::jobs::{poll_job, spawn};
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
@@ -278,7 +279,7 @@ impl Updater {
                 });
             }
             State::Failed(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
                 ui.hyperlink_to(t("Releases page", "Release-Seite"), RELEASES_PAGE);
             }
         }

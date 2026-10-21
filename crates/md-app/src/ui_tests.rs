@@ -203,6 +203,50 @@ fn every_ui_text_is_translated() {
     );
 }
 
+/// S8: an error shown in red is a fixed text or goes through `errors::text`, which translates what
+/// `md-core` says (#339). `text` is the hit list of the batch table, not an error.
+#[test]
+fn error_labels_translate_core_messages() {
+    let mut found = Vec::new();
+    for (path, text) in sources() {
+        if path.file_name().is_some_and(|n| n == "ui_tests.rs") {
+            continue;
+        }
+        let text = text.replace("\r\n", "\n");
+        let text = &text[..text.find("#[cfg(test)]\nmod ").unwrap_or(text.len())];
+        // An error variable in a plain label skips the translation as well.
+        for bad in ["ui.label(e)", "ui.label(&e)", "ui.label(e.to_string())"] {
+            for (at, _) in text.match_indices(bad) {
+                found.push(format!(
+                    "{}:{}",
+                    path.display(),
+                    text[..at].lines().count() + 1
+                ));
+            }
+        }
+        for key in [
+            "colored_label(ui.visuals().error_fg_color,",
+            "colored_label(error,",
+        ] {
+            for (at, _) in text.match_indices(key) {
+                let arg = text[at + key.len()..].trim_start();
+                let ok = ["errors::text(", "t(", "tf!(", "lang::t(", "text)"]
+                    .iter()
+                    .any(|p| arg.starts_with(p));
+                if !ok {
+                    let line = text[..at].lines().count() + 1;
+                    found.push(format!("{}:{line}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "error labels without errors::text:\n{}",
+        found.join("\n")
+    );
+}
+
 #[test]
 fn prose_needs_a_lowercase_word() {
     assert!(is_prose("Open a run"));

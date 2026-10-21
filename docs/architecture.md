@@ -789,7 +789,14 @@ system language (`sys-locale`), `persist` the saved one, and `jobs::spawn` hands
 headers, file contents, default file names and saved keys stay English literals; where md-core's English
 text is shown (`Normalization::label`, "No match: N") md-app translates at the display site. A window
 whose title is translated keeps the English title as its id. `every_ui_text_is_translated` scans the
-sources for bare widget texts; md-core's error messages stay English for now.
+sources for bare widget texts.
+
+md-core errors (#339): md-core, md-cli and files keep the English `Display` texts. `md-app/src/errors.rs`
+translates them where the window shows them: `errors::text` matches a message against a table of
+English templates (`errors.txt`, `{}` for the changing parts, translated in turn; a file name before `: ` stays) and
+returns the English text when none fits (an operating system text). Every red error label goes through it
+(`error_labels_translate_core_messages`), and `real_core_messages_are_translated` runs real md-core errors
+through the table, so a changed wording of one of those texts fails there. A new md-core error text needs a template.
 
 ## Guided mode
 

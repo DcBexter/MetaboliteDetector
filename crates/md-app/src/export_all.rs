@@ -10,6 +10,7 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::centroid::{CentroidSettings, ExportKind, reduce};
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use crate::{App, poll_job, spawn};
@@ -223,7 +224,7 @@ impl App {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for line in &e.errors {
-                ui.colored_label(ui.visuals().error_fg_color, line);
+                ui.colored_label(ui.visuals().error_fg_color, errors::text(line));
             }
         });
     }

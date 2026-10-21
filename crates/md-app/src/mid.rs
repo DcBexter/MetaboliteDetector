@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::errors;
 use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -432,7 +433,7 @@ impl MidWindow {
             }
         });
         if !self.note.is_empty() {
-            ui.label(&self.note);
+            ui.label(errors::text(&self.note));
         }
     }
 
@@ -619,7 +620,7 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
         );
     }
     for e in r.errors.iter().chain(&r.mids.errors) {
-        ui.colored_label(error, e);
+        ui.colored_label(error, errors::text(e));
     }
     let mut mv = None;
     let n = r.mids.compounds.len();
