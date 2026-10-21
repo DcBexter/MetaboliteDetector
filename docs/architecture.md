@@ -192,7 +192,7 @@ Its model peak is the sum of the sharpest clean peaks (quality ≤ 10, at most a
 fitted as `c0 + c1 * scan + c2 * model`, and `c2 * max(model)` is that ion's height in the spectrum.
 Components are fitted in parallel. `DeconvSettings::default()` holds the old `AN_*` defaults; the golden tests
 use it. Deviation (#279): the defaults of app and CLI (`GcmsSettings::default()`) set the width to automatic,
-`deconv::auto_width`: 0.5 s at the run's median scan interval, at least the old 1 scan, at most 100. 3.3 always uses
+`deconv::auto_width`: 0.5 s at the run's median scan interval, at least the old 1 scan, at most 100 and a tenth of the run (#312). 3.3 always uses
 1 scan, which cuts the substances of a 20 scans/s run into pieces (#242). A width from a loaded settings file, the
 imported 3.3 settings or the saved app settings (`AN_DECONVOLUTION_WIDTH=auto` or a number) is a set one and wins;
 the old file format has no "auto", so **Save…** writes the width of the shown run (1 without one). The app runs
@@ -648,8 +648,8 @@ save the app opens the saved library, so the next search uses the edits.
 from the run's calibration or -1, automatic quant ions by §7.2) and puts it into the edited library as a
 new entry, or, for a name already in the library and after a yes/no question, replaces the entry, replaces
 only spectrum, RT and RI (quant ions and comments stay), or sets only the automatic quant ions. The quant
-ions need the ion peaks, which the app does not keep, so a worker thread repeats peak detection and
-deconvolution of the run (about as long as opening it). "Copy RTs…" searches the components of the active
+ions come from the peaks the run's components were built from (`Run::peaks`, also those of a loaded
+`.cmp`), so they do not depend on the current deconvolution width. "Copy RTs…" searches the components of the active
 run against the edited library, lists the assigned ones with their old and new RT and RI and, on "Copy",
 writes RT and RI into those entries. Both change only the copy in the editor until Save; "Modify entry"
 (spectrum merge) is not ported.
