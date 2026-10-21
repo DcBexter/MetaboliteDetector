@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use super::{BOM, Found, IonPeak, RunResult, Table, TableSettings, text_cell};
+use super::{BOM, Found, IonPeak, RunResult, Table, TableSettings, path_key, run_key, text_cell};
 use crate::library::LibraryCompound;
 
 /// The largest peak of each of `ions` in `f` that has at least `min_sn`; a duplicate peak (§4.5)
@@ -116,11 +116,21 @@ impl Table {
 impl TableSettings {
     /// Where the replicate groups come from, for the settings file: runs set by hand, the sample
     /// table (`table` describes it), the file name pattern.
-    pub fn group_source(&self, table: Option<&str>) -> String {
-        let hand = (!self.manual_groups.is_empty())
-            .then(|| format!("by hand ({} runs)", self.manual_groups.len()));
-        let table = table.map(|t| format!("sample table {t}"));
-        let pattern = (!self.replicates.is_empty()).then(|| "file name pattern".to_owned());
+    /// Only sources that group some of `runs` are named.
+    pub fn group_source(&self, table: Option<&str>, runs: &[PathBuf]) -> String {
+        let by_hand = |p: &PathBuf| self.manual_groups.contains_key(&path_key(p));
+        let by_table = |p: &PathBuf| {
+            self.sample_groups
+                .contains_key(&run_key(&p.to_string_lossy()))
+        };
+        let n = runs.iter().filter(|p| by_hand(p)).count();
+        let rest = || runs.iter().filter(|p| !by_hand(p));
+        let hand = (n > 0).then(|| format!("by hand ({n} runs)"));
+        let table = table
+            .filter(|_| rest().any(by_table))
+            .map(|t| format!("sample table {t}"));
+        let pattern = (!self.replicates.is_empty() && rest().any(|p| !by_table(p)))
+            .then(|| "file name pattern".to_owned());
         let parts: Vec<String> = [hand, table, pattern].into_iter().flatten().collect();
         if parts.is_empty() {
             "none".into()
@@ -263,15 +273,25 @@ mod tests {
 
     #[test]
     fn the_group_source_names_hand_table_and_pattern() {
+        let runs: Vec<PathBuf> = ["/x/a.cdf", "/x/b.cdf", "/y/b.cdf"].map(Into::into).into();
         let mut s = TableSettings::default();
-        assert_eq!(s.group_source(None), "none");
+        assert_eq!(s.group_source(None, &runs), "none");
         s.replicates = "^(.+)_".into();
-        s.manual_groups = crate::batch::SampleGroups::from([("a".into(), "blank".into())]);
+        s.manual_groups = crate::batch::SampleGroups::from([(path_key(&runs[0]), "blank".into())]);
+        s.sample_groups = crate::batch::SampleGroups::from([("b".into(), "t1".into())]);
+        let table = Some("samples.txt");
         assert_eq!(
-            s.group_source(Some("samples.txt (files CDF_FILE, groups TIME_POINT)")),
-            "by hand (1 runs), sample table samples.txt (files CDF_FILE, groups TIME_POINT), \
-             file name pattern"
+            s.group_source(table, &runs),
+            "by hand (1 runs), sample table samples.txt"
         );
+        // A removed run no longer counts, and a source that groups nothing is not named.
+        assert_eq!(s.group_source(table, &runs[..1]), "by hand (1 runs)");
+        assert_eq!(
+            s.group_source(table, &runs[1..]),
+            "sample table samples.txt"
+        );
+        s.sample_groups.clear();
+        assert_eq!(s.group_source(table, &runs[1..]), "file name pattern");
     }
 
     #[test]

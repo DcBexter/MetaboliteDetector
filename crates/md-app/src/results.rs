@@ -678,7 +678,17 @@ pub(crate) mod tests {
             sic_job: None,
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
-            peaks: Vec::new(),
+            // The peak both components point to.
+            peaks: vec![md_core::peaks::Peak {
+                row: 0,
+                first_scan: 0,
+                apex_scan: 1,
+                last_scan: 2,
+                precise_apex: None,
+                signal_to_noise: 12.0,
+                quality: 0.5,
+                sharpness: 3.0,
+            }],
             saved_calibration: None,
             analysis: settings::Analysis::default(),
             scan: 0,
@@ -791,6 +801,14 @@ pub(crate) mod tests {
         want[1].peaks[0].peak = 1;
         assert_eq!(b.components, want);
         assert_eq!((b.peak_masses.clone(), b.peaks.len()), (vec![73, 73], 2));
+        // "Add component" takes its ions from these peaks (#312), whatever the current width.
+        let ions = md_core::batch::ion_peaks_by(&b.components[1], &b.peaks, |i| b.peak_masses[i]);
+        assert_eq!(
+            ions.iter()
+                .map(|p| (p.mass, p.integral))
+                .collect::<Vec<_>>(),
+            [(73, 5.0)]
+        );
         assert_eq!(
             (b.peaks[0].signal_to_noise, b.peaks[0].precise_apex),
             (12.0, Some(1.25))

@@ -5,7 +5,8 @@
 //! survive; `language` (S8) is reserved for that. `mode` is the guided or expert mode (S7); without it
 //! the start asks for it. The first start imports the old
 //! 3.3 settings once (`~/.config/TU-Braunschweig/MetaboliteDetector.conf`, on Windows the registry).
-//! Every value is checked; a bad one keeps its default.
+//! Every value is checked; a bad one keeps its default. A saved deconvolution width 1 becomes Auto once
+//! (#311, marker `auto_width_once`).
 //!
 //! eframe writes `app.ron` itself, not atomically, so [`guard`] runs before it reads the file and
 //! keeps the last good copy as `app.ron.bak` (the only backup, rewritten via temp file + rename).
@@ -25,6 +26,8 @@ use crate::App;
 /// Storage key of our lines in `app.ron`.
 pub const KEY: &str = "metabolite-detector";
 const RECENT: usize = 10;
+/// Marker line: the saved width 1 was switched to Auto once (#311).
+const WIDTH_ONCE: &str = "auto_width_once";
 
 /// What the app keeps between starts besides settings and panels.
 #[derive(Default)]
@@ -38,6 +41,8 @@ pub struct Saved {
     extra: Vec<(String, String)>,
     /// The `app.ron` eframe writes, to merge with at save time.
     file: Option<PathBuf>,
+    /// The one-time width 1 → Auto switch ran (#311); saved as [`WIDTH_ONCE`].
+    width_once: bool,
 }
 
 impl Saved {
@@ -456,6 +461,10 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     }
                     true
                 }
+                ("", WIDTH_ONCE) => {
+                    app.saved.width_once = true;
+                    true
+                }
                 (_, "recent" | "rc_open_file") => {
                     recent.extend(path(&v));
                     true
@@ -487,6 +496,17 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
     }
     app.settings.restore(valid(s, &mut bad));
     bad
+}
+
+/// #311: a saved width 1 (3.3's only value, the app's old default) becomes Auto once. The marker keeps
+/// a width 1 chosen afterwards. Only start-up calls this; settings files from Load… keep their value.
+fn width_once(app: &mut App) {
+    let done = std::mem::replace(&mut app.saved.width_once, true);
+    if !done && app.settings.applied.an_deconvolution_width == Some(1.0) {
+        let mut s = app.settings.applied.clone();
+        s.an_deconvolution_width = None;
+        app.settings.restore(s);
+    }
 }
 
 /// Resets only the field `validate` names, until the settings pass; all of them if it names none.
@@ -529,6 +549,9 @@ pub fn text(app: &App) -> String {
     // Not answered yet: the next start asks again.
     if !app.guided.ask {
         lines.push(("mode".into(), app.guided.mode.key().into()));
+    }
+    if app.saved.width_once {
+        lines.push((WIDTH_ONCE.into(), "true".into()));
     }
     let library = (app.library.as_ref()).map(|l| l.path.clone());
     let nist = (app.nist.lib.as_ref()).map(|l| l.path.clone());
@@ -695,6 +718,7 @@ pub fn restore(
             }
         }),
     };
+    width_once(app);
     if let Some(note) = guarded.or(note) {
         app.settings.show_note(note);
     }
@@ -792,6 +816,55 @@ size=@Size(1591 800)
         assert_eq!(app.saved.library, None);
         // The GUI blob is not kept.
         assert!(app.saved.extra.is_empty(), "{:?}", app.saved.extra);
+    }
+
+    /// #311: a saved width 1 becomes Auto once, whether from `app.ron` or the 3.3 import; a width
+    /// chosen afterwards stays.
+    #[test]
+    fn saved_width_one_becomes_auto_once() {
+        let width = |a: &App| a.settings.applied.an_deconvolution_width;
+        for (text, entries) in [
+            (
+                "AN_DECONVOLUTION_WIDTH=1\n",
+                own_entries as fn(&str) -> Vec<Entry>,
+            ),
+            (OLD, ini_entries),
+        ] {
+            let (mut app, _) = apply_text(text, entries);
+            assert_eq!(width(&app), Some(1.0), "precondition: the file holds 1");
+            width_once(&mut app);
+            assert_eq!(width(&app), None);
+            let saved = super::text(&app);
+            assert!(saved.contains("\nauto_width_once=true\n"), "{saved}");
+            // The user picks 1 again; the next start keeps it.
+            let (mut next, _) = apply_text(&saved.replace("=auto\n", "=1\n"), own_entries);
+            assert_eq!(width(&next), Some(1.0));
+            width_once(&mut next);
+            assert_eq!(width(&next), Some(1.0), "the marker stops a second switch");
+        }
+        let (mut app, _) = apply_text("AN_DECONVOLUTION_WIDTH=2.5\n", own_entries);
+        width_once(&mut app);
+        assert_eq!(width(&app), Some(2.5), "only 1 is switched");
+    }
+
+    /// The start itself runs the switch, not only the helper.
+    #[test]
+    fn restore_switches_the_saved_width() {
+        struct Fake(String);
+        impl eframe::Storage for Fake {
+            fn get_string(&self, _: &str) -> Option<String> {
+                Some(self.0.clone())
+            }
+            fn set_string(&mut self, _: &str, _: String) {}
+            fn remove_string(&mut self, _: &str) {}
+            fn flush(&mut self) {}
+        }
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        let fake = Fake("AN_DECONVOLUTION_WIDTH=1\n".into());
+        restore(&mut app, &ctx, Some(&fake), None, None);
+        assert_eq!(app.settings.applied.an_deconvolution_width, None);
+        assert!(text(&app).contains("\nauto_width_once=true\n"));
     }
 
     /// Reads a real old `MetaboliteDetector.conf` copied into `example-data/old-results/`.

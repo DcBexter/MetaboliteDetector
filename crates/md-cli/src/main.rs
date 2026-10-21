@@ -318,8 +318,12 @@ fn run(a: Args) -> Result<bool, String> {
     let table =
         table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
+    let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
     how.extend([
-        ("GROUP_SOURCE", ts.group_source(table_source.as_deref())),
+        (
+            "GROUP_SOURCE",
+            ts.group_source(table_source.as_deref(), &paths),
+        ),
         ("RT_ONLY", prepared.is_rt_only().to_string()),
         ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
         ("RUNS_SCANNED", runs.len().to_string()),

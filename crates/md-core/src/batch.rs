@@ -17,7 +17,7 @@ mod untargeted;
 pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
 pub use group_stats::{GroupStats, group_label, group_names, group_stats_path};
 pub use rescan::rescan_runs;
-pub use samples::{SampleGroups, SampleTable, run_key};
+pub use samples::{SampleGroups, SampleTable, path_key, run_key};
 pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
@@ -510,7 +510,7 @@ pub struct TableSettings {
     /// Groups from a sample table; they win over `replicates` for the runs the table names. A run
     /// it lacks is grouped by `replicates`.
     pub sample_groups: SampleGroups,
-    /// Groups set by hand per run; they win over the sample table and the pattern.
+    /// Groups set by hand per run, keyed by `path_key`; entries of runs not in the batch are ignored; they win over the sample table and the pattern.
     pub manual_groups: SampleGroups,
     /// Keep a substance only if some group quantifies it in at least this fraction of its runs.
     pub min_reproducibility: f64,
@@ -718,10 +718,8 @@ pub fn table(
             .to_string_lossy()
             .into_owned()
     };
-    let group = |n: &str| match (
-        [&s.manual_groups, &s.sample_groups]
-            .into_iter()
-            .find_map(|m| m.get(&run_key(n))),
+    let group = |r: &RunResult, n: &str| match (
+        (s.manual_groups.get(&path_key(&r.path))).or_else(|| s.sample_groups.get(&run_key(n))),
         pattern.captures(n),
     ) {
         // Trimmed here: a field being typed keeps its blanks.
@@ -737,7 +735,7 @@ pub fn table(
         .enumerate()
         .map(|(i, r)| {
             let n = name(r);
-            (group(&n), n, i, r)
+            (group(r, &n), n, i, r)
         })
         .collect();
     cols.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1080,7 +1078,10 @@ mod tests {
         assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 3);
         // A group set by hand wins over the table and the pattern; the other runs are not touched.
         let hand = TableSettings {
-            manual_groups: SampleGroups::from([(run_key("/x/RUN01.cdf"), "blank ".into())]),
+            manual_groups: SampleGroups::from([(
+                path_key(Path::new("data/RUN01.cdf")),
+                "blank ".into(),
+            )]),
             ..s
         };
         let t = table(&more, &[], &[], &hand).unwrap();
@@ -1092,6 +1093,18 @@ mod tests {
         };
         let t = table(&more, &[], &[], &only_hand).unwrap();
         assert_eq!(t.groups.iter().filter(|g| g.is_empty()).count(), 15);
+    }
+
+    #[test]
+    fn same_named_runs_in_different_folders_get_their_own_hand_group() {
+        let (mut a, b) = (run("A.cdf", vec![]), run("A.cdf", vec![]));
+        a.path = PathBuf::from("other/A.cdf");
+        let s = TableSettings {
+            manual_groups: SampleGroups::from([(path_key(&a.path), "x".into())]),
+            ..Default::default()
+        };
+        let t = table(&[a, b], &[], &[], &s).unwrap();
+        assert_eq!(t.groups.iter().filter(|g| *g == "x").count(), 1);
     }
 
     /// Two substances of 12 ions each, apart in time (early at 30 s, late at 70 s).
