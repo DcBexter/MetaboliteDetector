@@ -668,7 +668,7 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut Msg) {
                     ui.strong(tf!("Fragment {}–{}", "Fragment {}–{}", f.lo, f.hi));
                     let id = (c.compound, j);
                     mv = fragment_grid(ui, f, (&r.columns, &r.paths), stats, id).or(mv);
-                    fragment_plot(ui, f, &r.columns, stats, id);
+                    fragment_plot(ui, f, (&r.columns, &r.paths), stats, id);
                 }
             });
         }
@@ -811,28 +811,28 @@ fn fragment_grid(
     mv
 }
 
-/// Bars per isotopomer: one per run or group, and for the per-run methods the mean; whiskers show
-/// the CI of a group or the standard error of the mean.
-fn fragment_plot(
-    ui: &mut egui::Ui,
+/// Key, name and per isotopomer the value and its error.
+type Series<'a> = (&'a str, &'a str, Vec<(f64, Option<f64>)>);
+
+/// Per series: key for the plot (hidden series stay hidden in another language), name and per
+/// isotopomer the value and its error. Runs are keyed by their path, since runs like `s.1.cdf` and
+/// `s.2.cdf` share the column name `s`; the group methods have no paths and one column.
+fn plot_series<'a>(
     f: &FragmentMid,
-    columns: &[String],
+    columns: &'a [String],
+    paths: &'a [String],
     stats: &[(f64, f64)],
-    id: (usize, usize),
-) {
-    let n = f.isotopomers;
-    let fits = columns.iter().zip(&f.fits);
-    // Per series: key for the plot (hidden series stay hidden in another language), name and per isotopomer the value and its error.
-    let mut series: Vec<(&str, &str, Vec<_>)> = fits
-        .map(|(c, fit)| {
-            let v = (0..n).map(|k| match fit {
+) -> Vec<Series<'a>> {
+    let mut series: Vec<_> = (columns.iter().zip(&f.fits).enumerate())
+        .map(|(j, (c, fit))| {
+            let v = (0..f.isotopomers).map(|k| match fit {
                 Some(x) => (
                     x.mids.get(k).copied().unwrap_or(f64::NAN),
                     x.cis.get(k).copied().flatten(),
                 ),
                 None => (f64::NAN, None),
             });
-            (c.as_str(), c.as_str(), v.collect())
+            (paths.get(j).unwrap_or(c).as_str(), c.as_str(), v.collect())
         })
         .collect();
     if !stats.is_empty() {
@@ -842,6 +842,20 @@ fn fragment_plot(
             stats.iter().map(|s| (s.0, Some(s.1))).collect(),
         ));
     }
+    series
+}
+
+/// Bars per isotopomer: one per run or group, and for the per-run methods the mean; whiskers show
+/// the CI of a group or the standard error of the mean.
+fn fragment_plot(
+    ui: &mut egui::Ui,
+    f: &FragmentMid,
+    (columns, paths): (&[String], &[String]),
+    stats: &[(f64, f64)],
+    id: (usize, usize),
+) {
+    let n = f.isotopomers;
+    let series = plot_series(f, columns, paths, stats);
     let width = 0.8 / series.len().max(1) as f64;
     let whisker = ui.visuals().text_color();
     let top = ui.cursor().min;
@@ -984,6 +998,19 @@ mod tests {
         d.apply(Move::Compound(1, 0));
         assert_eq!(d.columns, ["c", "b", "a"]);
         assert_eq!((d.stats, d.stats_text), (stats, stats_text));
+    }
+
+    #[test]
+    fn runs_with_the_same_short_name_get_distinct_plot_keys() {
+        let mut d = done(Method::Formula, &["s", "s"]);
+        d.paths = ["x/s.1.cdf", "x/s.2.cdf"].map(String::from).to_vec();
+        d.apply(Move::Run(1, 0));
+        let f = &d.mids.compounds[0].fragments[0];
+        let series = plot_series(f, &d.columns, &d.paths, &[(0.0, 0.0)]);
+        let keys: Vec<_> = series.iter().map(|s| s.0).collect();
+        assert_eq!(keys, ["x/s.2.cdf", "x/s.1.cdf", "Mean ± StdErr"]);
+        // The key moved with its run's values (run 2 is 0.2 for Alanine).
+        assert_eq!(series[0].2[0].0, 0.2);
     }
 
     #[test]
