@@ -586,8 +586,9 @@ Appearance (`MainWindow::showSettingsDialog` 0x3c0b46; `readSettings`, QSettings
   stores 5 at +0x110, and `plotPeakLabels` writes `QString::number(mz, 'f', 4)` over the 5 highest peaks whose m/z is in
   the visible x range.
 
-Port (#254): `SF_CENTROID_*`, `LS_CUTOFF` and the two appearance switches are wired; `SF_FWHM` (needs the centroid code of
-`peaks.rs`/`centroid.rs`/`library.rs`) and baseline correction (needs the per-scan mean and trace filling) are follow-ups.
+Port (#254): `SF_CENTROID_*`, `LS_CUTOFF` and the two appearance switches are wired; `SF_FWHM` reaches the centroiding of
+`peaks.rs`, `centroid.rs`, `library.rs` and `tof.rs` (#293). Baseline correction (needs the per-scan mean and trace
+filling) is a follow-up.
 
 ## 5. Library search and scoring
 

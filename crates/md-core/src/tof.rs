@@ -142,9 +142,9 @@ impl TofCalibration {
 }
 
 /// The TOF bin of the peak near `near` in a summed bin spectrum (bin order): the intensity-weighted
-/// centre of the points at or above half of the highest one within `half_width` bins. None when
-/// the bins around `near` carry no signal.
-pub fn peak_bin(spectrum: &[(f32, f64)], near: f32, half_width: f32) -> Option<f32> {
+/// centre of the points at or above `fwhm` (`SF_FWHM`) times the highest one within `half_width`
+/// bins. None when the bins around `near` carry no signal.
+pub fn peak_bin(spectrum: &[(f32, f64)], near: f32, half_width: f32, fwhm: f64) -> Option<f32> {
     let lo = spectrum.partition_point(|p| p.0 < near - half_width);
     let hi = spectrum.partition_point(|p| p.0 <= near + half_width);
     let window = &spectrum[lo..hi];
@@ -154,7 +154,7 @@ pub fn peak_bin(spectrum: &[(f32, f64)], near: f32, half_width: f32) -> Option<f
     }
     let (weighted, total) = window
         .iter()
-        .filter(|p| p.1 >= top / 2.0)
+        .filter(|p| p.1 >= top * fwhm)
         .fold((0.0, 0.0), |(w, t), p| (w + f64::from(p.0) * p.1, t + p.1));
     Some((weighted / total) as f32)
 }
@@ -236,8 +236,12 @@ mod tests {
             .map(|b| (b as f32, 100.0 - 10.0 * ((b - 1000) as f64).abs()))
             .chain([(5000.0, 1e9)])
             .collect();
-        assert_eq!(peak_bin(&spectrum, 1003.0, 8.0), Some(1000.0));
-        assert_eq!(peak_bin(&spectrum, 3000.0, 8.0), None);
+        assert_eq!(peak_bin(&spectrum, 1003.0, 8.0, 0.5), Some(1000.0));
+        assert_eq!(peak_bin(&spectrum, 3000.0, 8.0, 0.5), None);
+        // SF_FWHM decides which points of a skewed peak count.
+        let skew = [(1000.0, 100.0), (1001.0, 60.0), (1002.0, 30.0)];
+        assert_eq!(peak_bin(&skew, 1001.0, 8.0, 0.5), Some(1000.375));
+        assert_eq!(peak_bin(&skew, 1001.0, 8.0, 0.7), Some(1000.0));
     }
 
     #[test]

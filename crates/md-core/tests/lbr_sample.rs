@@ -257,7 +257,7 @@ fn msl_export_matches_the_old_program() {
         (MslType::Fwhm, "fwhm"),
     ] {
         let old = std::fs::read_to_string(format!("{prefix}.{name}.msl")).unwrap();
-        let new = write_msl_as(&lib, kind);
+        let new = write_msl_as(&lib, kind, 0.5);
         for (n, (a, b)) in new.lines().zip(old.lines()).enumerate() {
             assert_eq!(a, b, "{kind:?} line {}", n + 1);
         }
