@@ -55,6 +55,17 @@ struct Done {
     took: Duration,
 }
 
+/// The one column of the group methods, kept in English as the plot key; [`shown_name`] translates it.
+const GROUP_COLUMN: &str = "labelled";
+
+/// Column `i` as drawn: the group methods have no paths, and their column follows the language.
+fn shown_name<'a>(columns: &'a [String], paths: &[String], i: usize) -> &'a str {
+    match paths.is_empty() {
+        true => t("labelled", "markiert"),
+        false => &columns[i],
+    }
+}
+
 /// A move in the result view: run columns (old "Change column order…") or substances with their
 /// diagrams (old "Change order of diagrams…"), from one position to another.
 #[derive(Clone, Copy)]
@@ -246,7 +257,7 @@ impl MidWindow {
                     name.split('.').next().unwrap_or_default().to_owned()
                 })
                 .collect(),
-            false => vec![t("labelled", "markiert").into()],
+            false => vec![GROUP_COLUMN.into()],
         };
         let column_paths: Vec<String> = match method.per_run() {
             true => (self.labelled.iter())
@@ -731,7 +742,7 @@ fn run_head(ui: &mut egui::Ui, (columns, paths): (&[String], &[String]), i: usiz
         {
             mv = Some(Move::Run(i, i - 1));
         }
-        let head = ui.strong(&columns[i]);
+        let head = ui.strong(shown_name(columns, paths, i));
         if let Some(path) = paths.get(i) {
             head.on_hover_text(path);
         }
@@ -825,6 +836,7 @@ fn plot_series<'a>(
 ) -> Vec<Series<'a>> {
     let mut series: Vec<_> = (columns.iter().zip(&f.fits).enumerate())
         .map(|(j, (c, fit))| {
+            let name = shown_name(columns, paths, j);
             let v = (0..f.isotopomers).map(|k| match fit {
                 Some(x) => (
                     x.mids.get(k).copied().unwrap_or(f64::NAN),
@@ -832,7 +844,7 @@ fn plot_series<'a>(
                 ),
                 None => (f64::NAN, None),
             });
-            (paths.get(j).unwrap_or(c).as_str(), c.as_str(), v.collect())
+            (paths.get(j).unwrap_or(c).as_str(), name, v.collect())
         })
         .collect();
     if !stats.is_empty() {
@@ -1015,8 +1027,29 @@ mod tests {
     }
 
     #[test]
+    fn group_column_follows_the_language_but_not_key_or_export() {
+        let d = done(Method::Uncorrected, &[GROUP_COLUMN]);
+        let f = &d.mids.compounds[0].fragments[0];
+        let series = |l| {
+            crate::lang::set(l);
+            let s = plot_series(f, &d.columns, &d.paths, &[]);
+            (s[0].0, s[0].1, shown_name(&d.columns, &d.paths, 0))
+        };
+        assert_eq!(
+            series(crate::lang::Lang::En),
+            ("labelled", "labelled", "labelled")
+        );
+        assert_eq!(
+            series(crate::lang::Lang::De),
+            ("labelled", "markiert", "markiert")
+        );
+        assert!(!d.text.contains("markiert"));
+        crate::lang::set(crate::lang::Lang::En);
+    }
+
+    #[test]
     fn group_export_follows_the_moved_substances() {
-        let mut d = done(Method::Uncorrected, &["labelled"]);
+        let mut d = done(Method::Uncorrected, &[GROUP_COLUMN]);
         d.apply(Move::Compound(1, 0));
         assert!(d.text.starts_with("Glycine_73 (M0)\t0.4\t"));
         assert!(d.stats.is_empty() && d.stats_text.is_none());
