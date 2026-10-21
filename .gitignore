@@ -14,7 +14,7 @@
 /target/
 __pycache__/
 # Example data (downloaded by example-data/fetch.*)
-/example-data/TargetSearchData/
+/example-data/TargetSearchData
 /example-data/*.tar.gz
-/example-data/old-results/
+/example-data/old-results
 /example-data/high-resolution/
