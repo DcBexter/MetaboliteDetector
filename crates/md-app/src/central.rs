@@ -3,6 +3,7 @@
 use eframe::egui;
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoint, Points, Text, VLine};
 
+use crate::lang::{t, tf};
 use crate::plot_export::Area;
 use md_core::decimate;
 use std::sync::Arc;
@@ -10,23 +11,63 @@ use std::sync::Arc;
 use crate::view::{self, Nav, View};
 use crate::{App, Run, Trace, color, detail, export, identify};
 
-const CHROMATOGRAM_HELP: &[&str] = &[
-    "Click: show the scan at that time; near a dot or triangle, that component.",
-    "← / →: previous or next scan.",
-    "Drag, or mouse wheel: move the view.",
-    "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
-    "Right mouse button, drag a box: zoom into the box.",
-    "Double-click, or All: show all data.",
-    "The dots and triangles mark the detected components; the triangles are easier to hit.",
-];
+fn chromatogram_help() -> [&'static str; 7] {
+    [
+        t(
+            "Click: show the scan at that time; near a dot or triangle, that component.",
+            "Klick: den Scan zu dieser Zeit zeigen; nahe einem Punkt oder Dreieck diese Komponente.",
+        ),
+        t(
+            "← / →: previous or next scan.",
+            "← / →: vorheriger oder nächster Scan.",
+        ),
+        t(
+            "Drag, or mouse wheel: move the view.",
+            "Ziehen oder Mausrad: die Ansicht verschieben.",
+        ),
+        t(
+            "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
+            "Strg + Mausrad oder Zwei-Finger-Geste: zoomen; auf einer Achse ziehen: sie dehnen.",
+        ),
+        t(
+            "Right mouse button, drag a box: zoom into the box.",
+            "Rechte Maustaste, Rahmen ziehen: in den Rahmen zoomen.",
+        ),
+        t(
+            "Double-click, or All: show all data.",
+            "Doppelklick oder Alles: alle Daten zeigen.",
+        ),
+        t(
+            "The dots and triangles mark the detected components; the triangles are easier to hit.",
+            "Die Punkte und Dreiecke markieren die erkannten Komponenten; die Dreiecke sind leichter zu treffen.",
+        ),
+    ]
+}
 
-const SPECTRUM_HELP: &[&str] = &[
-    "Click a bar: the SIC shows that m/z.",
-    "Drag, or mouse wheel: move the view.",
-    "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
-    "Right mouse button, drag a box: zoom into the box.",
-    "Double-click, or All: show all masses.",
-];
+fn spectrum_help() -> [&'static str; 5] {
+    [
+        t(
+            "Click a bar: the SIC shows that m/z.",
+            "Klick auf einen Balken: das SIC zeigt dieses m/z.",
+        ),
+        t(
+            "Drag, or mouse wheel: move the view.",
+            "Ziehen oder Mausrad: die Ansicht verschieben.",
+        ),
+        t(
+            "Ctrl + mouse wheel or pinch: zoom; drag on an axis: stretch it.",
+            "Strg + Mausrad oder Zwei-Finger-Geste: zoomen; auf einer Achse ziehen: sie dehnen.",
+        ),
+        t(
+            "Right mouse button, drag a box: zoom into the box.",
+            "Rechte Maustaste, Rahmen ziehen: in den Rahmen zoomen.",
+        ),
+        t(
+            "Double-click, or All: show all masses.",
+            "Doppelklick oder Alles: alle Massen zeigen.",
+        ),
+    ]
+}
 
 /// Visible x range in minutes (unbounded when auto-fitted); after a unit change it also moves the
 /// zoomed window into the new unit.
@@ -107,7 +148,11 @@ fn trace_plot(
         .link_axis(link, [true, false])
         .link_cursor(link, [true, false])
         .show_crosshair(view.crosshair)
-        .x_axis_label(format!("Retention time ({})", view.unit.label()))
+        .x_axis_label(tf!(
+            "Retention time ({})",
+            "Retentionszeit ({})",
+            view.unit.label()
+        ))
         .y_axis_label(label)
         .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
         .show(ui, |p| {
@@ -143,7 +188,11 @@ fn trace_plot(
             if !marks.is_empty() {
                 let at = |m: &[f64; 2]| [view.time(m[0]), m[1]];
                 p.points(
-                    Points::new("components", marks.iter().map(at).collect::<Vec<_>>()).radius(3.0),
+                    Points::new(
+                        t("components", "Komponenten"),
+                        marks.iter().map(at).collect::<Vec<_>>(),
+                    )
+                    .radius(3.0),
                 );
             }
             if !apexes.is_empty() {
@@ -159,7 +208,7 @@ fn trace_plot(
                     .map(|&t| [view.time(t), y])
                     .collect::<Vec<_>>();
                 p.points(
-                    Points::new("components", tri)
+                    Points::new(t("components", "Komponenten"), tri)
                         .shape(egui_plot::MarkerShape::Up)
                         .radius(5.0)
                         .color(marker),
@@ -180,7 +229,10 @@ fn trace_plot(
             for ((at, name, color, _), _) in labels.iter().zip(&keep).filter(|(_, k)| **k) {
                 let text = egui::RichText::new(name).color(*color);
                 let at = [view.time(at[0]), at[1]];
-                p.text(Text::new("hits", at.into(), text).anchor(egui::Align2::LEFT_BOTTOM));
+                p.text(
+                    Text::new(t("hits", "Treffer"), at.into(), text)
+                        .anchor(egui::Align2::LEFT_BOTTOM),
+                );
             }
             p.vline(VLine::new("", view.time(cursor_min)));
             (p.pointer_coordinate(), view.minutes(SNAP_PX / px_per_t))
@@ -260,9 +312,9 @@ impl App {
     fn chromatogram_area(&mut self, ui: &mut egui::Ui) {
         self.trace_controls(ui);
         ui.horizontal_wrapped(|ui| {
-            self.view.nav = view::nav_buttons(ui, CHROMATOGRAM_HELP);
+            self.view.nav = view::nav_buttons(ui, &chromatogram_help());
             self.view.controls(ui);
-            if ui.button("Run info").clicked() {
+            if ui.button(t("Run info", "Laufinfo")).clicked() {
                 self.view.info_open = true;
             }
         });
@@ -279,9 +331,10 @@ impl App {
                 ui.spinner();
                 return;
             }
-            ui.label(
+            ui.label(t(
                 "Open GC-MS runs (NetCDF or old .bin) to see their chromatograms and spectra.",
-            );
+                "GC-MS-Läufe öffnen (NetCDF oder altes .bin), um ihre Chromatogramme und Spektren zu sehen.",
+            ));
             ui.add_space(8.0);
             self.open_chromatograms_button(ui);
             self.open_library_button(ui);
@@ -291,11 +344,20 @@ impl App {
     fn trace_controls(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.trace, Trace::Tic, "TIC")
-                .on_hover_text("Total ion chromatogram: the sum of all masses per scan");
+                .on_hover_text(t(
+                    "Total ion chromatogram: the sum of all masses per scan",
+                    "Totalionenchromatogramm: die Summe aller Massen pro Scan",
+                ));
             ui.selectable_value(&mut self.trace, Trace::Sic, "SIC")
-                .on_hover_text("Selected ion chromatogram: only the chosen m/z");
+                .on_hover_text(t(
+                    "Selected ion chromatogram: only the chosen m/z",
+                    "Ionenchromatogramm: nur das gewählte m/z",
+                ));
             ui.selectable_value(&mut self.trace, Trace::Both, "TIC + SIC")
-                .on_hover_text("Both, one above the other with a shared time axis");
+                .on_hover_text(t(
+                    "Both, one above the other with a shared time axis",
+                    "Beide, übereinander mit gemeinsamer Zeitachse",
+                ));
             // Each control on its own, not in a nested scope, so the row can wrap between them.
             let sic = self.trace != Trace::Tic;
             let label = ui.add_enabled(sic, egui::Label::new("m/z"));
@@ -306,8 +368,14 @@ impl App {
                     .max_decimals(2),
             )
             .labelled_by(label.id)
-            .on_hover_text("Ion whose intensity the SIC trace shows")
-            .on_disabled_hover_text("Used by the SIC trace; pick SIC or TIC + SIC");
+            .on_hover_text(t(
+                "Ion whose intensity the SIC trace shows",
+                "Ion, dessen Intensität die SIC-Spur zeigt",
+            ))
+            .on_disabled_hover_text(t(
+                "Used by the SIC trace; pick SIC or TIC + SIC",
+                "Für die SIC-Spur; SIC oder TIC + SIC wählen",
+            ));
             let label = ui.add_enabled(sic, egui::Label::new("±"));
             ui.add_enabled(
                 sic,
@@ -317,8 +385,14 @@ impl App {
                     .max_decimals(2),
             )
             .labelled_by(label.id)
-            .on_hover_text("Window around the m/z that the SIC trace adds up")
-            .on_disabled_hover_text("Used by the SIC trace; pick SIC or TIC + SIC");
+            .on_hover_text(t(
+                "Window around the m/z that the SIC trace adds up",
+                "Fenster um das m/z, das die SIC-Spur aufsummiert",
+            ))
+            .on_disabled_hover_text(t(
+                "Used by the SIC trace; pick SIC or TIC + SIC",
+                "Für die SIC-Spur; SIC oder TIC + SIC wählen",
+            ));
         });
     }
 
@@ -452,27 +526,33 @@ impl App {
         let run = &mut self.runs[self.active];
         let mut scan = None;
         ui.horizontal_wrapped(|ui| {
-            let label = ui.label("Scan");
+            let label = ui.label(t("Scan", "Scan"));
             let mut n = run.scan + 1;
             if ui
                 .add(egui::DragValue::new(&mut n).range(1..=run.data.scan_count()))
                 .labelled_by(label.id)
-                .on_hover_text("Scan whose spectrum is shown; ←/→ step through the scans")
+                .on_hover_text(t(
+                    "Scan whose spectrum is shown; ←/→ step through the scans",
+                    "Scan, dessen Spektrum gezeigt wird; ←/→ blättern durch die Scans",
+                ))
                 .changed()
             {
                 scan = Some(n - 1);
             }
             let label = ui.label(format!("RT ({})", self.view.unit.label()));
-            let mut t = self.view.time(run.minutes[run.scan]);
+            let mut rt = self.view.time(run.minutes[run.scan]);
             if ui
-                .add(egui::DragValue::new(&mut t).max_decimals(3))
+                .add(egui::DragValue::new(&mut rt).max_decimals(3))
                 .labelled_by(label.id)
-                .on_hover_text("Retention time of the shown scan; the nearest scan is taken")
+                .on_hover_text(t(
+                    "Retention time of the shown scan; the nearest scan is taken",
+                    "Retentionszeit des gezeigten Scans; der nächste Scan wird genommen",
+                ))
                 .changed()
             {
-                scan = run.data.scan_at(self.view.minutes(t) * 60.0);
+                scan = run.data.scan_at(self.view.minutes(rt) * 60.0);
             }
-            self.view.spectrum_nav = view::nav_buttons(ui, SPECTRUM_HELP);
+            self.view.spectrum_nav = view::nav_buttons(ui, &spectrum_help());
         });
         if let Some(s) = scan {
             (run.scan, run.component) = (s, None);
@@ -507,8 +587,8 @@ impl App {
             .map_or(detail::Mode::Normal, |_| self.spectrum_mode);
         let top = ui.cursor().min;
         let label = match self.export.norm {
-            md_core::spectrum::Normalization::None => "Intensity",
-            _ => "Normalised intensity",
+            md_core::spectrum::Normalization::None => t("Intensity", "Intensität"),
+            _ => t("Normalised intensity", "Normierte Intensität"),
         };
         let (ions, charts) = match (&cmp, mode) {
             (Some((c, lib)), detail::Mode::Split | detail::Mode::Difference) => {

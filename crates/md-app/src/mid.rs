@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, Plot};
@@ -180,10 +181,14 @@ impl MidWindow {
     ) {
         self.poll(ctx);
         let mut open = self.open;
-        egui::Window::new("Mass isotopomer distributions")
-            .tool_window(ctx, 3, [800.0, 600.0])
-            .open(&mut open)
-            .show(ctx, |ui| self.contents(ui, lib, cal, reference));
+        egui::Window::new(t(
+            "Mass isotopomer distributions",
+            "Massenisotopomerverteilungen",
+        ))
+        .id(egui::Id::unique("Mass isotopomer distributions"))
+        .tool_window(ctx, 3, [800.0, 600.0])
+        .open(&mut open)
+        .show(ctx, |ui| self.contents(ui, lib, cal, reference));
         self.open = open;
     }
 
@@ -197,7 +202,7 @@ impl MidWindow {
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.note = "MID determination crashed.".into()
+                self.note = t("MID determination crashed.", "MID-Bestimmung abgestürzt.").into()
             }
         }
         self.job = None;
@@ -240,7 +245,7 @@ impl MidWindow {
                     name.split('.').next().unwrap_or_default().to_owned()
                 })
                 .collect(),
-            false => vec!["labelled".into()],
+            false => vec![t("labelled", "markiert").into()],
         };
         let column_paths: Vec<String> = match method.per_run() {
             true => (self.labelled.iter())
@@ -265,7 +270,11 @@ impl MidWindow {
             let started = Instant::now();
             let mids_lib = mid_library(&l.compounds);
             if mids_lib.is_empty() {
-                return Err("No substance of the library has a fragment with sum formula (MID fragments in the library editor).".into());
+                return Err(t(
+                    "No substance of the library has a fragment with sum formula (MID fragments in the library editor).",
+                    "Keine Substanz der Bibliothek hat ein Fragment mit Summenformel (MID-Fragmente im Bibliothekseditor).",
+                )
+                .into());
             }
             // The shift reference is an index into the scanned library, which keeps only
             // substances with fragments.
@@ -275,7 +284,7 @@ impl MidWindow {
                 true => PreparedLibrary::new_rt_only(&mids_lib, &l.settings),
                 false => PreparedLibrary::new(&mids_lib, &l.settings),
             };
-            let cancelled = || "Cancelled.".to_owned();
+            let cancelled = || t("Cancelled.", "Abgebrochen.").to_owned();
             let (mut runs, mut errors) =
                 scan_runs(&paths, &prepared, &s, 4, &d, &c).ok_or_else(cancelled)?;
             // The quant ions are the fragment ions, so the rescan fills those that were not deconvoluted.
@@ -291,8 +300,9 @@ impl MidWindow {
             .ok_or_else(cancelled)?;
             errors.extend(more.errors);
             if let Some((n, _)) = shift_ref.filter(|_| s.shift.is_none()) {
-                errors.push(format!(
-                    "RT shift reference {n} is not a substance with MID fragments; scanned without RT shift."
+                errors.push(tf!(
+                    "RT shift reference {n} is not a substance with MID fragments; scanned without RT shift.",
+                    "RT-Verschiebungsreferenz {n} ist keine Substanz mit MID-Fragmenten; ohne RT-Verschiebung gescannt."
                 ));
             }
             // shortcut: a run that fails to load is dropped by scan_runs, which shifts the group
@@ -372,14 +382,15 @@ impl MidWindow {
                 let d = job.done.load(Relaxed);
                 ui.add(
                     egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
-                        .text(format!(
+                        .text(tf!(
                             "{d} / {} runs, {:.0?}",
+                            "{d} / {} Läufe, {:.0?}",
                             job.total,
                             job.started.elapsed()
                         ))
                         .desired_width(300.0),
                 );
-                if ui.button("Cancel").clicked() {
+                if ui.button(t("Cancel", "Abbrechen")).clicked() {
                     job.cancel.store(true, Relaxed);
                 }
             }
@@ -389,27 +400,34 @@ impl MidWindow {
                 let ready =
                     lib.filter(|l| problem.is_none() && l.settings == self.applied.search());
                 if ui
-                    .add_enabled(ready.is_some(), egui::Button::new("Start"))
+                    .add_enabled(ready.is_some(), egui::Button::new(t("Start", "Starten")))
                     .clicked()
                     && let Some(l) = ready
                 {
                     self.start(ui.ctx(), l, cal, reference);
                 }
                 match (lib, problem) {
-                    (None, _) => ui.label("Open a library first (File → Open library)."),
-                    (_, Some(p)) => ui.label(p),
-                    (Some(l), None) if l.settings != self.applied.search() => {
-                        ui.label("Library is being prepared for the new search settings.")
-                    }
-                    (Some(l), None) => ui.label(format!(
-                        "Library {}, {}",
-                        l.name,
-                        if cal.is_some() {
-                            "RI calibrated"
-                        } else {
-                            "no RI calibration"
-                        }
+                    (None, _) => ui.label(t(
+                        "Open a library first (File → Open library).",
+                        "Erst eine Bibliothek öffnen (Datei → Bibliothek öffnen).",
                     )),
+                    (_, Some(p)) => ui.label(p),
+                    (Some(l), None) if l.settings != self.applied.search() => ui.label(t(
+                        "Library is being prepared for the new search settings.",
+                        "Die Bibliothek wird für die neuen Sucheinstellungen vorbereitet.",
+                    )),
+                    (Some(l), None) => ui.label(match cal.is_some() {
+                        true => tf!(
+                            "Library {}, RI calibrated",
+                            "Bibliothek {}, RI-kalibriert",
+                            l.name
+                        ),
+                        false => tf!(
+                            "Library {}, no RI calibration",
+                            "Bibliothek {}, keine RI-Kalibrierung",
+                            l.name
+                        ),
+                    }),
                 };
             }
         });
@@ -428,13 +446,22 @@ impl MidWindow {
     pub fn problem(&self) -> Option<&'static str> {
         let tracer = self.tracer.trim();
         if self.labelled.is_empty() {
-            Some("Add labelled runs.")
+            Some(t("Add labelled runs.", "Markierte Läufe hinzufügen."))
         } else if self.kind == Kind::Reference && self.unlabelled.is_empty() {
-            Some("Add unlabelled runs for the reference correction.")
+            Some(t(
+                "Add unlabelled runs for the reference correction.",
+                "Unmarkierte Läufe für die Referenzkorrektur hinzufügen.",
+            ))
         } else if !tracer.is_empty() && self.table.isotopes(tracer).is_none() {
-            Some("The tracer is not an element of the isotope table.")
+            Some(t(
+                "The tracer is not an element of the isotope table.",
+                "Der Tracer ist kein Element der Isotopentabelle.",
+            ))
         } else if tracer.is_empty() && matches!(self.kind, Kind::Library | Kind::Formula) {
-            Some("This correction needs a tracer element.")
+            Some(t(
+                "This correction needs a tracer element.",
+                "Diese Korrektur braucht ein Tracer-Element.",
+            ))
         } else {
             None
         }
@@ -442,21 +469,21 @@ impl MidWindow {
 
     pub fn settings(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("mid settings").show(ui, |ui| {
-            ui.label("Correction");
+            ui.label(t("Correction", "Korrektur"));
             ui.vertical(|ui| {
                 // A grid column starts as narrow as its first frame; the short titles never wrap.
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 for (kind, title, hint) in [
-                    (Kind::Uncorrected, "Uncorrected MIDs", "Mean and confidence interval of the labelled runs' normalised fragment spectra."),
-                    (Kind::Reference, "Corrected using reference", "Labelled runs against unlabelled runs of the same substances."),
-                    (Kind::Library, "Corrected using library", "Every labelled run against the library spectrum, corrected for the tracer's natural M+1."),
-                    (Kind::Formula, "Corrected using sum formulas", "Every labelled run against the natural isotope pattern of the fragment's sum formula."),
+                    (Kind::Uncorrected, t("Uncorrected MIDs", "Unkorrigierte MIDs"), t("Mean and confidence interval of the labelled runs' normalised fragment spectra.", "Mittelwert und Konfidenzintervall der normierten Fragmentspektren der markierten Läufe.")),
+                    (Kind::Reference, t("Corrected using reference", "Korrigiert mit Referenz"), t("Labelled runs against unlabelled runs of the same substances.", "Markierte Läufe gegen unmarkierte Läufe derselben Substanzen.")),
+                    (Kind::Library, t("Corrected using library", "Korrigiert mit Bibliothek"), t("Every labelled run against the library spectrum, corrected for the tracer's natural M+1.", "Jeder markierte Lauf gegen das Bibliotheksspektrum, korrigiert um das natürliche M+1 des Tracers.")),
+                    (Kind::Formula, t("Corrected using sum formulas", "Korrigiert mit Summenformeln"), t("Every labelled run against the natural isotope pattern of the fragment's sum formula.", "Jeder markierte Lauf gegen das natürliche Isotopenmuster der Summenformel des Fragments.")),
                 ] {
                     ui.radio_value(&mut self.kind, kind, title).on_hover_text(hint);
                 }
             });
             ui.end_row();
-            let label = ui.label("Tracer element");
+            let label = ui.label(t("Tracer element", "Tracer-Element"));
             ui.add(egui::TextEdit::singleline(&mut self.tracer).desired_width(40.0))
                 .labelled_by(label.id);
             ui.end_row();
@@ -476,9 +503,9 @@ impl MidWindow {
         crate::guided::advanced(ui, "mid settings", |ui| {
             egui::Grid::new("mid advanced").show(ui, |ui| {
                 if self.kind == Kind::Reference {
-                    ui.label("M1 correction");
+                    ui.label(t("M1 correction", "M1-Korrektur"));
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.m1, "natural abundance");
+                        ui.checkbox(&mut self.m1, t("natural abundance", "natürliche Häufigkeit"));
                         ui.add_enabled(
                             self.m1,
                             egui::DragValue::new(&mut self.abundance)
@@ -489,8 +516,11 @@ impl MidWindow {
                     });
                     ui.end_row();
                 }
-                let hint = "Search the ion traces again for fragment ions the deconvolution missed";
-                let rescan = ui.label("Rescan missing ions").on_hover_text(hint);
+                let hint = t(
+                    "Search the ion traces again for fragment ions the deconvolution missed",
+                    "Die Ionenspuren erneut nach Fragment-Ionen durchsuchen, die die Dekonvolution übersehen hat",
+                );
+                let rescan = ui.label(t("Rescan missing ions", "Fehlende Ionen neu suchen")).on_hover_text(hint);
                 ui.add(egui::Checkbox::without_text(&mut self.rescan))
                     .labelled_by(rescan.id)
                     .on_hover_text(hint);
@@ -500,9 +530,17 @@ impl MidWindow {
     }
 
     pub fn run_lists(&mut self, ui: &mut egui::Ui) {
-        runs(ui, "Labelled runs", &mut self.labelled);
+        runs(
+            ui,
+            t("Labelled runs", "Markierte Läufe"),
+            &mut self.labelled,
+        );
         if self.kind == Kind::Reference {
-            runs(ui, "Unlabelled runs", &mut self.unlabelled);
+            runs(
+                ui,
+                t("Unlabelled runs", "Unmarkierte Läufe"),
+                &mut self.unlabelled,
+            );
         }
     }
 }
@@ -510,17 +548,23 @@ impl MidWindow {
 fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
     ui.horizontal(|ui| {
         ui.label(format!("{title}: {}", paths.len()));
-        if ui.button("Add…").clicked()
+        if ui.button(t("Add…", "Hinzufügen…")).clicked()
             && let Some(p) = rfd::FileDialog::new()
                 .add_filter("NetCDF", &["cdf", "CDF", "nc"])
-                .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
+                .add_filter(
+                    t(
+                        "Old MetaboliteDetector (.bin + .idx)",
+                        "Altes MetaboliteDetector (.bin + .idx)",
+                    ),
+                    &["bin"],
+                )
                 .pick_files()
         {
             paths.extend(p);
             paths.sort();
             paths.dedup();
         }
-        if ui.button("Clear").clicked() {
+        if ui.button(t("Clear", "Leeren")).clicked() {
             paths.clear();
         }
     })
@@ -538,24 +582,40 @@ fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
 /// shortcut: every substance header is laid out each frame; fine for hundreds of substances.
 fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(format!(
-            "{} with MIDs in {}",
-            match r.mids.compounds.len() {
-                1 => "1 substance".into(),
-                n => format!("{n} substances"),
-            },
-            crate::view::took(r.took)
-        ));
-        export_buttons(ui, "MIDs", "mids.txt", &r.text, note);
+        let took = crate::view::took(r.took);
+        ui.label(match r.mids.compounds.len() {
+            1 => tf!(
+                "1 substance with MIDs in {took}",
+                "1 Substanz mit MIDs in {took}"
+            ),
+            n => tf!(
+                "{n} substances with MIDs in {took}",
+                "{n} Substanzen mit MIDs in {took}"
+            ),
+        });
+        let mids = [
+            t("Export MIDs…", "MIDs exportieren…"),
+            t("Copy MIDs", "MIDs kopieren"),
+            t("Copied the MIDs.", "MIDs kopiert."),
+        ];
+        export_buttons(ui, mids, "mids.txt", &r.text, note);
         if let Some(text) = &r.stats_text {
-            export_buttons(ui, "statistics", "mid-statistics.txt", text, note);
+            let stats = [
+                t("Export statistics…", "Statistik exportieren…"),
+                t("Copy statistics", "Statistik kopieren"),
+                t("Copied the statistics.", "Statistik kopiert."),
+            ];
+            export_buttons(ui, stats, "mid-statistics.txt", text, note);
         }
     });
     let error = ui.visuals().error_fg_color;
     if r.mids.compounds.is_empty() {
         ui.colored_label(
             error,
-            "No compounds found during MID determination. Check library and RI window.",
+            t(
+                "No compounds found during MID determination. Check library and RI window.",
+                "Bei der MID-Bestimmung keine Substanzen gefunden. Bibliothek und RI-Fenster prüfen.",
+            ),
         );
     }
     for e in r.errors.iter().chain(&r.mids.errors) {
@@ -584,18 +644,24 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
                     return;
                 }
                 let up = ui.add_enabled(i > 0, egui::Button::new("▲").small());
-                if up.on_hover_text("Move substance up").clicked() {
+                if up
+                    .on_hover_text(t("Move substance up", "Substanz nach oben"))
+                    .clicked()
+                {
                     mv = Some(Move::Compound(i, i - 1));
                 }
                 let down = ui.add_enabled(i + 1 < n, egui::Button::new("▼").small());
-                if down.on_hover_text("Move substance down").clicked() {
+                if down
+                    .on_hover_text(t("Move substance down", "Substanz nach unten"))
+                    .clicked()
+                {
                     mv = Some(Move::Compound(i, i + 1));
                 }
             });
             state.show_body_indented(&head.response, ui, |ui| {
                 for (j, f) in c.fragments.iter().enumerate() {
                     let stats = r.stats.get(i).map_or(&[][..], |s| &s[j]);
-                    ui.strong(format!("Fragment {}–{}", f.lo, f.hi));
+                    ui.strong(tf!("Fragment {}–{}", "Fragment {}–{}", f.lo, f.hi));
                     let id = (c.compound, j);
                     mv = fragment_grid(ui, f, (&r.columns, &r.paths), stats, id).or(mv);
                     fragment_plot(ui, f, &r.columns, stats, id);
@@ -608,26 +674,31 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
     }
 }
 
-/// "Export …" and "Copy …" of one of the old program's text exports.
-fn export_buttons(ui: &mut egui::Ui, what: &str, file: &str, text: &str, note: &mut String) {
-    if ui.button(format!("Export {what}…")).clicked()
+/// "Export …" and "Copy …" of one of the old program's text exports; `labels` are
+/// `[export button, copy button, note after copying]`.
+fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, note: &mut String) {
+    let [export, copy, copied] = labels;
+    if ui.button(export).clicked()
         && let Some(p) = rfd::FileDialog::new()
-            .add_filter("Text", &["txt", "tsv"])
+            .add_filter(t("Text", "Text"), &["txt", "tsv"])
             .set_file_name(file)
             .save_file()
     {
         *note = match std::fs::write(&p, text) {
-            Ok(()) => format!("Saved {}", p.display()),
-            Err(e) => format!("Export failed: {e}"),
+            Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
+            Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
         };
     }
     if ui
-        .button(format!("Copy {what}"))
-        .on_hover_text("Tab-separated, as the export file")
+        .button(copy)
+        .on_hover_text(t(
+            "Tab-separated, as the export file",
+            "Tabulatorgetrennt, wie die Exportdatei",
+        ))
         .clicked()
     {
         ui.ctx().copy_text(text.to_owned());
-        *note = format!("Copied the {what}.");
+        *note = copied.to_owned();
     }
 }
 
@@ -644,7 +715,7 @@ fn run_head(ui: &mut egui::Ui, (columns, paths): (&[String], &[String]), i: usiz
         if i > 0
             && ui
                 .small_button("‹")
-                .on_hover_text("Move run left")
+                .on_hover_text(t("Move run left", "Lauf nach links"))
                 .clicked()
         {
             mv = Some(Move::Run(i, i - 1));
@@ -656,7 +727,7 @@ fn run_head(ui: &mut egui::Ui, (columns, paths): (&[String], &[String]), i: usiz
         if i + 1 < columns.len()
             && ui
                 .small_button("›")
-                .on_hover_text("Move run right")
+                .on_hover_text(t("Move run right", "Lauf nach rechts"))
                 .clicked()
         {
             mv = Some(Move::Run(i, i + 1));
@@ -680,12 +751,14 @@ fn fragment_grid(
             mv = run_head(ui, (columns, paths), i).or(mv);
         }
         if !stats.is_empty() {
-            ui.strong("Mean").on_hover_text(
+            ui.strong(t("Mean", "Mittelwert")).on_hover_text(t(
                 "Mean of the labelled runs; shares of 0 and runs without MID do not count",
-            );
-            ui.strong("StdErr").on_hover_text(
+                "Mittelwert der markierten Läufe; Anteile von 0 und Läufe ohne MID zählen nicht",
+            ));
+            ui.strong(t("StdErr", "Std.-Fehler")).on_hover_text(t(
                 "Standard error of the mean (SD / √n), none for fewer than two runs",
-            );
+                "Standardfehler des Mittelwerts (SD / √n), keiner bei weniger als zwei Läufen",
+            ));
         }
         ui.end_row();
         for k in 0..f.isotopomers {
@@ -699,9 +772,10 @@ fn fragment_grid(
                     None => m,
                 });
                 if v.is_some_and(|v| v < 0.0) {
-                    shown.on_hover_text(
+                    shown.on_hover_text(t(
                         "Below 0 after the correction: noise around 0, not a real share",
-                    );
+                        "Nach der Korrektur unter 0: Rauschen um 0, kein echter Anteil",
+                    ));
                 }
             }
             if let Some((mean, se)) = stats.get(k) {
@@ -710,11 +784,14 @@ fn fragment_grid(
             }
             ui.end_row();
         }
-        ui.label("R²").on_hover_text(
+        ui.label("R²").on_hover_text(t(
             "How well the isotopomers explain the measured spectra; 1 is a perfect fit. It is always 1 \
              when there are no more measured values than isotopomers, as with one library spectrum. \
              – means no fit: uncorrected MIDs are not fitted.",
-        );
+            "Wie gut die Isotopomere die gemessenen Spektren erklären; 1 ist eine perfekte Anpassung. \
+             Es ist immer 1, wenn es nicht mehr Messwerte als Isotopomere gibt, wie bei einem \
+             Bibliotheksspektrum. – heißt keine Anpassung: unkorrigierte MIDs werden nicht angepasst.",
+        ));
         for fit in &f.fits {
             ui.label(cell(fit.as_ref().and_then(|x| x.r2)));
         }
@@ -749,7 +826,7 @@ fn fragment_plot(
         .collect();
     if !stats.is_empty() {
         series.push((
-            "Mean ± StdErr",
+            t("Mean ± StdErr", "Mittelwert ± Std.-Fehler"),
             stats.iter().map(|s| (s.0, Some(s.1))).collect(),
         ));
     }
@@ -762,7 +839,7 @@ fn fragment_plot(
         .allow_drag(false)
         .allow_zoom(false)
         .allow_scroll(false)
-        .y_axis_label("Share")
+        .y_axis_label(t("Share", "Anteil"))
         .x_axis_formatter(move |m, _| {
             let k = m.value.round();
             match (m.value - k).abs() < 1e-6 && k >= 0.0 && (k as usize) < n {

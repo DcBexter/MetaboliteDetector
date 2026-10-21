@@ -25,6 +25,7 @@ ron = "0.12"
 semver = "1.0.28"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+sys-locale = "0.3.2"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }

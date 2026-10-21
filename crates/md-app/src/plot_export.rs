@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::export::{crop, write_file, write_png};
+use crate::export::{crop, not_visible, write_file, write_png};
+use crate::lang::t;
 use crate::vector;
 
 /// Where a plot was drawn: the screen rectangle (points) and the layer that holds its shapes.
@@ -73,38 +74,52 @@ fn size_id() -> egui::Id {
 
 /// A "Save plot" menu button for a plot's own window.
 pub fn button(ui: &mut egui::Ui, area: Area, stem: &str) {
-    ui.menu_button("Save plot…", |ui| entries(ui, area, stem));
+    ui.menu_button(t("Save plot…", "Grafik speichern…"), |ui| {
+        entries(ui, area, stem);
+    });
 }
 
 /// The menu entries: pictures of the plot and their size.
 pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
     if !area.rect.is_positive() {
-        ui.weak("Show the plot to save it as a picture (View menu).");
+        ui.weak(t(
+            "Show the plot to save it as a picture (View menu).",
+            "Die Grafik einblenden, um sie als Bild zu speichern (Menü Ansicht).",
+        ));
         return;
     }
     let ctx = ui.ctx().clone();
     let mut size: [f32; 2] = ctx.data(|d| d.get_temp(size_id())).unwrap_or_default();
     for (label, hint, kind, ext, name) in [
         (
-            "As PNG…",
-            "Save the plot as it is shown on screen",
+            t("As PNG…", "Als PNG…"),
+            t(
+                "Save the plot as it is shown on screen",
+                "Die Grafik so speichern, wie sie am Bildschirm aussieht",
+            ),
             Kind::Png,
             "png",
-            "PNG image",
+            t("PNG image", "PNG-Bild"),
         ),
         (
-            "As SVG…",
-            "Vector graphic; stays sharp at any size",
+            t("As SVG…", "Als SVG…"),
+            t(
+                "Vector graphic; stays sharp at any size",
+                "Vektorgrafik; bleibt in jeder Größe scharf",
+            ),
             Kind::Svg,
             "svg",
-            "SVG image",
+            t("SVG image", "SVG-Bild"),
         ),
         (
-            "As PDF…",
-            "One-page vector graphic for reports",
+            t("As PDF…", "Als PDF…"),
+            t(
+                "One-page vector graphic for reports",
+                "Einseitige Vektorgrafik für Berichte",
+            ),
             Kind::Pdf,
             "pdf",
-            "PDF document",
+            t("PDF document", "PDF-Dokument"),
         ),
     ] {
         if ui.button(label).on_hover_text(hint).clicked()
@@ -129,8 +144,11 @@ pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
         }
     }
     if ui
-        .button("Copy image")
-        .on_hover_text("Copy the plot as a picture")
+        .button(t("Copy image", "Bild kopieren"))
+        .on_hover_text(t(
+            "Copy the plot as a picture",
+            "Die Grafik als Bild kopieren",
+        ))
         .clicked()
     {
         ctx.data_mut(|d| {
@@ -148,10 +166,11 @@ pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
         ui.close();
     }
     ui.separator();
-    ui.label("Size of SVG and PDF");
+    ui.label(t("Size of SVG and PDF", "Größe von SVG und PDF"));
     ui.horizontal(|ui| {
         let mut changed = false;
-        for (v, what) in size.iter_mut().zip(["Width", "Height"]) {
+        let names = [t("Width", "Breite"), t("Height", "Höhe")];
+        for (v, what) in size.iter_mut().zip(names) {
             let label = ui.label(what);
             changed |= ui
                 .add(
@@ -160,16 +179,17 @@ pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
                         .speed(10.0)
                         .custom_formatter(|n, _| {
                             if n == 0.0 {
-                                "as shown".to_owned()
+                                t("as shown", "wie gezeigt").to_owned()
                             } else {
                                 format!("{n:.0} pt")
                             }
                         }),
                 )
                 .labelled_by(label.id)
-                .on_hover_text(
+                .on_hover_text(t(
                     "0 keeps the shown size; with both set the plot keeps its proportions",
-                )
+                    "0 behält die gezeigte Größe; sind beide gesetzt, bleiben die Proportionen erhalten",
+                ))
                 .changed();
         }
         if changed {
@@ -198,9 +218,9 @@ fn run(ctx: &egui::Context, p: Pending) -> Result<(), String> {
         Kind::Svg | Kind::Pdf => {
             let scene = vector::capture(ctx, p.area.layer, rect);
             if scene.items.is_empty() {
-                return Err("nothing to export: the plot is not visible".into());
+                return Err(not_visible().into());
             }
-            let path = p.path.ok_or("no file chosen")?;
+            let path = p.path.ok_or(t("no file chosen", "keine Datei gewählt"))?;
             let [w, h] = p.size;
             if p.kind == Kind::Svg {
                 let svg = vector::svg(&scene, w, h);

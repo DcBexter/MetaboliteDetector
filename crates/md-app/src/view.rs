@@ -1,5 +1,6 @@
 //! Chromatogram view options (derivative, time unit, auto Y, score filter) and the run info window.
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::TimeUnit;
@@ -72,21 +73,47 @@ impl Nav {
 pub fn nav_buttons(ui: &mut egui::Ui, help: &[&str]) -> Option<Nav> {
     let mut nav = None;
     for (n, text, hover) in [
-        (Nav::In, "+", "Zoom in on the middle of the plot"),
-        (Nav::Out, "−", "Zoom out"),
+        (
+            Nav::In,
+            "+",
+            t(
+                "Zoom in on the middle of the plot",
+                "In die Mitte des Plots zoomen",
+            ),
+        ),
+        (Nav::Out, "−", t("Zoom out", "Herauszoomen")),
         (
             Nav::All,
-            "All",
-            "Show all data again (double-click on the plot does the same)",
+            t("All", "Alles"),
+            t(
+                "Show all data again (double-click on the plot does the same)",
+                "Wieder alle Daten zeigen (ein Doppelklick auf den Plot tut dasselbe)",
+            ),
         ),
-        (Nav::Left, "◀", "Move the view to the left"),
-        (Nav::Right, "▶", "Move the view to the right"),
+        (
+            Nav::Left,
+            "◀",
+            t(
+                "Move the view to the left",
+                "Die Ansicht nach links verschieben",
+            ),
+        ),
+        (
+            Nav::Right,
+            "▶",
+            t(
+                "Move the view to the right",
+                "Die Ansicht nach rechts verschieben",
+            ),
+        ),
     ] {
         if ui.button(text).on_hover_text(hover).clicked() {
             nav = Some(n);
         }
     }
-    let r = ui.button("?").on_hover_text("How to use this plot");
+    let r = ui
+        .button("?")
+        .on_hover_text(t("How to use this plot", "So bedienen Sie diesen Plot"));
     egui::Popup::from_toggle_button_response(&r)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
@@ -146,14 +173,18 @@ impl View {
     }
 
     pub fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.derivative, "1st derivative")
-            .on_hover_text(
+        ui.checkbox(&mut self.derivative, t("1st derivative", "1. Ableitung"))
+            .on_hover_text(t(
                 "Plot the slope per scan instead of the intensity; hides component marks",
-            );
-        ui.checkbox(&mut self.auto_y, "Auto Y")
-            .on_hover_text("Fit the Y axis to the visible time range");
+                "Die Steigung pro Scan statt der Intensität zeichnen; blendet die Komponentenmarken aus",
+            ));
+        ui.checkbox(&mut self.auto_y, t("Auto Y", "Auto-Y"))
+            .on_hover_text(t(
+                "Fit the Y axis to the visible time range",
+                "Die Y-Achse an den sichtbaren Zeitbereich anpassen",
+            ));
         let before = self.unit;
-        let time = ui.label("Time:");
+        let time = ui.label(t("Time:", "Zeit:"));
         egui::ComboBox::from_id_salt("time unit")
             .selected_text(self.unit.label())
             .show_ui(ui, |ui| {
@@ -163,13 +194,16 @@ impl View {
             })
             .response
             .labelled_by(time.id)
-            .on_hover_text("Unit of the time axis");
+            .on_hover_text(t("Unit of the time axis", "Einheit der Zeitachse"));
         if self.unit != before {
             self.bounds_in = Some(before);
         }
-        ui.toggle_value(&mut self.crosshair, "Crosshair")
-            .on_hover_text("Draw cross lines at the pointer in the chromatograms");
-        ui.add(egui::Label::new("Names with score").extend());
+        ui.toggle_value(&mut self.crosshair, t("Crosshair", "Fadenkreuz"))
+            .on_hover_text(t(
+                "Draw cross lines at the pointer in the chromatograms",
+                "Fadenkreuz am Mauszeiger in den Chromatogrammen zeichnen",
+            ));
+        ui.add(egui::Label::new(t("Names with score", "Namen mit Score")).extend());
         // The triangles wear the colours of the names they switch.
         let weak = ui.visuals().weak_text_color();
         for ((on, text), shade) in self
@@ -182,7 +216,10 @@ impl View {
             let label = egui::RichText::new(format!("▲ {text}")).color(color);
             if ui
                 .button(label)
-                .on_hover_text("A name is shown if any switch matching its library score is on")
+                .on_hover_text(t(
+                    "A name is shown if any switch matching its library score is on",
+                    "Ein Name wird gezeigt, wenn ein zu seinem Bibliotheks-Score passender Schalter an ist",
+                ))
                 .clicked()
             {
                 *on = !*on;
@@ -197,7 +234,8 @@ impl App {
             return;
         };
         let mut open = self.view.info_open;
-        egui::Window::new("Run info")
+        egui::Window::new(t("Run info", "Laufinfo"))
+            .id(egui::Id::unique("Run info"))
             .tool_window(ctx, 7, [420.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| self.run_info(ui, run));
@@ -213,12 +251,12 @@ impl App {
         let lowest = first.fold(f32::INFINITY, f32::min);
         let highest = last.fold(f32::NEG_INFINITY, f32::max);
         let peak = self.settings.key().0;
-        let yes = |b: bool| if b { "yes" } else { "no" };
+        let yes = |b: bool| if b { t("yes", "ja") } else { t("no", "nein") };
         let rows = [
-            ("Source file", r.path.display().to_string()),
-            ("Scans", d.scan_count().to_string()),
+            (t("Source file", "Quelldatei"), r.path.display().to_string()),
+            (t("Scans", "Scans"), d.scan_count().to_string()),
             (
-                "First / last RT",
+                t("First / last RT", "Erste / letzte RT"),
                 format!(
                     "{:.3} / {:.3} min",
                     times.first().unwrap_or(&0.0) / 60.0,
@@ -226,14 +264,14 @@ impl App {
                 ),
             ),
             (
-                "Measurement time",
+                t("Measurement time", "Messdauer"),
                 format!(
                     "{:.1} s",
                     times.last().unwrap_or(&0.0) - times.first().unwrap_or(&0.0)
                 ),
             ),
             (
-                "Lowest mass",
+                t("Lowest mass", "Kleinste Masse"),
                 if lowest.is_finite() {
                     format!("{lowest:.2}")
                 } else {
@@ -241,20 +279,27 @@ impl App {
                 },
             ),
             (
-                "Mass traces (nominal)",
+                t("Mass traces (nominal)", "Massenspuren (nominal)"),
                 format!("{}", (highest.round() - lowest.round() + 1.0).max(0.0)),
             ),
-            ("Noise factor", format!("{}", md_core::peaks::NOISE_FACTOR)),
-            ("RI calibration", yes(self.ri.cal.is_some()).into()),
             (
-                "RT correction",
+                t("Noise factor", "Rauschfaktor"),
+                format!("{}", md_core::peaks::NOISE_FACTOR),
+            ),
+            (
+                t("RI calibration", "RI-Kalibrierung"),
+                yes(self.ri.cal.is_some()).into(),
+            ),
+            (
+                t("RT correction", "RT-Korrektur"),
                 yes(r.ident.as_ref().is_some_and(|i| i.2.is_some())).into(),
             ),
             (
-                "Peak detection",
+                t("Peak detection", "Peakerkennung"),
                 // The names of the Settings dialog.
-                format!(
+                tf!(
                     "start slope {}, end slope {}, minimum S/N {}, {} apex steps per scan",
+                    "Steigung am Peakbeginn {}, Steigung am Peakende {}, Minimum-S/N {}, {} Apex-Schritte pro Scan",
                     peak.threshold_begin,
                     peak.threshold_end,
                     peak.min_peak_height,

@@ -14,6 +14,7 @@ use md_core::search::{
     map_compounds_to_library, shift_to_reference,
 };
 
+use crate::lang::{t, tf};
 use crate::settings::Pick;
 use crate::{App, Run, poll_job, spawn};
 
@@ -145,10 +146,14 @@ impl Nist {
 impl App {
     pub fn open_library_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button("Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf, TargetSearch .txt)…")
-            .on_hover_text(
+            .button(t(
+                "Open library (.mdlib, .lbr, .msl, NIST .msp/.sdf, TargetSearch .txt)…",
+                "Bibliothek öffnen (.mdlib, .lbr, .msl, NIST .msp/.sdf, TargetSearch .txt)…",
+            ))
+            .on_hover_text(t(
                 "Load a mass spectral library; components are then identified against it",
-            )
+                "Lädt eine Massenspektren-Bibliothek; die Komponenten werden dann mit ihr identifiziert",
+            ))
             .clicked()
         {
             self.pick_library(ui.ctx(), Pick::Library);
@@ -163,13 +168,19 @@ impl App {
                 let types = [
                     "mdlib", "lbr", "msl", "MSL", "msp", "MSP", "sdf", "SDF", "txt",
                 ];
-                if let Some(path) = dialog.add_filter("Library", &types).pick_file() {
+                if let Some(path) = dialog
+                    .add_filter(t("Library", "Bibliothek"), &types)
+                    .pick_file()
+                {
                     self.open_library(ctx, path);
                 }
             }
             Pick::Nist => {
                 let types = ["sdf", "SDF", "msp", "MSP"];
-                if let Some(path) = dialog.add_filter("NIST text", &types).pick_file() {
+                if let Some(path) = dialog
+                    .add_filter(t("NIST text", "NIST-Text"), &types)
+                    .pick_file()
+                {
                     self.open_nist(ctx, path);
                 }
             }
@@ -183,10 +194,11 @@ impl App {
 
     pub fn open_nist_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button("Open NIST library (.sdf, .msp)…")
-            .on_hover_text(
+            .button(t("Open NIST library (.sdf, .msp)…", "NIST-Bibliothek öffnen (.sdf, .msp)…"))
+            .on_hover_text(t(
                 "Load a NIST library for \"NIST search\" on the selected component; the normal library stays",
-            )
+                "Lädt eine NIST-Bibliothek für die \"NIST-Suche\" zur ausgewählten Komponente; die normale Bibliothek bleibt",
+            ))
             .clicked()
         {
             self.pick_library(ui.ctx(), Pick::Nist);
@@ -203,7 +215,7 @@ impl App {
     pub fn update_nist(&mut self, ctx: &egui::Context) {
         let wanted = self.settings.applied.search();
         if let Some(rx) = &self.nist.job
-            && let Some(result) = poll_job(rx, "NIST library")
+            && let Some(result) = poll_job(rx, t("NIST library", "NIST-Bibliothek"))
         {
             match result {
                 Ok(Ok(lib)) => {
@@ -277,7 +289,7 @@ impl App {
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
-            && let Some(result) = poll_job(rx, "library search")
+            && let Some(result) = poll_job(rx, t("library search", "Bibliothekssuche"))
         {
             match result {
                 Ok(Ok(lib)) => self.library = Some(lib),
@@ -320,7 +332,10 @@ impl App {
                     && k.2 == reference
             };
             if let Some((k, rx)) = &run.ident_job
-                && let Some(result) = poll_job(rx, &format!("{}: identification", run.name))
+                && let Some(result) = poll_job(rx, &{
+                    let name = &run.name;
+                    tf!("{name}: identification", "{name}: Identifizierung")
+                })
             {
                 // A crashed search is not retried for this key; the run shows no hits.
                 let (id, shifted) = result.unwrap_or_else(|e| {
@@ -384,12 +399,13 @@ pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
     let (Some(((lib, ..), id, _)), Some(k)) = (&run.ident, run.component) else {
         return;
     };
-    ui.strong(format!("Library hits ({})", lib.name));
+    let name = &lib.name;
+    ui.strong(tf!("Library hits ({name})", "Bibliothekstreffer ({name})"));
     // A new search runs after a library or calibration change; until then these scores are old.
     if run.ident_job.is_some() {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Searching again…");
+            ui.label(t("Searching again…", "Erneute Suche…"));
         });
     }
     let assigned = id.assigned[k].map(|h| h.compound);
@@ -397,7 +413,7 @@ pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
         .striped(true)
         .show(ui, |ui| hit_rows(ui, &id.hits[k], lib, assigned));
     if id.hits[k].is_empty() {
-        ui.label("No hit.");
+        ui.label(t("No hit.", "Kein Treffer."));
     } else if let Some(note) = assignment_note(&id.hits[k], assigned) {
         ui.weak(note);
     }
@@ -407,19 +423,21 @@ pub fn hits_list(ui: &mut egui::Ui, run: &Run) {
 /// to one component only, the one with the highest score (ties: the lower index).
 fn assignment_note(hits: &[LibraryHit], assigned: Option<usize>) -> Option<&'static str> {
     match assigned {
-        None => {
-            Some("Not assigned: each compound went to a component that scores as high or higher.")
-        }
-        Some(a) if hits.first().is_some_and(|h| h.compound != a) => Some(
+        None => Some(t(
+            "Not assigned: each compound went to a component that scores as high or higher.",
+            "Nicht zugeordnet: Jede Substanz ging an eine Komponente mit gleich hohem oder höherem Score.",
+        )),
+        Some(a) if hits.first().is_some_and(|h| h.compound != a) => Some(t(
             "Assigned to a lower hit: the better ones went to components that score as high or higher.",
-        ),
+            "Einem niedrigeren Treffer zugeordnet: Die besseren gingen an Komponenten mit gleich hohem oder höherem Score.",
+        )),
         Some(_) => None,
     }
 }
 
 /// Hit table rows: score, spectrum score, RI score, name (bold for the assigned one).
 fn hit_rows(ui: &mut egui::Ui, hits: &[LibraryHit], lib: &Library, assigned: Option<usize>) {
-    for head in ["Score", "Spectrum", "RI", "Name"] {
+    for head in ["Score", t("Spectrum", "Spektrum"), "RI", "Name"] {
         ui.strong(head);
     }
     ui.end_row();
@@ -430,7 +448,10 @@ fn hit_rows(ui: &mut egui::Ui, hits: &[LibraryHit], lib: &Library, assigned: Opt
         ui.label(h.ri_sim.map_or("–".into(), |r| format!("{r:.3}")));
         let name = &lib.compounds[h.compound].name;
         if assigned == Some(h.compound) {
-            ui.strong(name).on_hover_text("Assigned to this component");
+            ui.strong(name).on_hover_text(t(
+                "Assigned to this component",
+                "Dieser Komponente zugeordnet",
+            ));
         } else {
             ui.label(name);
         }
@@ -444,20 +465,27 @@ pub fn nist_list(ui: &mut egui::Ui, run: &Run, k: usize, nist: &Nist) -> bool {
         return false;
     };
     let clicked = ui
-        .add_enabled(!nist.busy(), egui::Button::new("NIST search"))
-        .on_hover_text(format!(
-            "Search this component in the NIST library {}; the library hits above stay",
-            lib.name
+        .add_enabled(!nist.busy(), egui::Button::new(t("NIST search", "NIST-Suche")))
+        .on_hover_text({
+            let name = &lib.name;
+            tf!(
+                "Search this component in the NIST library {name}; the library hits above stay",
+                "Sucht diese Komponente in der NIST-Bibliothek {name}; die Bibliothekstreffer oben bleiben",
+            )
+        })
+        .on_disabled_hover_text(t(
+            "The NIST library is being prepared",
+            "Die NIST-Bibliothek wird vorbereitet",
         ))
-        .on_disabled_hover_text("The NIST library is being prepared")
         .clicked();
     if let Some(hits) = nist.hits_for(run, k) {
-        ui.strong(format!("NIST hits ({})", lib.name));
+        let name = &lib.name;
+        ui.strong(tf!("NIST hits ({name})", "NIST-Treffer ({name})"));
         egui::Grid::new("nist hit table")
             .striped(true)
             .show(ui, |ui| hit_rows(ui, hits, lib, None));
         if hits.is_empty() {
-            ui.label("No hit.");
+            ui.label(t("No hit.", "Kein Treffer."));
         }
     }
     clicked

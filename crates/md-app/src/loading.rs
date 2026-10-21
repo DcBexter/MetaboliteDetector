@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use eframe::egui;
 
+use crate::lang::{t, tf};
 use crate::{App, Run, poll_job, settings, spawn};
 
 impl App {
@@ -21,7 +22,7 @@ impl App {
                     data
                 })
                 .and_then(|data| match data.scan_count() {
-                    0 => Err("no scans".into()),
+                    0 => Err(t("no scans", "keine Scans").into()),
                     _ => {
                         // Results the old program saved next to the run replace the analysis
                         // until the settings change. A broken side file only gives a warning.
@@ -37,7 +38,7 @@ impl App {
                         };
                         let saved_calibration =
                             md_core::ri::saved_calibration(&p).unwrap_or_else(|e| {
-                                warnings.push(format!("calibration: {e}"));
+                                warnings.push(tf!("calibration: {e}", "Kalibrierung: {e}"));
                                 None
                             });
                         let run = Run {
@@ -90,7 +91,9 @@ impl App {
                 }
                 Ok(Err(e)) => self.error = Some(e),
                 Err(mpsc::TryRecvError::Empty) => return true,
-                Err(mpsc::TryRecvError::Disconnected) => self.error = Some("loader crashed".into()),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.error = Some(t("loader crashed", "Laden abgestürzt").into())
+                }
             }
             false
         });
@@ -106,8 +109,14 @@ impl App {
         {
             let took = crate::view::took(t.elapsed());
             self.load_note = match self.runs.len() {
-                1 => format!("1 run open, loaded in {took}"),
-                n => format!("{n} runs open, last batch loaded in {took}"),
+                1 => tf!(
+                    "1 run open, loaded in {took}",
+                    "1 Lauf geöffnet, geladen in {took}"
+                ),
+                n => tf!(
+                    "{n} runs open, last batch loaded in {took}",
+                    "{n} Läufe geöffnet, letzter Stapel geladen in {took}"
+                ),
             };
         }
     }

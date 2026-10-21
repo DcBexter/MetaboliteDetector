@@ -10,6 +10,7 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::centroid::{CentroidSettings, ExportKind, reduce};
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use crate::{App, poll_job, spawn};
 
@@ -48,7 +49,10 @@ fn export_runs(
     for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let n = f.file_name().to_string_lossy().into_owned();
         if n.to_lowercase().ends_with(".cdf.tmp") && std::fs::remove_file(f.path()).is_ok() {
-            errors.push(format!("{n}: leftover of an interrupted export, removed"));
+            errors.push(tf!(
+                "{n}: leftover of an interrupted export, removed",
+                "{n}: Rest eines abgebrochenen Exports, entfernt"
+            ));
         }
     }
     for (name, data) in runs {
@@ -66,7 +70,10 @@ fn export_runs(
         let path = dir.join(&file);
         // The single-run dialog asks before replacing; here a file in the folder (maybe a source run) is kept.
         if path.exists() {
-            errors.push(format!("{file}: already exists, skipped"));
+            errors.push(tf!(
+                "{file}: already exists, skipped",
+                "{file}: existiert bereits, übersprungen"
+            ));
             done.fetch_add(1, Relaxed);
             continue;
         }
@@ -87,29 +94,36 @@ impl App {
     pub fn export_all_window(&mut self, ctx: &egui::Context) {
         let e = &mut self.export_all;
         if let Some(job) = &e.job {
-            match poll_job(&job.rx, "NetCDF export") {
+            match poll_job(&job.rx, t("NetCDF export", "Der NetCDF-Export")) {
                 Some(r) => {
                     let (done, total) = (job.done.load(Relaxed), job.total);
                     e.errors = r.unwrap_or_else(|m| vec![m]);
-                    let how = if job.cancel.load(Relaxed) && done < total {
-                        "Cancelled: "
+                    let failed = e.errors.len();
+                    e.note = if job.cancel.load(Relaxed) && done < total {
+                        tf!(
+                            "Cancelled: {done} of {total} runs done, {failed} failed.",
+                            "Abgebrochen: {done} von {total} Läufen fertig, {failed} fehlgeschlagen."
+                        )
                     } else {
-                        ""
+                        tf!(
+                            "{done} of {total} runs done, {failed} failed.",
+                            "{done} von {total} Läufen fertig, {failed} fehlgeschlagen."
+                        )
                     };
-                    e.note = format!(
-                        "{how}{done} of {total} runs done, {} failed.",
-                        e.errors.len()
-                    );
                     e.job = None;
                 }
                 None => ctx.request_repaint_after(Duration::from_millis(200)),
             }
         }
         let mut open = e.open;
-        egui::Window::new("Export all runs as NetCDF")
-            .tool_window(ctx, 13, [420.0, 320.0])
-            .open(&mut open)
-            .show(ctx, |ui| self.export_all_contents(ui));
+        egui::Window::new(t(
+            "Export all runs as NetCDF",
+            "Alle Läufe als NetCDF exportieren",
+        ))
+        .id(egui::Id::unique("Export all runs as NetCDF"))
+        .tool_window(ctx, 13, [420.0, 320.0])
+        .open(&mut open)
+        .show(ctx, |ui| self.export_all_contents(ui));
         self.export_all.open = open;
     }
 
@@ -118,11 +132,22 @@ impl App {
         let e = &mut self.export_all;
         ui.add_enabled_ui(e.job.is_none(), |ui| {
             for kind in ExportKind::ALL {
-                ui.radio_value(&mut e.kind, kind, kind.label());
+                let label = match kind {
+                    ExportKind::Profile => t("Profile", "Profil"),
+                    ExportKind::Centroid => t("Centroid", "Zentroid"),
+                    ExportKind::Nominal => t("Nominal mass", "Nominalmasse"),
+                };
+                ui.radio_value(&mut e.kind, kind, label);
             }
-            ui.checkbox(&mut e.only_shown, "Only runs shown in the plots");
+            ui.checkbox(
+                &mut e.only_shown,
+                t(
+                    "Only runs shown in the plots",
+                    "Nur die in den Grafiken gezeigten Läufe",
+                ),
+            );
             ui.horizontal(|ui| {
-                if ui.button("Folder…").clicked()
+                if ui.button(t("Folder…", "Ordner…")).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     e.dir = Some(dir);
@@ -130,7 +155,9 @@ impl App {
                 ui.label(
                     e.dir
                         .as_ref()
-                        .map_or("No folder chosen".into(), |d| d.display().to_string()),
+                        .map_or(t("No folder chosen", "Kein Ordner gewählt").into(), |d| {
+                            d.display().to_string()
+                        }),
                 );
             });
         });
@@ -140,10 +167,10 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
-                            .text(format!("{d} / {} runs", job.total))
+                            .text(tf!("{d} / {} runs", "{d} / {} Läufe", job.total))
                             .desired_width(240.0),
                     );
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t("Cancel", "Abbrechen")).clicked() {
                         job.cancel.store(true, Relaxed);
                     }
                 });
@@ -158,7 +185,11 @@ impl App {
                 if ui
                     .add_enabled(
                         dir.is_some(),
-                        egui::Button::new(format!("Export {} runs", picked.len())),
+                        egui::Button::new(tf!(
+                            "Export {} runs",
+                            "{} Läufe exportieren",
+                            picked.len()
+                        )),
                     )
                     .clicked()
                     && let Some(dir) = dir

@@ -1,5 +1,5 @@
 //! Headless UI checks. `every_ui_symbol_has_a_glyph` runs in CI. `screenshots` renders the app with
-//! real example runs into `target/ui-snapshots/*.png` for design reviews (`docs/ui-quality.md`); pixels
+//! real example runs into `target/ui-snapshots/*.png` (each also as `*.de.png` in German) for design reviews (`docs/ui-quality.md`); pixels
 //! differ between GPUs and OSes, so the images are not committed and the test is ignored in CI:
 //! `cargo test --release -p metabolite-detector screenshots -- --ignored`
 
@@ -19,6 +19,18 @@ use crate::{App, Trace, identify};
 /// Non-ASCII characters on code lines (not `//` comments) of this crate's sources. Code outside
 /// strings and char literals is ASCII, so these are the symbols the app can show.
 fn ui_symbols() -> Vec<(String, char)> {
+    let mut found = Vec::new();
+    for (path, text) in sources() {
+        for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            let chars = line.chars().filter(|c| !c.is_ascii());
+            found.extend(chars.map(|c| (path.display().to_string(), c)));
+        }
+    }
+    found
+}
+
+/// This crate's `.rs` files and their text.
+fn sources() -> Vec<(PathBuf, String)> {
     let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
     let mut found = Vec::new();
     while let Some(dir) = dirs.pop() {
@@ -26,19 +38,195 @@ fn ui_symbols() -> Vec<(String, char)> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 dirs.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
-                let chars = line.chars().filter(|c| !c.is_ascii());
-                found.extend(chars.map(|c| (path.display().to_string(), c)));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                found.push((path, text));
             }
         }
     }
     found
+}
+
+/// Calls whose first string argument is shown to the user.
+const TEXT_CALLS: [&str; 27] = [
+    "label",
+    "button",
+    "heading",
+    "strong",
+    "small",
+    "weak",
+    "on_hover_text",
+    "on_disabled_hover_text",
+    "hint_text",
+    "menu_button",
+    "selectable_label",
+    "selectable_value",
+    "checkbox",
+    "radio",
+    "radio_value",
+    "toggle_value",
+    "hyperlink_to",
+    "text",
+    "add_filter",
+    "set_title",
+    "set_description",
+    "Window::new",
+    "CollapsingHeader::new",
+    "RichText::new",
+    "Button::new",
+    "Label::new",
+    "show_note",
+];
+
+/// Whether a literal is prose to translate: it has a lowercase word ("Open", "Läufe"), not only
+/// symbols, units or abbreviations ("RI", "m/z", "S/N"). Format placeholders do not count.
+fn is_prose(literal: &str) -> bool {
+    let mut plain = String::new();
+    let mut depth = 0;
+    for c in literal.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ if depth == 0 => plain.push(c),
+            _ => {}
+        }
+    }
+    // A word: two letters or more, all lowercase after the first ("Run", "ms"; not "RI", "NetCDF").
+    (plain.split(|c: char| !c.is_alphabetic())).any(|w| {
+        let mut rest = w.chars().skip(1).peekable();
+        rest.peek().is_some() && rest.all(char::is_lowercase)
+    })
+}
+
+/// String literals of the argument list `args` (the text after a call's `(`) that are passed as they
+/// are: directly, or as the format string of a `format!`. Literals inside other nested calls, like
+/// `t(..)`, or inside `[..]` (file extensions) are not.
+/// shortcut: char literals like `'('` are not skipped; none sits in a UI call today.
+fn bare_literals(args: &str) -> Vec<&str> {
+    let (mut found, mut depth, mut format_at) = (Vec::new(), 0, None);
+    let mut chars = args.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => {
+                let mut end = args.len();
+                let mut escaped = false;
+                for (j, c) in chars.by_ref() {
+                    match c {
+                        '"' if !escaped => {
+                            end = j;
+                            break;
+                        }
+                        '\\' => escaped = !escaped,
+                        _ => escaped = false,
+                    }
+                }
+                if depth == 0 || format_at == Some(depth) {
+                    found.push(&args[i + 1..end]);
+                }
+            }
+            '(' | '[' => {
+                depth += 1;
+                if depth == 1 && c == '(' && args[..i].trim_end().ends_with("format!") {
+                    format_at = Some(1);
+                }
+            }
+            ')' | ']' if depth == 0 => break,
+            ')' | ']' => {
+                if format_at == Some(depth) {
+                    format_at = None;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Texts passed to a [`TEXT_CALLS`] call as a bare literal or `format!`, not through `lang::t` or
+/// `lang::tf!`. Test modules are skipped.
+/// shortcut: texts that reach the UI another way (a const array, a variable) are not seen; the screenshot
+/// check in German catches those.
+fn untranslated() -> Vec<String> {
+    let mut found = Vec::new();
+    for (path, text) in sources() {
+        let name = path.file_name().unwrap().to_string_lossy();
+        if name == "ui_tests.rs" || name == "lang.rs" {
+            continue;
+        }
+        let text = text.replace("\r\n", "\n");
+        let text = &text[..text.find("#[cfg(test)]\nmod ").unwrap_or(text.len())];
+        let code: String = (text.lines())
+            .map(|l| {
+                if l.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for call in TEXT_CALLS {
+            let pattern = format!("{call}(");
+            for (at, _) in code.match_indices(&pattern) {
+                let before = code[..at].chars().next_back();
+                // `plot_export::button(..)` is our own function, not the widget method.
+                let path_call = before == Some(':') && !call.contains("::");
+                if path_call || before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                // The first string is the shown text; later ones are file names or keys.
+                for literal in bare_literals(&code[at + pattern.len()..])
+                    .into_iter()
+                    .take(1)
+                {
+                    if is_prose(literal) {
+                        let line = code[..at].lines().count();
+                        found.push(format!("{}:{line}: {call}(\"{literal}\"", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+/// S8: every UI text has an English and a German version (#257).
+#[test]
+fn every_ui_text_is_translated() {
+    let missing = untranslated();
+    assert!(
+        missing.is_empty(),
+        "{} texts without lang::t or lang::tf!:\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn prose_needs_a_lowercase_word() {
+    assert!(is_prose("Open a run"));
+    assert!(is_prose("{n} runs"));
+    assert!(!is_prose("RI"));
+    assert!(!is_prose("m/z {mz:.1}"));
+    assert!(is_prose("Run") && is_prose("New"));
+    assert!(!is_prose("NetCDF (ANDI-MS)"));
+}
+
+#[test]
+fn bare_literals_skip_translated_and_nested_ones() {
+    let args = |s| bare_literals(s);
+    assert_eq!(
+        args(r#"x.is_some(), "Open results") + 1"#),
+        ["Open results"]
+    );
+    assert_eq!(
+        args(r#"t("Open", "Öffnen")).clicked()"#),
+        Vec::<&str>::new()
+    );
+    assert_eq!(args(r#"format!("{n} runs", n = f(1)))"#), ["{n} runs"]);
+    assert_eq!(args(r#"t("CSV", "CSV"), &["csv"])"#), Vec::<&str>::new());
+    assert_eq!(args(r#""say \"hi\"")"#), [r#"say \"hi\""#]);
 }
 
 /// Symbols like arrows are not in egui's default font; without a fallback they draw as boxes.
@@ -118,7 +306,18 @@ struct Shots {
 }
 
 impl Shots {
+    /// Saves `name.png` and, drawn with the same state in German, `name.de.png` (S8, #257). The test
+    /// steers by English labels, so it switches only for the picture.
     fn save(&self, h: &mut Harness<'_, App>, name: &str) {
+        self.write(h, name);
+        crate::lang::set(crate::lang::Lang::De);
+        h.run_steps(2);
+        self.write(h, &format!("{name}.de"));
+        crate::lang::set(crate::lang::Lang::En);
+        h.run_steps(2);
+    }
+
+    fn write(&self, h: &mut Harness<'_, App>, name: &str) {
         let img = h.render().expect("render");
         let file = std::fs::File::create(self.dir.join(format!("{name}.png"))).unwrap();
         let mut enc = png::Encoder::new(file, img.width(), img.height());

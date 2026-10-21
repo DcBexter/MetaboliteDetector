@@ -10,6 +10,7 @@ use std::time::Duration;
 use semver::Version;
 
 use super::release::{self, Kind, Release};
+use crate::lang::tf;
 
 const RELEASES_URL: &str =
     "https://api.github.com/repos/DcBexter/MetaboliteDetector/releases?per_page=20";
@@ -34,13 +35,23 @@ fn get(agent: &ureq::Agent, url: &str, accept: &str) -> Result<Vec<u8>, String> 
         .header("User-Agent", USER_AGENT)
         .header("Accept", accept)
         .call()
-        .map_err(|e| format!("Could not reach {url}: {e}"))?;
+        .map_err(|e| {
+            tf!(
+                "Could not reach {url}: {e}",
+                "{url} ist nicht erreichbar: {e}"
+            )
+        })?;
     response
         .body_mut()
         .with_config()
         .limit(MAX_DOWNLOAD)
         .read_to_vec()
-        .map_err(|e| format!("Download from {url} failed: {e}"))
+        .map_err(|e| {
+            tf!(
+                "Download from {url} failed: {e}",
+                "Download von {url} fehlgeschlagen: {e}"
+            )
+        })
 }
 
 /// The newest published release above `current`, if any.
@@ -59,7 +70,10 @@ pub fn install(release: &Release, kind: Kind, exe: &Path) -> Result<(), String> 
         (release.assets.iter())
             .find(|(n, u)| n == file && u.starts_with("https://"))
             .map(|(_, u)| u.clone())
-            .ok_or(format!("The release has no {file}"))
+            .ok_or(tf!(
+                "The release has no {file}",
+                "Die Version enthält keine Datei {file}"
+            ))
     };
     let agent = agent(Duration::from_secs(600));
     let octets = "application/octet-stream";
@@ -72,8 +86,10 @@ pub fn install(release: &Release, kind: Kind, exe: &Path) -> Result<(), String> 
         Kind::Linux => {
             replace_from_tar_gz(&data, exe).map_err(|e| {
                 let dir = exe.parent().unwrap_or(exe).display();
-                format!(
+                tf!(
                     "Could not replace the binaries in {dir}: {e}. Download the update from {}",
+                    "Die Programmdateien in {dir} konnten nicht ersetzt werden: {e}. \
+                     Das Update von {} herunterladen",
                     release.page
                 )
             })?;
@@ -95,10 +111,13 @@ pub fn remove_old(exe: &Path) {
 }
 
 fn start(exe: &Path) -> Result<(), String> {
-    Command::new(exe)
-        .spawn()
-        .map(drop)
-        .map_err(|e| format!("Installed, but {} did not start: {e}", exe.display()))
+    Command::new(exe).spawn().map(drop).map_err(|e| {
+        tf!(
+            "Installed, but {} did not start: {e}",
+            "Installiert, aber {} startete nicht: {e}",
+            exe.display()
+        )
+    })
 }
 
 /// Runs the MSI from a fresh temp dir through a hidden helper that waits for this app to exit,
@@ -113,7 +132,13 @@ fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(
     let msi = dir.join(name);
     std::fs::create_dir(&dir)
         .and_then(|()| std::fs::write(&msi, data))
-        .map_err(|e| format!("Could not save {}: {e}", msi.display()))?;
+        .map_err(|e| {
+            tf!(
+                "Could not save {}: {e}",
+                "{} konnte nicht gespeichert werden: {e}",
+                msi.display()
+            )
+        })?;
     msi_helper(&dir, &msi, all_users, exe)
 }
 
@@ -143,27 +168,50 @@ fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(),
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(drop)
-        .map_err(|e| format!("Could not start the installer: {e}"))
+        .map_err(|e| {
+            tf!(
+                "Could not start the installer: {e}",
+                "Das Installationsprogramm konnte nicht starten: {e}"
+            )
+        })
 }
 
 #[cfg(not(windows))]
 fn msi_helper(_: &Path, _: &Path, _: bool, _: &Path) -> Result<(), String> {
-    Err("The MSI installs only on Windows".into())
+    Err(crate::lang::t(
+        "The MSI installs only on Windows",
+        "Das MSI installiert nur unter Windows",
+    )
+    .into())
 }
 
 /// Swaps the portable exe: Windows lets a running exe be renamed but not overwritten.
 fn replace_exe(data: &[u8], exe: &Path) -> Result<(), String> {
     let (new, old) = (side(exe, ".new"), side(exe, ".old"));
-    let fail = |what: &str, e: io::Error| {
+    let shown = exe.display();
+    let fail = |message: String| {
         std::fs::remove_file(&new).ok();
-        format!("Could not {what} {}: {e}", exe.display())
+        message
     };
-    std::fs::write(&new, data).map_err(|e| fail("write the update next to", e))?;
+    std::fs::write(&new, data).map_err(|e| {
+        fail(tf!(
+            "Could not write the update next to {shown}: {e}",
+            "Das Update konnte nicht neben {shown} geschrieben werden: {e}"
+        ))
+    })?;
     std::fs::remove_file(&old).ok();
-    std::fs::rename(exe, &old).map_err(|e| fail("rename", e))?;
+    std::fs::rename(exe, &old).map_err(|e| {
+        fail(tf!(
+            "Could not rename {shown}: {e}",
+            "{shown} konnte nicht umbenannt werden: {e}"
+        ))
+    })?;
     if let Err(e) = std::fs::rename(&new, exe) {
         std::fs::rename(&old, exe).ok();
-        return Err(fail("replace", e));
+        return Err(fail(tf!(
+            "Could not replace {shown}: {e}",
+            "{shown} konnte nicht ersetzt werden: {e}"
+        )));
     }
     start(exe)
 }
@@ -179,7 +227,10 @@ pub fn replace_from_tar_gz(archive: &[u8], exe: &Path) -> io::Result<()> {
     }
     let result =
         write_new(archive, &mut targets).and_then(|()| match targets.iter().find(|t| !t.2) {
-            Some((name, ..)) => Err(io::Error::other(format!("the archive has no {name}"))),
+            Some((name, ..)) => Err(io::Error::other(tf!(
+                "the archive has no {name}",
+                "das Archiv enthält kein {name}"
+            ))),
             None => Ok(()),
         });
     if let Err(e) = result {
@@ -195,8 +246,9 @@ pub fn replace_from_tar_gz(archive: &[u8], exe: &Path) -> io::Result<()> {
             }
             // Earlier binaries are already new; say so instead of rolling back.
             return Err(if i > 0 {
-                io::Error::other(format!(
-                    "only partly updated, reinstall from the release page: {e}"
+                io::Error::other(tf!(
+                    "only partly updated, reinstall from the release page: {e}",
+                    "nur teilweise aktualisiert, bitte von der Release-Seite neu installieren: {e}"
                 ))
             } else {
                 e

@@ -22,6 +22,7 @@ mod guided;
 mod identify;
 mod isotopes;
 mod jobs;
+mod lang;
 mod layout;
 mod library_editor;
 mod loading;
@@ -46,6 +47,9 @@ mod view;
 use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
+    // First, so the notes of `guard` and a failed start come in it too; a saved choice replaces it
+    // in `restore`.
+    lang::set(lang::Lang::system());
     // Without our config dir eframe would pick its own; name it, so `persist::guard` checks that file.
     let file = (persist::config_dir().or_else(|| eframe::storage_dir("MetaboliteDetector")))
         .map(|d| d.join("app.ron"));
@@ -80,7 +84,10 @@ fn main() -> eframe::Result {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("MetaboliteDetector")
-            .set_description(format!("The window could not be opened: {e}"))
+            .set_description(lang::tf!(
+                "The window could not be opened: {e}",
+                "Das Fenster konnte nicht geöffnet werden: {e}"
+            ))
             .show();
     }
     result

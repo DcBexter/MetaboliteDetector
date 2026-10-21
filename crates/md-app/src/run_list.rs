@@ -3,6 +3,7 @@
 
 use eframe::egui;
 
+use crate::lang::t;
 use crate::{App, color, layout};
 
 impl App {
@@ -37,7 +38,7 @@ impl App {
     }
 
     fn run_list(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Runs");
+        ui.strong(t("Runs", "Läufe"));
         egui::ScrollArea::both()
             .id_salt("run list")
             .auto_shrink([false, true])
@@ -50,7 +51,7 @@ impl App {
             ui.horizontal(|ui| {
                 let visible = ui
                     .checkbox(&mut run.visible, "")
-                    .on_hover_text("Show in plots");
+                    .on_hover_text(t("Show in plots", "In den Plots zeigen"));
                 ui.colored_label(color(i), "■");
                 let name = ui
                     .selectable_label(i == self.active, &run.name)
@@ -60,7 +61,11 @@ impl App {
                 }
                 visible.labelled_by(name.id);
                 // At the row end, away from the name, so selecting a run never closes one.
-                if ui.small_button("×").on_hover_text("Close").clicked() {
+                if ui
+                    .small_button("×")
+                    .on_hover_text(t("Close", "Schließen"))
+                    .clicked()
+                {
                     close = Some(i);
                 }
             });

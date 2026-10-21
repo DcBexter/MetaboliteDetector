@@ -7,6 +7,7 @@ use md_core::detail::ion_profiles;
 
 use std::sync::Arc;
 
+use crate::lang::t;
 use crate::{App, Trace, color, detail};
 
 /// A click this close to a curve, vertically, picks its ion.
@@ -16,13 +17,22 @@ impl App {
     pub fn detected_peaks(&mut self, ui: &mut egui::Ui) {
         let run = &self.runs[self.active];
         ui.horizontal_wrapped(|ui| {
-            ui.strong("Detected peaks");
-            ui.checkbox(&mut self.model_profile, "Model")
-                .on_hover_text("Also draw the modelled peak profile of each ion, dashed");
-            ui.weak("Click a curve to show its SIC");
+            ui.strong(t("Detected peaks", "Erkannte Peaks"));
+            ui.checkbox(&mut self.model_profile, t("Model", "Modell"))
+                .on_hover_text(t(
+                    "Also draw the modelled peak profile of each ion, dashed",
+                    "Auch das modellierte Peakprofil jedes Ions zeichnen, gestrichelt",
+                ));
+            ui.weak(t(
+                "Click a curve to show its SIC",
+                "Eine Kurve anklicken, um ihr SIC zu zeigen",
+            ));
         });
         let Some(k) = run.component else {
-            ui.weak("Select a component to see its ion traces.");
+            ui.weak(t(
+                "Select a component to see its ion traces.",
+                "Eine Komponente wählen, um ihre Ionenspuren zu sehen.",
+            ));
             return;
         };
         let c = &run.components[k];
@@ -32,7 +42,9 @@ impl App {
         // One plot memory per component, so a zoom on one never hides the next one's curves.
         let mut plot = Plot::new(("detected peaks", Arc::as_ptr(&run.data), run.rev, k));
         if self.settings.appearance.axes_labels {
-            plot = plot.x_axis_label("Scan").y_axis_label("Intensity");
+            plot = plot
+                .x_axis_label(t("Scan", "Scan"))
+                .y_axis_label(t("Intensity", "Intensität"));
         }
         let shown = plot
             .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))

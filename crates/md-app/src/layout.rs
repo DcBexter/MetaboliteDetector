@@ -3,6 +3,8 @@
 
 use eframe::egui;
 
+use crate::lang::t;
+
 /// A resizable list on the left and its details beside it, each with the panel margin, so the
 /// details never start on the list's edge.
 pub fn list_and_details<T>(
@@ -61,31 +63,50 @@ impl Panels {
     /// Each area with its View menu name and hover text, in menu order.
     pub fn toggles(&mut self) -> [(&mut bool, &'static str, &'static str); 6] {
         [
-            (&mut self.runs, "Runs", "The open runs, left"),
+            (
+                &mut self.runs,
+                t("Runs", "Läufe"),
+                t("The open runs, left", "Die offenen Läufe, links"),
+            ),
             (
                 &mut self.components,
-                "Component list",
-                "Every component of the active run with its library hit, left",
+                t("Component list", "Komponentenliste"),
+                t(
+                    "Every component of the active run with its library hit, left",
+                    "Jede Komponente des aktiven Laufs mit ihrem Bibliothekstreffer, links",
+                ),
             ),
             (
                 &mut self.chromatogram,
-                "Chromatogram",
-                "TIC and SIC of the open runs, centre",
+                t("Chromatogram", "Chromatogramm"),
+                t(
+                    "TIC and SIC of the open runs, centre",
+                    "TIC und SIC der offenen Läufe, Mitte",
+                ),
             ),
             (
                 &mut self.spectrum,
-                "Spectrum",
-                "Spectrum of the scan or component, below the chromatogram",
+                t("Spectrum", "Spektrum"),
+                t(
+                    "Spectrum of the scan or component, below the chromatogram",
+                    "Spektrum des Scans oder der Komponente, unter dem Chromatogramm",
+                ),
             ),
             (
                 &mut self.detected_peaks,
-                "Detected peaks",
-                "Ion traces of the selected component, beside the spectrum",
+                t("Detected peaks", "Erkannte Peaks"),
+                t(
+                    "Ion traces of the selected component, beside the spectrum",
+                    "Ionenspuren der gewählten Komponente, neben dem Spektrum",
+                ),
             ),
             (
                 &mut self.info,
-                "Component info",
-                "Values, peaks and library hits of the selected component, right",
+                t("Component info", "Komponenteninfo"),
+                t(
+                    "Values, peaks and library hits of the selected component, right",
+                    "Werte, Peaks und Bibliothekstreffer der gewählten Komponente, rechts",
+                ),
             ),
         ]
     }
@@ -376,7 +397,14 @@ mod tests {
             "Library hits",
             "a_long_run_name_from_the_lab_60.cdf",
         ];
-        for title in shown {
+        if crate::lang::de() {
+            // The titles are German; at least the windows of `windows_open_beside_the_run_list_and_apart`.
+            let windows = (nodes.names.values()).filter(|(role, _)| role == "Window");
+            assert!(windows.count() >= 12, "German: windows not drawn");
+        }
+        // Data names are the same in both languages; window titles only in English.
+        let data = ["Substance 0", "a_long_run_name_from_the_lab_60.cdf"];
+        for title in (shown.into_iter()).filter(|t| !crate::lang::de() || data.contains(t)) {
             let drawn = nodes
                 .names
                 .values()
@@ -444,6 +472,16 @@ mod tests {
 
     #[test]
     fn no_control_covers_another() {
+        for size in [[1200.0, 800.0], [800.0, 600.0], [520.0, 700.0]] {
+            let found = overlaps(size);
+            assert!(found.is_empty(), "{size:?}:\n{}", found.join("\n"));
+        }
+    }
+
+    /// German texts are longer (S8, #257); they must fit as well.
+    #[test]
+    fn no_control_covers_another_in_german() {
+        crate::lang::set(crate::lang::Lang::De);
         for size in [[1200.0, 800.0], [800.0, 600.0], [520.0, 700.0]] {
             let found = overlaps(size);
             assert!(found.is_empty(), "{size:?}:\n{}", found.join("\n"));

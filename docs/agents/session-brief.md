@@ -29,7 +29,7 @@ specific to it; the rest is here. Shared rules live in the workflow kit and are 
    only print "skipped" and stay green.
 2. `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` are green. A UI change also
    gets the screenshot check from the [UI checklist](../ui-quality.md). It runs locally after `scripts/link-example-data.ps1` (or `.sh`):
-   `cargo test --release -p metabolite-detector screenshots -- --ignored` (about 9 s, 42 images). Skip it only with the real error message in the handoff.
+   `cargo test --release -p metabolite-detector screenshots -- --ignored` (about 30 s; every image also in German as `*.de.png`, check both). Skip it only with the real error message in the handoff.
    CI does not have `lib_aa.lbr`, so the tests that need `MD_LBR_SAMPLE` only print "skipped" there (#327: red since #133, nobody saw it).
    A change in `md-core` `batch`, `search`, `deconv`, `peaks`, `library` or `mid` runs them locally, about 10 s:
    `MD_LBR_SAMPLE=<path>/lib_aa.lbr cargo test -p md-core --test example_data --test lbr_sample --test mid_series`.

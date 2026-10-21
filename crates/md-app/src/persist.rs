@@ -2,7 +2,7 @@
 //! memory (panel sizes, tool window positions), the window geometry and, under [`KEY`], our own
 //! `KEY=value` lines: the analysis settings under the old QSettings names, the shown panels, the
 //! libraries and the recent files. Unknown keys are kept as they are, so a newer version's values
-//! survive; `language` (S8) is reserved for that. `mode` is the guided or expert mode (S7); without it
+//! survive. `language` is `en` or `de` (S8), saved once the user picks one other than the system's. `mode` is the guided or expert mode (S7); without it
 //! the start asks for it. The first start imports the old
 //! 3.3 settings once (`~/.config/TU-Braunschweig/MetaboliteDetector.conf`, on Windows the registry).
 //! Every value is checked; a bad one keeps its default. A saved deconvolution width 1 becomes Auto once
@@ -22,6 +22,7 @@ use md_core::peaks::Detector;
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
 use crate::App;
+use crate::lang::{t, tf};
 
 /// Storage key of our lines in `app.ron`.
 pub const KEY: &str = "metabolite-detector";
@@ -43,6 +44,8 @@ pub struct Saved {
     file: Option<PathBuf>,
     /// The one-time width 1 → Auto switch ran (#311); saved as [`WIDTH_ONCE`].
     width_once: bool,
+    /// A language was saved; without one the app follows the system language until the user picks another.
+    language: bool,
 }
 
 impl Saved {
@@ -398,7 +401,12 @@ fn registry() -> Option<(String, Vec<Entry>)> {
     // shortcut: reg.exe prints in the OEM code page, so a non-ASCII path arrives garbled and is
     // skipped at start as missing; read the registry directly if that matters.
     let text = String::from_utf8_lossy(&out.stdout);
-    (out.status.success()).then(|| (format!("the registry ({REG_ROOT})"), reg_entries(&text)))
+    (out.status.success()).then(|| {
+        (
+            tf!("the registry ({REG_ROOT})", "der Registry ({REG_ROOT})"),
+            reg_entries(&text),
+        )
+    })
 }
 
 #[cfg(not(windows))]
@@ -457,6 +465,17 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     match crate::guided::Mode::from_key(&v) {
                         Some(m) => (app.guided.mode, app.guided.ask) = (m, false),
                         // Maybe from a newer version: kept until the user answers, so not "unreadable".
+                        None => app.saved.extra.push((key.clone(), v)),
+                    }
+                    true
+                }
+                ("", "language") => {
+                    match crate::lang::Lang::from_key(&v) {
+                        Some(l) => {
+                            crate::lang::set(l);
+                            app.saved.language = true;
+                        }
+                        // Maybe from a newer version: kept, the system language is used meanwhile.
                         None => app.saved.extra.push((key.clone(), v)),
                     }
                     true
@@ -550,6 +569,12 @@ pub fn text(app: &App) -> String {
     if !app.guided.ask {
         lines.push(("mode".into(), app.guided.mode.key().into()));
     }
+    // Only a choice is saved, so the default keeps following the system language.
+    let lang = crate::lang::get();
+    let chosen = app.saved.language || lang != crate::lang::Lang::system();
+    if chosen {
+        lines.push(("language".into(), lang.key().into()));
+    }
     if app.saved.width_once {
         lines.push((WIDTH_ONCE.into(), "true".into()));
     }
@@ -567,11 +592,11 @@ pub fn text(app: &App) -> String {
         let p = std::path::absolute(&p).unwrap_or(p);
         Some((k.to_owned(), p.to_str()?.to_owned()))
     }));
-    // An answered question replaces a kept unknown `mode`.
+    // An answered question replaces a kept unknown `mode`, a chosen language a kept unknown one.
     let answered = !app.guided.ask;
     lines.extend(
         (app.saved.extra.iter())
-            .filter(|(k, _)| !(answered && k == "mode"))
+            .filter(|(k, _)| !(answered && k == "mode") && !(chosen && k == "language"))
             .cloned(),
     );
     // A line break would split a value into a second, wrong line.
@@ -625,12 +650,16 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
         return (Some(file), None);
     }
     let bak = file.with_extension("ron.bak");
-    let lost = "The saved settings could not be read.";
+    let lost = t(
+        "The saved settings could not be read.",
+        "Die gespeicherten Einstellungen konnten nicht gelesen werden.",
+    );
     // eframe gets another name, so nothing is written over `app.ron`.
     let aside = |e: std::io::Error| {
         let other = file.with_extension("ron.new");
-        let msg = format!(
+        let msg = tf!(
             "{lost} It could not be kept aside ({e}), so this session saves to {} instead.",
+            "{lost} Sie konnten nicht beiseitegelegt werden ({e}), daher speichert diese Sitzung stattdessen in {}.",
             other.display()
         );
         (Some(other), Some(Err(msg)))
@@ -659,7 +688,13 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
         return (Some(file), None);
     }
     let kept = match std::fs::read(&bak).ok().filter(|b| parse(b).is_some()) {
-        Some(good) => write_atomic(&file, &good).map(|()| "The last good copy is used.".to_owned()),
+        Some(good) => write_atomic(&file, &good).map(|()| {
+            t(
+                "The last good copy is used.",
+                "Die letzte gute Kopie wird verwendet.",
+            )
+            .to_owned()
+        }),
         // Gone already: the other window got there first.
         None => std::fs::rename(&file, &bak)
             .or_else(|e| {
@@ -668,8 +703,9 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
                     .ok_or(e)
             })
             .map(|()| {
-                format!(
+                tf!(
                     "The defaults are used; the old file is kept as {} until the next start.",
+                    "Die Standardwerte werden verwendet; die alte Datei bleibt bis zum nächsten Start als {} erhalten.",
                     bak.display()
                 )
             }),
@@ -697,8 +733,9 @@ pub fn restore(
         Some(text) => {
             let bad = apply(app, ctx, own_entries(&text));
             (!bad.is_empty()).then(|| {
-                Err(format!(
+                Err(tf!(
                     "Saved values could not be read and use their defaults: {}.",
+                    "Gespeicherte Werte konnten nicht gelesen werden und nutzen ihre Standardwerte: {}.",
                     bad.join(", ")
                 ))
             })
@@ -707,12 +744,16 @@ pub fn restore(
         None if guarded.is_some() => None,
         None => old_entries().map(|(source, entries)| {
             let bad = apply(app, ctx, entries);
-            let done = format!("Imported the settings of MetaboliteDetector 3.3 from {source}.");
+            let done = tf!(
+                "Imported the settings of MetaboliteDetector 3.3 from {source}.",
+                "Die Einstellungen von MetaboliteDetector 3.3 aus {source} übernommen."
+            );
             if bad.is_empty() {
                 Ok(done)
             } else {
-                Err(format!(
+                Err(tf!(
                     "{done} These keep their defaults: {}.",
+                    "{done} Diese behalten ihre Standardwerte: {}.",
                     bad.join(", ")
                 ))
             }
@@ -737,7 +778,7 @@ impl App {
     pub fn recent_menu(&mut self, ui: &mut egui::Ui) {
         let empty = self.saved.recent.is_empty();
         ui.add_enabled_ui(!empty, |ui| {
-            ui.menu_button("Open recent", |ui| {
+            ui.menu_button(t("Open recent", "Zuletzt geöffnet"), |ui| {
                 for p in self.saved.recent.clone() {
                     let name = p.file_name().unwrap_or(p.as_os_str()).to_string_lossy();
                     if ui
@@ -752,8 +793,11 @@ impl App {
                 }
             })
             .response
-            .on_hover_text("Open one of the last runs again")
-            .on_disabled_hover_text("No runs opened yet");
+            .on_hover_text(t(
+                "Open one of the last runs again",
+                "Einen der letzten Läufe wieder öffnen",
+            ))
+            .on_disabled_hover_text(t("No runs opened yet", "Noch keine Läufe geöffnet"));
         });
     }
 }
@@ -913,12 +957,17 @@ size=@Size(1591 800)
         app.panels.info = false;
         // Absolute on every platform, with a '=' the line format must keep.
         app.saved.remember(std::env::temp_dir().join("a=b.cdf"));
-        app.saved.extra.push(("language".into(), "de".into()));
+        app.saved.extra.push(("future_key".into(), "x".into()));
         app.guided.mode = crate::guided::Mode::Guided;
+        crate::lang::set(crate::lang::Lang::De);
+        app.saved.language = true;
         let text = text(&app);
+        crate::lang::set(crate::lang::Lang::En);
         assert!(text.contains("\nAN_DECONVOLUTION_WIDTH=auto\n"), "{text}");
         let (mut back, bad) = apply_text(&text, own_entries);
         assert!(bad.is_empty(), "{bad:?}");
+        assert_eq!(crate::lang::get(), crate::lang::Lang::De);
+        crate::lang::set(crate::lang::Lang::En);
         assert_eq!(back.guided.mode, app.guided.mode);
         // An unanswered first-start question is not saved, so the next start asks again.
         back.guided.ask = true;
@@ -930,6 +979,17 @@ size=@Size(1591 800)
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
         assert_eq!(back.saved.extra, app.saved.extra);
+    }
+
+    #[test]
+    fn the_system_language_is_not_saved_and_an_unknown_one_kept() {
+        let system = crate::lang::Lang::system();
+        crate::lang::set(system);
+        assert!(!text(&App::default()).contains("language="));
+        let (app, bad) = apply_text("language=fr\n", own_entries);
+        assert!(bad.is_empty(), "{bad:?}");
+        assert!(text(&app).contains("\nlanguage=fr\n"));
+        crate::lang::set(crate::lang::Lang::En);
     }
 
     #[test]

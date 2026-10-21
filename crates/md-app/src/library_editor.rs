@@ -14,6 +14,7 @@ mod extras;
 
 use crate::App;
 use crate::identify::Library;
+use crate::lang::{t, tf};
 use add::{AddDialog, RtDialog, Source};
 use extras::NewFragment;
 
@@ -68,7 +69,7 @@ fn optional_value(ui: &mut egui::Ui, value: &mut f64, unit: f64, speed: f64, hov
         let mut changed = false;
         let mut known = *value >= 0.0;
         if ui
-            .checkbox(&mut known, "known")
+            .checkbox(&mut known, t("known", "bekannt"))
             .on_hover_text(hover)
             .changed()
         {
@@ -137,16 +138,18 @@ impl LibraryEditor {
         const SHOWN: usize = 3;
         let more = names.len().saturating_sub(SHOWN);
         (!names.is_empty()).then(|| {
-            let tail = if more > 0 {
-                format!(" and {more} more")
+            let (n, shown) = (names.len(), names[..names.len().min(SHOWN)].join(", "));
+            if more > 0 {
+                tf!(
+                    "{n} incomplete entries were written: {shown} and {more} more (filter the list to find them).",
+                    "{n} unvollständige Einträge wurden geschrieben: {shown} und {more} weitere (Liste filtern, um sie zu finden).",
+                )
             } else {
-                String::new()
-            };
-            format!(
-                "{} incomplete entries were written: {}{tail} (filter the list to find them).",
-                names.len(),
-                names[..names.len().min(SHOWN)].join(", ")
-            )
+                tf!(
+                    "{n} incomplete entries were written: {shown} (filter the list to find them).",
+                    "{n} unvollständige Einträge wurden geschrieben: {shown} (Liste filtern, um sie zu finden).",
+                )
+            }
         })
     }
 
@@ -168,7 +171,7 @@ impl LibraryEditor {
     /// "Export MSL" with the three types of the old export dialog; only `.msl` files are written.
     /// `fwhm` is `SF_FWHM` of the centroiding.
     fn export_menu(&mut self, ui: &mut egui::Ui, stem: &str, fwhm: f64) {
-        ui.menu_button("Export MSL", |ui| {
+        ui.menu_button(t("Export MSL", "MSL exportieren"), |ui| {
             for (kind, label) in [
                 (MslType::Nominal, "MSL Nominal"),
                 (MslType::Profile, "MSL Profile"),
@@ -177,7 +180,7 @@ impl LibraryEditor {
                 if ui.button(label).clicked() {
                     ui.close();
                     let Some(path) = rfd::FileDialog::new()
-                        .add_filter("MSL library files", &["msl"])
+                        .add_filter(t("MSL library files", "MSL-Bibliotheksdateien"), &["msl"])
                         .set_file_name(format!("{stem}.msl"))
                         .save_file()
                     else {
@@ -192,7 +195,8 @@ impl LibraryEditor {
                             .err()
                             .map(|e| format!("{}: {e}", path.display()))
                     } else {
-                        Some(format!("{}: export as .msl.", path.display()))
+                        let p = path.display();
+                        Some(tf!("{p}: export as .msl.", "{p}: als .msl exportieren."))
                     };
                     self.warning = if self.error.is_none() {
                         self.incomplete()
@@ -213,20 +217,27 @@ impl LibraryEditor {
         fwhm: f64,
     ) -> Option<PathBuf> {
         let mut saved = None;
-        ui.horizontal(|ui| {
-            if ui.button("New library").clicked() {
+        // Wrapped: the German labels do not fit one line in a narrow window.
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(t("New library", "Neue Bibliothek")).clicked() {
                 self.ask(Replace::New, library);
             }
             if ui
-                .add_enabled(library.is_some(), egui::Button::new("Edit open library"))
-                .on_disabled_hover_text("Open a library first (File menu).")
+                .add_enabled(
+                    library.is_some(),
+                    egui::Button::new(t("Edit open library", "Offene Bibliothek bearbeiten")),
+                )
+                .on_disabled_hover_text(t(
+                    "Open a library first (File menu).",
+                    "Erst eine Bibliothek öffnen (Menü Datei).",
+                ))
                 .clicked()
             {
                 self.ask(Replace::Open, library);
             }
             if let Some(path) = self.path.clone()
                 && ui
-                    .button("Save")
+                    .button(t("Save", "Speichern"))
                     .on_hover_text(path.display().to_string())
                     .clicked()
             {
@@ -239,12 +250,18 @@ impl LibraryEditor {
                 .into_owned();
             self.export_menu(ui, &stem, fwhm);
             if ui
-                .button("Save as…")
-                .on_hover_text("Write a .mdlib file. For an .msl file use Export MSL.")
+                .button(t("Save as…", "Speichern unter…"))
+                .on_hover_text(t(
+                    "Write a .mdlib file. For an .msl file use Export MSL.",
+                    "Schreibt eine .mdlib-Datei. Für eine .msl-Datei MSL exportieren verwenden.",
+                ))
                 .clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_title("Save as .mdlib (for .msl use Export MSL in the editor)")
-                    .add_filter("MetaboliteDetector library", &["mdlib"])
+                    .set_title(t(
+                        "Save as .mdlib (for .msl use Export MSL in the editor)",
+                        "Als .mdlib speichern (für .msl im Editor MSL exportieren verwenden)",
+                    ))
+                    .add_filter(t("MetaboliteDetector library", "MetaboliteDetector-Bibliothek"), &["mdlib"])
                     .set_file_name(format!("{stem}.mdlib"))
                     .save_file()
             {
@@ -252,20 +269,27 @@ impl LibraryEditor {
                 if is_mdlib(&path) {
                     saved = self.save(path);
                 } else {
-                    self.error = Some(format!(
-                        "{}: save as .mdlib (use Export MSL for .msl); .lbr and .msl files are never overwritten.",
-                        path.display()
+                    let p = path.display();
+                    self.error = Some(tf!(
+                        "{p}: save as .mdlib (use Export MSL for .msl); .lbr and .msl files are never overwritten.",
+                        "{p}: als .mdlib speichern (für .msl MSL exportieren verwenden); .lbr- und .msl-Dateien werden nie überschrieben.",
                     ));
                 }
             }
         });
         if let Some(what) = self.pending {
             ui.horizontal(|ui| {
-                ui.colored_label(ui.visuals().warn_fg_color, "Unsaved changes will be lost.");
-                if ui.button("Discard").clicked() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    t(
+                        "Unsaved changes will be lost.",
+                        "Ungespeicherte Änderungen gehen verloren.",
+                    ),
+                );
+                if ui.button(t("Discard", "Verwerfen")).clicked() {
                     self.replace(what, library);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t("Cancel", "Abbrechen")).clicked() {
                     self.pending = None;
                 }
             });
@@ -289,7 +313,7 @@ impl LibraryEditor {
                     egui::ScrollArea::vertical().show(ui, |ui| ed.details(ui, i));
                 }
                 None => {
-                    ui.label("Select a compound.");
+                    ui.label(t("Select a compound.", "Eine Substanz auswählen."));
                 }
             },
         );
@@ -298,30 +322,41 @@ impl LibraryEditor {
 
     fn list(&mut self, ui: &mut egui::Ui, source: Option<&Source>) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("New compound").clicked() {
-                self.compounds.push(LibraryCompound::new("New compound"));
+            if ui.button(t("New compound", "Neue Substanz")).clicked() {
+                self.compounds
+                    // Data in the library file, so English like the file formats.
+                    .push(LibraryCompound::new("New compound"));
                 self.dirty = true;
                 self.select(Some(self.compounds.len() - 1));
             }
             let src = source.filter(|s| s.component().is_some());
             if ui
-                .add_enabled(src.is_some(), egui::Button::new("Add component…"))
-                .on_hover_text("The selected component of the active run: spectrum, RT, RI and quant ions.")
+                .add_enabled(
+                    src.is_some(),
+                    egui::Button::new(t("Add component…", "Komponente hinzufügen…")),
+                )
+                .on_hover_text(t(
+                    "The selected component of the active run: spectrum, RT, RI and quant ions.",
+                    "Die ausgewählte Komponente des aktiven Laufs: Spektrum, RT, RI und Quant-Ionen.",
+                ))
                 .clicked()
                 && let Some(src) = src
             {
                 self.start_add(src);
             }
             if ui
-                .add_enabled(source.is_some(), egui::Button::new("Copy RTs…"))
-                .on_hover_text("Copy RT and RI of the assigned components of the active run into this library.")
+                .add_enabled(source.is_some(), egui::Button::new(t("Copy RTs…", "RTs kopieren…")))
+                .on_hover_text(t(
+                    "Copy RT and RI of the assigned components of the active run into this library.",
+                    "Kopiert RT und RI der zugeordneten Komponenten des aktiven Laufs in diese Bibliothek.",
+                ))
                 .clicked()
                 && let Some(src) = source
             {
                 self.start_rt_copy(ui.ctx(), src);
             }
             if let Some(i) = self.selected
-                && ui.button("Delete").clicked()
+                && ui.button(t("Delete", "Löschen")).clicked()
             {
                 self.compounds.remove(i);
                 self.dirty = true;
@@ -330,18 +365,15 @@ impl LibraryEditor {
         });
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
-                .hint_text("Filter by name")
+                .hint_text(t("Filter by name", "Nach Name filtern"))
                 .desired_width(f32::INFINITY),
         );
         let filter = self.filter.to_lowercase();
         let shown: Vec<usize> = (0..self.compounds.len())
             .filter(|&i| self.compounds[i].name.to_lowercase().contains(&filter))
             .collect();
-        ui.label(format!(
-            "{} of {} compounds",
-            shown.len(),
-            self.compounds.len()
-        ));
+        let (s, n) = (shown.len(), self.compounds.len());
+        ui.label(tf!("{s} of {n} compounds", "{s} von {n} Substanzen"));
         let row = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical().show_rows(ui, row, shown.len(), |ui, rows| {
             for &i in &shown[rows] {
@@ -379,20 +411,23 @@ impl LibraryEditor {
         egui::Grid::new("compound fields")
             .num_columns(2)
             .show(ui, |ui| {
-                let name = ui.label("Name").id;
+                let name = ui.label(t("Name", "Name")).id;
                 changed |= (ui.text_edit_singleline(&mut c.name))
                     .labelled_by(name)
                     .changed();
                 ui.end_row();
 
                 // The old program stores -1 for an unknown RT or RI; 0 is a real value.
-                ui.label("RT (min)");
+                ui.label(t("RT (min)", "RT (min)"));
                 changed |= optional_value(
                     ui,
                     &mut c.spectrum.rt_ms,
                     60_000.0,
                     0.01,
-                    "Untick when the retention time is unknown. 0 is a real value.",
+                    t(
+                        "Untick when the retention time is unknown. 0 is a real value.",
+                        "Abwählen, wenn die Retentionszeit unbekannt ist. 0 ist ein echter Wert.",
+                    ),
                 );
                 ui.end_row();
 
@@ -403,19 +438,27 @@ impl LibraryEditor {
                     &mut c.spectrum.ri,
                     1.0,
                     1.0,
-                    "Untick when the retention index is unknown. 0 is a real value.",
+                    t(
+                        "Untick when the retention index is unknown. 0 is a real value.",
+                        "Abwählen, wenn der Retentionsindex unbekannt ist. 0 ist ein echter Wert.",
+                    ),
                 );
                 ui.end_row();
 
-                ui.label("Resolution");
-                ui.label(c.spectrum.bin_width.to_string())
-                    .on_hover_text("Bin width of the spectrum in m/z; the library file fixes it.");
+                ui.label(t("Resolution", "Auflösung"));
+                ui.label(c.spectrum.bin_width.to_string()).on_hover_text(t(
+                    "Bin width of the spectrum in m/z; the library file fixes it.",
+                    "Bin-Breite des Spektrums in m/z; die Bibliotheksdatei legt sie fest.",
+                ));
                 ui.end_row();
 
-                ui.label("Quant ions");
+                ui.label(t("Quant ions", "Quant-Ionen"));
                 ui.horizontal(|ui| {
                     if ui
-                        .add(egui::TextEdit::singleline(&mut self.ions).hint_text("e.g. 174 248"))
+                        .add(
+                            egui::TextEdit::singleline(&mut self.ions)
+                                .hint_text(t("e.g. 174 248", "z. B. 174 248")),
+                        )
                         .changed()
                         && let Some(ions) = parse_ions(&self.ions)
                     {
@@ -423,13 +466,19 @@ impl LibraryEditor {
                         changed = true;
                     }
                     if parse_ions(&self.ions).is_none() {
-                        ui.colored_label(ui.visuals().error_fg_color, "m/z values > 0");
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            t("m/z values > 0", "m/z-Werte > 0"),
+                        );
                     }
                 });
                 ui.end_row();
                 ui.label("");
                 ui.vertical(|ui| {
-                    ui.weak("m/z values separated by spaces, commas or semicolons.");
+                    ui.weak(t(
+                        "m/z values separated by spaces, commas or semicolons.",
+                        "m/z-Werte, getrennt durch Leerzeichen, Kommas oder Semikolons.",
+                    ));
                     for issue in check(c) {
                         ui.colored_label(ui.visuals().warn_fg_color, issue.to_string());
                     }
@@ -438,12 +487,15 @@ impl LibraryEditor {
 
                 let fields = [
                     (
-                        "MID fragments",
+                        t("MID fragments", "MID-Fragmente"),
                         "FRAG",
                         false,
-                        "(m/z/carbons)…, e.g. (174/2)(248/2)",
+                        t(
+                            "(m/z/carbons)…, e.g. (174/2)(248/2)",
+                            "(m/z/Kohlenstoffe)…, z. B. (174/2)(248/2)",
+                        ),
                     ),
-                    ("Comment", "COMMENT", true, ""),
+                    (t("Comment", "Kommentar"), "COMMENT", true, ""),
                 ];
                 for (label, key, multiline, hint) in fields {
                     let name = ui.label(label).id;
@@ -456,42 +508,50 @@ impl LibraryEditor {
                 }
             });
 
-        ui.collapsing("Other features", |ui| {
-            changed |= other_features(ui, c, &mut self.new_key);
-        });
-        egui::CollapsingHeader::new("Automatic quant ions")
+        egui::CollapsingHeader::new(t("Other features", "Weitere Merkmale"))
+            .id_salt("Other features")
+            .show(ui, |ui| {
+                changed |= other_features(ui, c, &mut self.new_key);
+            });
+        egui::CollapsingHeader::new(t("Automatic quant ions", "Automatische Quant-Ionen"))
             .id_salt("automatic quant ions")
             .show(ui, |ui| {
                 changed |= extras::auto_ions(ui, c, &mut self.ions);
             })
             .header_response
-            .on_hover_text("Ions the program chose for this substance when it was added.");
-        egui::CollapsingHeader::new("Ion frequency")
+            .on_hover_text(t(
+                "Ions the program chose for this substance when it was added.",
+                "Ionen, die das Programm beim Hinzufügen für diese Substanz gewählt hat.",
+            ));
+        egui::CollapsingHeader::new(t("Ion frequency", "Ionenhäufigkeit"))
             .id_salt("ion frequency")
             .show(ui, |ui| extras::ion_frequency(ui, c))
             .header_response
-            .on_hover_text(
+            .on_hover_text(t(
                 "How often each ion occurred in the spectra this substance was built from.",
-            );
-        egui::CollapsingHeader::new("MID fragments (sum formulas)")
+                "Wie oft jedes Ion in den Spektren vorkam, aus denen diese Substanz gebildet wurde.",
+            ));
+        egui::CollapsingHeader::new(t("MID fragments (sum formulas)", "MID-Fragmente (Summenformeln)"))
             .id_salt("mid fragments")
             .show(ui, |ui| {
                 changed |= extras::mid_fragments(ui, c, &mut self.frag);
             })
             .header_response
-            .on_hover_text(
+            .on_hover_text(t(
                 "Sum formula and MID size per fragment, read by the MID wizard. The FRAG field above is a separate list, used by the FRAG export.",
-            );
+                "Summenformel und MID-Größe je Fragment, gelesen vom MID-Assistenten. Das Feld FRAG oben ist eine eigene Liste für den FRAG-Export.",
+            ));
 
         let s = &c.spectrum;
-        ui.label(format!("Spectrum: {} ions", s.masses.len()));
+        let n = s.masses.len();
+        ui.label(tf!("Spectrum: {n} ions", "Spektrum: {n} Ionen"));
         let bars = (s.masses.iter().zip(&s.values))
             .map(|(m, v)| Bar::new(*m as f64, *v as f64).width(0.3))
             .collect();
         Plot::new("library spectrum")
             .height(220.0)
             .x_axis_label("m/z")
-            .y_axis_label("Intensity")
+            .y_axis_label(t("Intensity", "Intensität"))
             .show(ui, |p| p.bar_chart(BarChart::new("library spectrum", bars)));
         self.dirty |= changed;
     }
@@ -508,7 +568,11 @@ fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut Stri
         for k in other {
             let name = ui.label(&k).id;
             changed |= feature_field(ui, c, &k, false, "", name);
-            if ui.small_button("×").on_hover_text("Remove").clicked() {
+            if ui
+                .small_button("×")
+                .on_hover_text(t("Remove", "Entfernen"))
+                .clicked()
+            {
                 c.features.remove(&k);
                 changed = true;
             }
@@ -516,13 +580,13 @@ fn other_features(ui: &mut egui::Ui, c: &mut LibraryCompound, new_key: &mut Stri
         }
     });
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(new_key).hint_text("Key"));
+        ui.add(egui::TextEdit::singleline(new_key).hint_text(t("Key", "Schlüssel")));
         let key = new_key.trim().to_uppercase();
         if ui
             .add_enabled(
                 // FRAG and COMMENT have their own fields above.
                 !matches!(key.as_str(), "" | "FRAG" | "COMMENT") && !c.features.contains_key(&key),
-                egui::Button::new("Add feature"),
+                egui::Button::new(t("Add feature", "Merkmal hinzufügen")),
             )
             .clicked()
         {
@@ -602,14 +666,18 @@ impl App {
         let fwhm = self.settings.applied.sf_fwhm;
         let ed = &mut self.editor;
         let name = if ed.name.is_empty() {
-            "new library"
+            t("new library", "neue Bibliothek")
         } else {
             &ed.name
         };
-        let title = format!(
-            "Library editor — {name}{}",
-            if ed.dirty { " (unsaved)" } else { "" }
-        );
+        let title = if ed.dirty {
+            tf!(
+                "Library editor — {name} (unsaved)",
+                "Bibliothekseditor — {name} (ungespeichert)"
+            )
+        } else {
+            tf!("Library editor — {name}", "Bibliothekseditor — {name}")
+        };
         let (mut open, mut saved) = (true, None);
         egui::Window::new(title)
             .tool_window(ctx, 8, [760.0, 520.0])

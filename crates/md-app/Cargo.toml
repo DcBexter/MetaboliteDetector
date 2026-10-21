@@ -17,6 +17,8 @@ ron.workspace = true
 semver.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The system language for the UI default (S8); already in the tree through winit.
+sys-locale.workspace = true
 tar.workspace = true
 ureq.workspace = true
 

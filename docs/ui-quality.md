@@ -33,7 +33,8 @@ can draw.
 - [ ] New inputs have a name (`labelled_by` or a label inside the widget); the `unnamed.txt` list does
       not grow.
 - [ ] Colours come from `ui.visuals()` or the run and score palettes; no new colours, fonts or radii.
-- [ ] Labels are short whole English phrases (German comes later).
+- [ ] Labels are short whole phrases with a German pair (`lang::t`, `lang::tf!`); the `*.de.png`
+      screenshots show them fitting.
 - [ ] Errors appear next to their cause and can be cleared. Background work shows a spinner.
 
 ## Re-check after the open UI pull requests merge

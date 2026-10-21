@@ -1,6 +1,7 @@
 //! Biomarker statistics window (F14, F15): two-group table, box plots and PCA of the batch table
 //! the user sees. The numbers come from `md_core::stats`.
 
+use crate::lang::{self, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -102,16 +103,17 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
     egui::Grid::new("group picker")
         .striped(true)
         .show(ui, |ui| {
-            ui.strong("Replicate group");
-            ui.strong("Group 1");
-            ui.strong("Group 2");
+            ui.strong(lang::t("Replicate group", "Replikatgruppe"));
+            ui.strong(lang::t("Group 1", "Gruppe 1"));
+            ui.strong(lang::t("Group 2", "Gruppe 2"));
             ui.end_row();
             for g in all {
                 ui.label(*g);
                 for side in 0..2 {
                     let mut on = sides[side].iter().any(|s| s == g);
                     // The column title is not a label of the box, so name each one for screen readers.
-                    let name = format!("{g} in group {}", side + 1);
+                    let n = side + 1;
+                    let name = tf!("{g} in group {n}", "{g} in Gruppe {n}");
                     let r = ui.add(egui::Checkbox::without_text(&mut on));
                     r.widget_info(|| {
                         egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, &name)
@@ -131,12 +133,19 @@ fn group_grid(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2], all: &[&str]) {
 /// Text field to paste group names and the buttons that fill a side from it.
 fn paste_box(ui: &mut egui::Ui, paste: &mut String, sides: &mut [Vec<String>; 2], all: &[&str]) {
     ui.vertical(|ui| {
-        let label = ui.label("Paste group names (one per line), then fill a side:");
+        let label = ui.label(lang::t(
+            "Paste group names (one per line), then fill a side:",
+            "Gruppennamen einfügen (einer pro Zeile), dann eine Seite füllen:",
+        ));
         ui.add(egui::TextEdit::multiline(paste).desired_rows(4))
             .labelled_by(label.id);
         ui.horizontal(|ui| {
             for side in 0..2 {
-                if ui.button(format!("Fill group {}", side + 1)).clicked() {
+                let n = side + 1;
+                if ui
+                    .button(tf!("Fill group {n}", "Gruppe {n} füllen"))
+                    .clicked()
+                {
                     fill(paste, sides, side, all);
                 }
             }
@@ -164,7 +173,8 @@ fn order_rows(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2]) {
             continue;
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!("Order of group {}:", side + 1));
+            let n = side + 1;
+            ui.label(tf!("Order of group {n}:", "Reihenfolge von Gruppe {n}:"));
             let mut swap = None;
             for (i, g) in groups.iter().enumerate() {
                 ui.label(g);
@@ -181,21 +191,36 @@ fn order_rows(ui: &mut egui::Ui, sides: &mut [Vec<String>; 2]) {
 
 fn samples_picker(ui: &mut egui::Ui, samples: &mut Samples) {
     ui.horizontal(|ui| {
-        ui.label("Samples");
-        ui.selectable_value(samples, Samples::Independent, "independent runs")
-            .on_hover_text("Welch's t-test over all runs of each side.");
-        ui.selectable_value(samples, Samples::GroupMeans, "group means")
-            .on_hover_text(
-                "Welch's t-test over one mean per replicate group (old: not independent).",
-            );
-        ui.selectable_value(samples, Samples::Paired, "paired")
-            .on_hover_text("Paired t-test: the i-th run of group 1 with the i-th run of group 2.");
+        ui.label(lang::t("Samples", "Proben"));
+        ui.selectable_value(
+            samples,
+            Samples::Independent,
+            lang::t("independent runs", "unabhängige Läufe"),
+        )
+        .on_hover_text(lang::t(
+            "Welch's t-test over all runs of each side.",
+            "Welch-t-Test über alle Läufe jeder Seite.",
+        ));
+        ui.selectable_value(
+            samples,
+            Samples::GroupMeans,
+            lang::t("group means", "Gruppenmittelwerte"),
+        )
+        .on_hover_text(lang::t(
+            "Welch's t-test over one mean per replicate group (old: not independent).",
+            "Welch-t-Test über einen Mittelwert pro Replikatgruppe (alt: nicht unabhängig).",
+        ));
+        ui.selectable_value(samples, Samples::Paired, lang::t("paired", "gepaart"))
+            .on_hover_text(lang::t(
+                "Paired t-test: the i-th run of group 1 with the i-th run of group 2.",
+                "Gepaarter t-Test: der i-te Lauf von Gruppe 1 mit dem i-ten Lauf von Gruppe 2.",
+            ));
     });
 }
 
 fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut bool, c: &TwoGroups) {
     ui.horizontal(|ui| {
-        let label = ui.label("Show only p ≤");
+        let label = ui.label(lang::t("Show only p ≤", "Nur p ≤ zeigen"));
         ui.add(
             egui::DragValue::new(p_max)
                 .range(0.0..=1.0)
@@ -203,11 +228,14 @@ fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut boo
                 .max_decimals(4),
         )
         .labelled_by(label.id);
-        ui.checkbox(sort_by_p, "sort by p");
+        ui.checkbox(sort_by_p, lang::t("sort by p", "nach p sortieren"));
         if c.samples == Samples::Paired && !stats::pairs_match(t, c) {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                "Paired: group k of side 1 pairs with group k of side 2; the sides need the same number of groups and runs per pair.",
+                lang::t(
+                    "Paired: group k of side 1 pairs with group k of side 2; the sides need the same number of groups and runs per pair.",
+                    "Gepaart: Gruppe k von Seite 1 bildet ein Paar mit Gruppe k von Seite 2; beide Seiten brauchen gleich viele Gruppen und gleich viele Läufe pro Paar.",
+                ),
             );
         }
     });
@@ -217,8 +245,14 @@ fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut boo
 fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) -> Option<String> {
     let mut note = None;
     ui.horizontal(|ui| {
-        ui.label(format!("{} of {total} substances", shown.len()));
-        if ui.button("Export CSV…").clicked()
+        let n = shown.len();
+        ui.label(tf!(
+            "{n} of {total} substances",
+            "{n} von {total} Substanzen"
+        ));
+        if ui
+            .button(lang::t("Export CSV…", "CSV exportieren…"))
+            .clicked()
             && let Some(p) = rfd::FileDialog::new()
                 .add_filter("CSV", &["csv"])
                 .set_file_name("biomarkers.csv")
@@ -226,8 +260,8 @@ fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) 
         {
             let rows: Vec<Biomarker> = shown.iter().map(|r| (*r).clone()).collect();
             note = Some(match write_file(&p, |w| stats::write_csv(t, &rows, w)) {
-                Ok(()) => format!("Saved {}", p.display()),
-                Err(e) => format!("Export failed: {e}"),
+                Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
+                Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
             });
         }
     });
@@ -275,17 +309,17 @@ fn biomarker_table(
     shown: &[&Biomarker],
     selected: Option<usize>,
 ) -> Option<usize> {
-    const TITLES: [&str; 10] = [
-        "Substance",
+    let titles: [&str; 10] = [
+        lang::t("Substance", "Substanz"),
         "RT (min)",
-        "Hits 1",
-        "Hits 2",
-        "Mean 1",
-        "Mean 2",
+        lang::t("Hits 1", "Treffer 1"),
+        lang::t("Hits 2", "Treffer 2"),
+        lang::t("Mean 1", "Mittelwert 1"),
+        lang::t("Mean 2", "Mittelwert 2"),
         "SD 1",
         "SD 2",
-        "Ratio",
-        "p-value",
+        lang::t("Ratio", "Verhältnis"),
+        lang::t("p-value", "p-Wert"),
     ];
     let mut clicked = None;
     // One scroll area for both directions, so both bars sit at the window's edges; a table that
@@ -302,7 +336,7 @@ fn biomarker_table(
                 .column(Column::auto().at_least(160.0))
                 .columns(Column::auto().at_least(60.0), 9)
                 .header(20.0, |mut h| {
-                    for (i, title) in TITLES.into_iter().enumerate() {
+                    for (i, title) in titles.into_iter().enumerate() {
                         h.col(|ui| {
                             ui.with_layout(cell_layout(i), |ui| {
                                 ui.strong(title);
@@ -343,13 +377,17 @@ impl Statistics {
     pub fn window(&mut self, ctx: &egui::Context, table: Option<(u64, &Table)>, z_scored: bool) {
         self.z_scored = z_scored;
         let mut open = self.open;
-        egui::Window::new("Biomarker statistics")
+        egui::Window::new(lang::t("Biomarker statistics", "Biomarker-Statistik"))
+            .id(egui::Id::unique("Biomarker statistics"))
             .tool_window(ctx, 4, [900.0, 620.0])
             .open(&mut open)
             .show(ctx, |ui| match table {
                 Some((generation, t)) => self.contents(ui, generation, t),
                 None => {
-                    ui.label("Run a batch quantification first (Analysis → Batch quantification).");
+                    ui.label(lang::t(
+                        "Run a batch quantification first (Analysis → Batch quantification).",
+                        "Erst eine Batch-Quantifizierung ausführen (Analyse → Batch-Quantifizierung).",
+                    ));
                 }
             });
         self.open = open;
@@ -373,18 +411,31 @@ impl Statistics {
             .iter_mut()
             .for_each(|s| s.retain(|g| all.contains(&g.as_str())));
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.tab, Tab::Table, "Two groups");
-            ui.selectable_value(&mut self.tab, Tab::Box, "Box plot");
+            ui.selectable_value(
+                &mut self.tab,
+                Tab::Table,
+                lang::t("Two groups", "Zwei Gruppen"),
+            );
+            ui.selectable_value(&mut self.tab, Tab::Box, lang::t("Box plot", "Boxplot"));
             ui.selectable_value(&mut self.tab, Tab::Pca, "PCA");
             ui.separator();
             let hint = if self.z_scored {
-                "Not available for a z-scored table: missing values are left out."
+                lang::t(
+                    "Not available for a z-scored table: missing values are left out.",
+                    "Für eine z-transformierte Tabelle nicht verfügbar: fehlende Werte bleiben weg.",
+                )
             } else {
-                "The old program stores 0 for a substance that was not found."
+                lang::t(
+                    "The old program stores 0 for a substance that was not found.",
+                    "Das alte Programm speichert 0 für eine nicht gefundene Substanz.",
+                )
             };
             ui.add_enabled(
                 !self.z_scored,
-                egui::Checkbox::new(&mut self.missing_as_zero, "Missing value counts as 0"),
+                egui::Checkbox::new(
+                    &mut self.missing_as_zero,
+                    lang::t("Missing value counts as 0", "Fehlender Wert zählt als 0"),
+                ),
             )
             .on_hover_text(hint)
             .on_disabled_hover_text(hint);
@@ -394,11 +445,14 @@ impl Statistics {
             Tab::Pca => self.pca_tab(ui, generation, t),
             // Without a regex every run sits in one group, and the picker could never be satisfied.
             _ if all.len() < 2 => {
-                ui.label(
+                ui.label(lang::t(
                     "Two groups and Box plot compare replicate groups, but this batch has fewer than two. \
                      Set \"Replicate groups (regex on file name)\" in the batch window; it applies \
                      at once, without running the batch again.",
-                );
+                    "Zwei Gruppen und Boxplot vergleichen Replikatgruppen, aber dieser Batch hat weniger als zwei. \
+                     Im Batch-Fenster „Replikatgruppen (Regex auf Dateinamen)“ setzen; das gilt \
+                     sofort, ohne den Batch neu auszuführen.",
+                ));
             }
             _ => {
                 self.group_picker(ui, &all);
@@ -430,7 +484,8 @@ impl Statistics {
 
     /// Which replicate groups are in group 1 and 2, with a field to paste group names.
     fn group_picker(&mut self, ui: &mut egui::Ui, all: &[&str]) {
-        egui::CollapsingHeader::new("Groups")
+        egui::CollapsingHeader::new(lang::t("Groups", "Gruppen"))
+            .id_salt("Groups")
             .default_open(true)
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
@@ -445,7 +500,10 @@ impl Statistics {
     fn table_tab(&mut self, ui: &mut egui::Ui, t: &Table) {
         let Some(cache) = &self.cache else { return };
         if self.sides.iter().any(Vec::is_empty) {
-            ui.label("Choose at least one replicate group on each side.");
+            ui.label(lang::t(
+                "Choose at least one replicate group on each side.",
+                "Auf jeder Seite mindestens eine Replikatgruppe wählen.",
+            ));
             return;
         }
         filter_row(ui, t, &mut self.p_max, &mut self.sort_by_p, &cache.1);
@@ -461,8 +519,16 @@ impl Statistics {
             self.note = note;
         }
         ui.label(match self.selected.and_then(|r| t.rows.get(r)) {
-            Some(s) => format!("Selected: {} (see Box plot)", s.name),
-            None => "Click a substance to see its box plot.".into(),
+            Some(s) => tf!(
+                "Selected: {} (see Box plot)",
+                "Ausgewählt: {} (siehe Boxplot)",
+                s.name
+            ),
+            None => lang::t(
+                "Click a substance to see its box plot.",
+                "Eine Substanz anklicken, um ihren Boxplot zu sehen.",
+            )
+            .into(),
         });
         if let Some(c) = biomarker_table(ui, t, &shown, self.selected) {
             self.selected = Some(c);
@@ -471,15 +537,22 @@ impl Statistics {
 
     fn box_tab(&mut self, ui: &mut egui::Ui, t: &Table) {
         let Some(row) = self.selected.filter(|r| *r < t.rows.len()) else {
-            ui.label("Click a substance in the Two groups table.");
+            ui.label(lang::t(
+                "Click a substance in the Two groups table.",
+                "Eine Substanz in der Tabelle Zwei Gruppen anklicken.",
+            ));
             return;
         };
         if self.sides.iter().all(Vec::is_empty) {
-            ui.label("Choose replicate groups above to draw their boxes.");
+            ui.label(lang::t(
+                "Choose replicate groups above to draw their boxes.",
+                "Oben Replikatgruppen wählen, um ihre Boxen zu zeichnen.",
+            ));
             return;
         }
-        ui.label(format!(
+        ui.label(tf!(
             "{} — summed quant ion integrals per run",
+            "{} — summierte Integrale der Quant-Ionen pro Lauf",
             t.rows[row].name
         ));
         let groups: Vec<(usize, &String)> = (0..2)
@@ -505,8 +578,8 @@ impl Statistics {
             .collect();
         let top = ui.cursor().min;
         Plot::new("biomarker box plot")
-            .x_axis_label("Replicate group")
-            .y_axis_label("Intensity")
+            .x_axis_label(lang::t("Replicate group", "Replikatgruppe"))
+            .y_axis_label(lang::t("Intensity", "Intensität"))
             .x_axis_formatter(move |m, _| {
                 let i = m.value.round();
                 if (m.value - i).abs() < 1e-6 && i >= 0.0 {
@@ -538,17 +611,29 @@ impl Statistics {
                 return;
             }
         };
-        ui.label(format!(
-            "{} runs (without {POOL_GROUP}), {} substances, z-scored per substance",
-            p.samples.len(),
-            p.rows.len()
+        let (runs, substances) = (p.samples.len(), p.rows.len());
+        ui.label(tf!(
+            "{runs} runs (without {POOL_GROUP}), {substances} substances, z-scored per substance",
+            "{runs} Läufe (ohne {POOL_GROUP}), {substances} Substanzen, z-transformiert pro Substanz"
         ));
         let k = p.proportion.len();
         self.pc.iter_mut().for_each(|c| *c = (*c).min(k - 1));
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.pca_view, PcaView::Scores, "Scores");
-            ui.selectable_value(&mut self.pca_view, PcaView::Loadings, "Loadings");
-            ui.selectable_value(&mut self.pca_view, PcaView::Variance, "Explained variance");
+            ui.selectable_value(
+                &mut self.pca_view,
+                PcaView::Scores,
+                lang::t("Scores", "Scores"),
+            );
+            ui.selectable_value(
+                &mut self.pca_view,
+                PcaView::Loadings,
+                lang::t("Loadings", "Ladungen"),
+            );
+            ui.selectable_value(
+                &mut self.pca_view,
+                PcaView::Variance,
+                lang::t("Explained variance", "Erklärte Varianz"),
+            );
             if self.pca_view != PcaView::Variance {
                 for (axis, c) in ["x", "y"].into_iter().zip(&mut self.pc) {
                     egui::ComboBox::from_label(axis)
@@ -635,7 +720,7 @@ fn loadings_plot(ui: &mut egui::Ui, t: &Table, p: &Pca, pc: [usize; 2]) {
     };
     Plot::new("pca loadings")
         .legend(Legend::default())
-        .x_axis_label("Loading")
+        .x_axis_label(lang::t("Loading", "Ladung"))
         .y_axis_formatter(move |m, _| {
             let i = (-m.value).round();
             if (-m.value - i).abs() < 1e-6 && i >= 0.0 {
@@ -678,11 +763,11 @@ fn variance_plot(ui: &mut egui::Ui, p: &Pca) {
         .collect();
     Plot::new("pca variance")
         .legend(Legend::default())
-        .x_axis_label("Component")
-        .y_axis_label("Explained variance (%)")
+        .x_axis_label(lang::t("Component", "Komponente"))
+        .y_axis_label(lang::t("Explained variance (%)", "Erklärte Varianz (%)"))
         .show(ui, |plot| {
-            plot.bar_chart(BarChart::new("single", bars).color(color(0)));
-            plot.line(Line::new("cumulative", cumulative).color(color(1)));
+            plot.bar_chart(BarChart::new(lang::t("single", "einzeln"), bars).color(color(0)));
+            plot.line(Line::new(lang::t("cumulative", "kumuliert"), cumulative).color(color(1)));
         });
 }
 

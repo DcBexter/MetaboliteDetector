@@ -6,6 +6,7 @@ use md_core::isotope::parse_formula;
 use md_core::library::LibraryCompound;
 
 use super::ions_text;
+use crate::lang::{t, tf};
 
 /// Inputs of the row that adds a MID fragment.
 #[derive(Default)]
@@ -21,7 +22,13 @@ const FORMULA_WIDTH: f32 = 120.0;
 /// What is wrong with a sum formula, if anything.
 fn formula_error(text: &str) -> Option<String> {
     if text.trim().is_empty() {
-        return Some("Enter a sum formula, e.g. C7H20NSi2".into());
+        return Some(
+            t(
+                "Enter a sum formula, e.g. C7H20NSi2",
+                "Summenformel eingeben, z. B. C7H20NSi2",
+            )
+            .into(),
+        );
     }
     parse_formula(text.trim()).err()
 }
@@ -30,15 +37,18 @@ fn formula_error(text: &str) -> Option<String> {
 /// `ions` is the quant ion text of the editor, kept in step. True when the compound changed.
 pub fn auto_ions(ui: &mut egui::Ui, c: &mut LibraryCompound, ions: &mut String) -> bool {
     if c.auto_quant_ions.is_empty() {
-        ui.label("None");
+        ui.label(t("None", "Keine"));
         return false;
     }
     let mut changed = false;
     ui.label(ions_text(&c.auto_quant_ions));
     ui.horizontal(|ui| {
         if ui
-            .button("Use as quant ions")
-            .on_hover_text("Add them to the quant ions of this substance.")
+            .button(t("Use as quant ions", "Als Quant-Ionen verwenden"))
+            .on_hover_text(t(
+                "Add them to the quant ions of this substance.",
+                "Fügt sie den Quant-Ionen dieser Substanz hinzu.",
+            ))
             .clicked()
         {
             c.quant_ions.extend_from_slice(&c.auto_quant_ions);
@@ -48,8 +58,11 @@ pub fn auto_ions(ui: &mut egui::Ui, c: &mut LibraryCompound, ions: &mut String) 
             changed = true;
         }
         if ui
-            .button("Clear automatic ions")
-            .on_hover_text("Forget the ions the program chose when it added the substance.")
+            .button(t("Clear automatic ions", "Automatische Ionen löschen"))
+            .on_hover_text(t(
+                "Forget the ions the program chose when it added the substance.",
+                "Vergisst die Ionen, die das Programm beim Hinzufügen der Substanz gewählt hat.",
+            ))
             .clicked()
         {
             c.auto_quant_ions.clear();
@@ -61,7 +74,8 @@ pub fn auto_ions(ui: &mut egui::Ui, c: &mut LibraryCompound, ions: &mut String) 
 
 /// How often each ion occurred in the spectra this substance was built from (read only).
 pub fn ion_frequency(ui: &mut egui::Ui, c: &LibraryCompound) {
-    ui.label(format!("Built from {} spectra.", c.spec_count));
+    let n = c.spec_count;
+    ui.label(tf!("Built from {n} spectra.", "Aus {n} Spektren gebildet."));
     if c.ion_freq.is_empty() {
         return;
     }
@@ -154,17 +168,32 @@ pub fn mid_fragments(ui: &mut egui::Ui, c: &mut LibraryCompound, new: &mut NewFr
             .striped(true)
             .show(ui, |ui| {
                 let hints = [
-                    "First ion of the fragment",
-                    "Last ion of the fragment",
-                    "Sum formula of the fragment, e.g. C7H20NSi2",
-                    "Number of isotopomers in the MID; 0 means one share per ion",
+                    t("First ion of the fragment", "Erstes Ion des Fragments"),
+                    t("Last ion of the fragment", "Letztes Ion des Fragments"),
+                    t(
+                        "Sum formula of the fragment, e.g. C7H20NSi2",
+                        "Summenformel des Fragments, z. B. C7H20NSi2",
+                    ),
+                    t(
+                        "Number of isotopomers in the MID; 0 means one share per ion",
+                        "Anzahl der Isotopomere in der MID; 0 heißt ein Anteil je Ion",
+                    ),
                 ];
-                let heads = ["Start", "End", "Formula", "MID size"];
+                let heads = [
+                    "Start",
+                    t("End", "Ende"),
+                    t("Formula", "Formel"),
+                    t("MID size", "MID-Größe"),
+                ];
                 let names = std::array::from_fn(|k| ui.strong(heads[k]).on_hover_text(hints[k]).id);
                 ui.end_row();
                 for i in 0..c.formulas.len() {
                     changed |= fragment_row(ui, c, i, names);
-                    if ui.small_button("×").on_hover_text("Remove").clicked() {
+                    if ui
+                        .small_button("×")
+                        .on_hover_text(t("Remove", "Entfernen"))
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
                     ui.end_row();
@@ -177,22 +206,37 @@ pub fn mid_fragments(ui: &mut egui::Ui, c: &mut LibraryCompound, new: &mut NewFr
         changed = true;
     }
     ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut new.begin).prefix("start "));
-        ui.add(egui::DragValue::new(&mut new.end).prefix("end "));
+        ui.add(egui::DragValue::new(&mut new.begin).prefix(t("start ", "Start ")));
+        ui.add(egui::DragValue::new(&mut new.end).prefix(t("end ", "Ende ")));
         ui.add(
             egui::TextEdit::singleline(&mut new.formula)
                 .desired_width(FORMULA_WIDTH)
                 .hint_text("C7H20NSi2"),
         );
-        ui.add(egui::DragValue::new(&mut new.size).prefix("size "));
+        ui.add(egui::DragValue::new(&mut new.size).prefix(t("size ", "Größe ")));
         let problem = if new.begin == 0 || new.end == 0 {
-            Some("Start and end are ions above 0.".to_string())
+            Some(
+                t(
+                    "Start and end are ions above 0.",
+                    "Start und Ende sind Ionen über 0.",
+                )
+                .to_string(),
+            )
         } else if has_fragment(c, new.begin, new.end) {
-            Some("A fragment with this start and end exists.".to_string())
+            Some(
+                t(
+                    "A fragment with this start and end exists.",
+                    "Ein Fragment mit diesem Start und Ende existiert bereits.",
+                )
+                .to_string(),
+            )
         } else {
             formula_error(&new.formula)
         };
-        let add = ui.add_enabled(problem.is_none(), egui::Button::new("Add fragment"));
+        let add = ui.add_enabled(
+            problem.is_none(),
+            egui::Button::new(t("Add fragment", "Fragment hinzufügen")),
+        );
         if add.clicked() {
             c.formulas
                 .push((new.begin, new.end, new.formula.trim().to_string()));

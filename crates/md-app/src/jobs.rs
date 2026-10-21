@@ -11,7 +11,10 @@ pub fn spawn<T: Send + 'static>(
 ) -> mpsc::Receiver<T> {
     let (tx, rx) = mpsc::channel();
     let ctx = ctx.clone();
+    let lang = crate::lang::get();
     std::thread::spawn(move || {
+        // Texts made by the job come in the UI's language.
+        crate::lang::set(lang);
         // Dropping `tx` before the repaint lets the UI see a panic as `Disconnected` right away.
         if let Ok(v) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)) {
             tx.send(v).ok();
@@ -28,7 +31,10 @@ pub fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, Strin
     match rx.try_recv() {
         Ok(v) => Some(Ok(v)),
         Err(mpsc::TryRecvError::Empty) => None,
-        Err(mpsc::TryRecvError::Disconnected) => Some(Err(format!("{what} crashed"))),
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(crate::lang::tf!(
+            "{what} crashed",
+            "{what} ist abgestürzt"
+        ))),
     }
 }
 

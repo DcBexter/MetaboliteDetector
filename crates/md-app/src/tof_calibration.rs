@@ -11,6 +11,7 @@ use egui_plot::{Line, Plot, VLine};
 use md_core::decimate;
 use md_core::tof::{TofCalibration, TofError, peak_bin};
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use crate::{poll_job, spawn};
 
@@ -61,7 +62,8 @@ impl TofWindow {
     /// `fwhm` is `SF_FWHM` of the peak centring.
     pub fn window(&mut self, ctx: &egui::Context, fwhm: f64) {
         if let Some(rx) = &self.job
-            && let Some(result) = poll_job(rx, "FastFlight import").map(|r| r.and_then(|x| x))
+            && let Some(result) =
+                poll_job(rx, t("FastFlight import", "FastFlight-Import")).map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(run) => self.set_run(run),
@@ -70,7 +72,8 @@ impl TofWindow {
             self.job = None;
         }
         let mut open = self.open;
-        egui::Window::new("TOF calibration")
+        egui::Window::new(t("TOF calibration", "TOF-Kalibrierung"))
+            .id(egui::Id::unique("TOF calibration"))
             .tool_window(ctx, 11, [520.0, 560.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui, fwhm));
@@ -88,7 +91,7 @@ impl TofWindow {
             let mut clear = false;
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(ui.visuals().error_fg_color, e);
-                clear = ui.small_button("Clear").clicked();
+                clear = ui.small_button(t("Clear", "Leeren")).clicked();
             });
             if clear {
                 self.error = None;
@@ -100,7 +103,10 @@ impl TofWindow {
         if self.job.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Adding up the scans of the run…");
+                ui.label(t(
+                    "Adding up the scans of the run…",
+                    "Die Scans des Laufs werden aufsummiert…",
+                ));
             });
         }
         self.plot(ui, fwhm);
@@ -112,13 +118,20 @@ impl TofWindow {
     fn buttons(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("Open run…")
-                .on_hover_text(
+                .button(t("Open run…", "Lauf öffnen…"))
+                .on_hover_text(t(
                     "Choose the MsData.FFT of a FastFlight run; its peaks are shown per TOF bin",
-                )
+                    "MsData.FFT eines FastFlight-Laufs wählen; seine Peaks werden je TOF-Bin gezeigt",
+                ))
                 .clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+                    .add_filter(
+                        t(
+                            "FastFlight raw data (MsData.FFT)",
+                            "FastFlight-Rohdaten (MsData.FFT)",
+                        ),
+                        &["FFT", "fft"],
+                    )
                     .pick_file()
             {
                 self.error = None;
@@ -131,20 +144,25 @@ impl TofWindow {
                 }));
             }
             if ui
-                .button("Load .mzcalib…")
-                .on_hover_text(
+                .button(t("Load .mzcalib…", ".mzcalib laden…"))
+                .on_hover_text(t(
                     "Read the reference ions of a saved calibration to check or correct them",
-                )
+                    "Die Referenzionen einer gespeicherten Kalibrierung lesen, um sie zu prüfen oder zu korrigieren",
+                ))
                 .clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("TOF calibration", &["mzcalib"])
+                    .add_filter(t("TOF calibration", "TOF-Kalibrierung"), &["mzcalib"])
                     .pick_file()
             {
                 self.load(&path);
             }
         });
         if let Some((path, _)) = &self.run {
-            ui.label(format!("Run: {}", path.parent().unwrap_or(path).display()));
+            ui.label(tf!(
+                "Run: {}",
+                "Lauf: {}",
+                path.parent().unwrap_or(path).display()
+            ));
         }
     }
 
@@ -166,8 +184,16 @@ impl TofWindow {
                     })
                     .collect();
                 self.note = Some(match self.rows.is_empty() {
-                    true => "The file lists no reference ions; add them from the run.".into(),
-                    false => format!("{} reference ions loaded", self.rows.len()),
+                    true => t(
+                        "The file lists no reference ions; add them from the run.",
+                        "Die Datei enthält keine Referenzionen; fügen Sie sie aus dem Lauf hinzu.",
+                    )
+                    .into(),
+                    false => tf!(
+                        "{} reference ions loaded",
+                        "{} Referenzionen geladen",
+                        self.rows.len()
+                    ),
                 });
                 self.error = None;
             }
@@ -178,17 +204,22 @@ impl TofWindow {
     /// The summed spectrum with a line at each reference ion; a click adds an ion at the peak there.
     fn plot(&mut self, ui: &mut egui::Ui, fwhm: f64) {
         if self.run.is_none() {
-            ui.label(
+            ui.label(t(
                 "Open a FastFlight run, then click its peaks to add reference ions. \
                  Or type TOF bins and m/z values into the table.",
-            );
+                "Einen FastFlight-Lauf öffnen und dann auf seine Peaks klicken, um Referenzionen \
+                 hinzuzufügen. Oder TOF-Bins und m/z-Werte in die Tabelle eintragen.",
+            ));
             return;
         }
         let (xs, ys, rows) = (&self.xs, &self.ys, &self.rows);
         let shown = Plot::new("tof bins")
             .height(180.0)
-            .x_axis_label("TOF bin")
-            .y_axis_label("Intensity (sum of all scans)")
+            .x_axis_label(t("TOF bin", "TOF-Bin"))
+            .y_axis_label(t(
+                "Intensity (sum of all scans)",
+                "Intensität (Summe aller Scans)",
+            ))
             .y_axis_formatter(|m, _| crate::view::compact(m.value, m.step_size))
             .show(ui, |p| {
                 let width = p.response().rect.width().max(100.0) as usize;
@@ -216,14 +247,25 @@ impl TofWindow {
                     mz: 0.0,
                     used: true,
                 }),
-                None => self.note = Some("No peak within reach of the click".into()),
+                None => {
+                    self.note = Some(
+                        t(
+                            "No peak within reach of the click",
+                            "Kein Peak in Reichweite des Klicks",
+                        )
+                        .into(),
+                    )
+                }
             }
         }
         ui.horizontal(|ui| {
-            let label = ui.label("Reach (bins)");
+            let label = ui.label(t("Reach (bins)", "Reichweite (Bins)"));
             ui.add(egui::DragValue::new(&mut self.reach).range(2.0..=500.0))
                 .labelled_by(label.id)
-                .on_hover_text("How far from a click the peak is searched, in TOF bins");
+                .on_hover_text(t(
+                    "How far from a click the peak is searched, in TOF bins",
+                    "Wie weit vom Klick entfernt der Peak gesucht wird, in TOF-Bins",
+                ));
         });
     }
 
@@ -238,10 +280,13 @@ impl TofWindow {
     fn table(&mut self, ui: &mut egui::Ui, fit: Option<&TofCalibration>) {
         ui.separator();
         ui.horizontal(|ui| {
-            ui.strong("Reference ions");
+            ui.strong(t("Reference ions", "Referenzionen"));
             if ui
-                .small_button("Add ion")
-                .on_hover_text("Add a row to fill in by hand")
+                .small_button(t("Add ion", "Ion hinzufügen"))
+                .on_hover_text(t(
+                    "Add a row to fill in by hand",
+                    "Eine Zeile zum Ausfüllen von Hand hinzufügen",
+                ))
                 .clicked()
             {
                 self.rows.push(Row {
@@ -253,17 +298,25 @@ impl TofWindow {
         });
         let mut remove = None;
         egui::Grid::new("tof ions").striped(true).show(ui, |ui| {
-            for h in ["Use", "TOF bin", "m/z", "Error (mDa)", ""] {
+            for h in [
+                t("Use", "Verwenden"),
+                t("TOF bin", "TOF-Bin"),
+                "m/z",
+                t("Error (mDa)", "Fehler (mDa)"),
+                "",
+            ] {
                 ui.label(h);
             }
             ui.end_row();
             for (i, r) in self.rows.iter_mut().enumerate() {
-                ui.checkbox(&mut r.used, "")
-                    .on_hover_text("Leave this ion out of the fit when unchecked");
+                ui.checkbox(&mut r.used, "").on_hover_text(t(
+                    "Leave this ion out of the fit when unchecked",
+                    "Ohne Haken bleibt dieses Ion aus der Anpassung",
+                ));
                 ui.add(egui::DragValue::new(&mut r.bin).speed(0.1).max_decimals(2))
-                    .on_hover_text("TOF bin of the peak");
+                    .on_hover_text(t("TOF bin of the peak", "TOF-Bin des Peaks"));
                 ui.add(egui::DragValue::new(&mut r.mz).speed(0.01).max_decimals(4))
-                    .on_hover_text("Mass of the reference ion");
+                    .on_hover_text(t("Mass of the reference ion", "Masse des Referenzions"));
                 match fit {
                     Some(f) if r.used => {
                         let err = (f64::from(f.mz(r.bin as f32)) - r.mz) * 1000.0;
@@ -275,7 +328,7 @@ impl TofWindow {
                 }
                 if ui
                     .small_button("×")
-                    .on_hover_text("Remove this ion")
+                    .on_hover_text(t("Remove this ion", "Dieses Ion entfernen"))
                     .clicked()
                 {
                     remove = Some(i);
@@ -291,10 +344,13 @@ impl TofWindow {
     fn result(&mut self, ui: &mut egui::Ui, fit: &Result<TofCalibration, TofError>) {
         ui.separator();
         ui.horizontal(|ui| {
-            let label = ui.label("Polynomial order");
+            let label = ui.label(t("Polynomial order", "Polynomgrad"));
             ui.add(egui::DragValue::new(&mut self.degree).range(1..=6))
                 .labelled_by(label.id)
-                .on_hover_text("Degree of the polynomial from TOF bin to m/z; needs one ion more");
+                .on_hover_text(t(
+                    "Degree of the polynomial from TOF bin to m/z; needs one ion more",
+                    "Grad des Polynoms von TOF-Bin zu m/z; braucht ein Ion mehr",
+                ));
         });
         match fit {
             Err(e) => {
@@ -312,15 +368,22 @@ impl TofWindow {
         }
         let ready = fit.as_ref().ok();
         if ui
-            .add_enabled(ready.is_some(), egui::Button::new("Save .mzcalib…"))
-            .on_hover_text(
-                "Write the calibration; open FastFlight runs from the same folder with it",
+            .add_enabled(
+                ready.is_some(),
+                egui::Button::new(t("Save .mzcalib…", ".mzcalib speichern…")),
             )
-            .on_disabled_hover_text("Add ions until the polynomial can be fitted")
+            .on_hover_text(t(
+                "Write the calibration; open FastFlight runs from the same folder with it",
+                "Die Kalibrierung schreiben; FastFlight-Läufe aus demselben Ordner damit öffnen",
+            ))
+            .on_disabled_hover_text(t(
+                "Add ions until the polynomial can be fitted",
+                "Ionen hinzufügen, bis das Polynom angepasst werden kann",
+            ))
             .clicked()
             && let Some(c) = ready
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("TOF calibration", &["mzcalib"])
+                .add_filter(t("TOF calibration", "TOF-Kalibrierung"), &["mzcalib"])
                 .set_file_name("calibration.mzcalib")
                 .save_file()
         {
@@ -328,7 +391,7 @@ impl TofWindow {
                 .map(|r| (r.bin as f32, r.mz))
                 .collect();
             match c.write(&path, &pairs) {
-                Ok(()) => self.note = Some(format!("Saved {}", path.display())),
+                Ok(()) => self.note = Some(tf!("Saved {}", "Gespeichert: {}", path.display())),
                 Err(e) => self.error = Some(e.to_string()),
             }
         }
