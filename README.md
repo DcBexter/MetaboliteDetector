@@ -40,6 +40,20 @@ with **Load…** keeps its width. Search without RI calibration: an alkane calib
 does not fit the library's FAME scale (a loaded `.calib` on that scale also needs **RI tolerance (sigma)** 2000).
 For `md-cli`, save these settings with **Save…** while a run is shown and pass the file with `--settings`.
 
+## Language, mode and what the app remembers
+
+The app starts in your system language, English or German; **Help** switches it, and the choice is saved. CSV
+headers and file formats stay English, so existing scripts keep working. At the first start the app asks for
+**Guided** or **Expert** mode (switch later in **Help** or **Settings**). Guided mode keeps expert options under a
+closed **Advanced** section and offers **Analysis → Step by step**: four flows (RI calibration, component detection,
+batch quantification, mass isotopomer distributions) that end in the matching window with the values set. Every
+function stays reachable in both modes.
+
+Settings, window layout, recent files (**File → Open recent**) and the library paths are saved between starts. At
+the very first start the app imports your old 3.3 settings if it finds them. Shortcuts are shown in the menus:
+Ctrl+O open, Ctrl+S save components, Ctrl+E export CSV, Ctrl+L add component to library, Ctrl+Q quit, F1 manual.
+**Help** also has **About** (version, licence, how to cite) and **Open log folder**.
+
 ## Load runs
 
 **File → Open chromatograms…** (or the button on the start screen), or pass files on the command line.
@@ -149,7 +163,7 @@ md-cli --library library.msl --settings algorithms.settings --calibration run.ca
 ## Development
 
 - Architecture, performance rules, build and test commands: [docs/architecture.md](docs/architecture.md)
-- Milestones: [docs/roadmap.md](docs/roadmap.md)
+- Status and open work: the [project board](https://github.com/users/DcBexter/projects/2) and its issues
 - UI review and how these screenshots are made: [docs/ui-quality.md](docs/ui-quality.md)
 - What the old 3.3 version did (reverse-engineered): [docs/reverse-engineering/](docs/reverse-engineering/)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md); workflow kit setup:

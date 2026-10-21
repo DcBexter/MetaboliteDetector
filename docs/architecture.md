@@ -15,7 +15,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | NetCDF | `netcdf3` (pure Rust) | ANDI-MS files are NetCDF-3; no libnetcdf/HDF5 C dependency to ship on Windows. |
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
 | Updates | `ureq` (rustls), `serde_json`, `sha2`, `semver`, `tar` + `flate2`, app only | `ureq`: HTTPS to the GitHub API and release assets without a system TLS library; `serde_json`: read the release list; `sha2`: verify downloads against `SHA256SUMS.txt`; `semver`: order versions incl. pre-releases; `tar`: unpack the Linux tar.gz. See [Updates](#updates). |
-| R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and the planned md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
+| R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
 
 ## Layout
 
@@ -40,6 +40,10 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
   src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
                         statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
+  src/centroid.rs       centroided and nominal-mass spectra (NetCDF and MSL export)
+  src/fastflight.rs     FastFlight TOF raw data (MsData.FFT/.FFC) import; src/tof.rs: its m/z calibration (.mzcalib)
+  src/quadfit.rs        clean-room parabola fit that reproduces the old rounding of precise apexes (gsl-clean-room.md)
+  src/library_add.rs    add a found component to a library, copy RTs into a target library
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
   src/csv.rs            CSV writer for plotted series
@@ -54,6 +58,11 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp
   src/central.rs        centre: TIC/SIC plots, scan cursor, scan/RT entry, spectrum
   src/detected_peaks.rs Detected Peaks: ion traces of the selected component beside the spectrum
+  src/view.rs           chromatogram view options (derivative, time unit, auto Y, score filter) and the run info window
+  src/shortcuts.rs      keyboard shortcuts; menu items and keys run the same `Action`
+  src/export_all.rs     File → Export all runs as NetCDF
+  src/plot_export.rs    save a plot as PNG, SVG or PDF, or copy it; src/vector.rs writes the SVG/PDF from the frame's shapes
+  src/tof_calibration.rs TOF calibration window (FastFlight m/z, saves .mzcalib)
   src/loading.rs        opening files, load polling, SIC jobs
   src/jobs.rs           `spawn` and `poll_job` for background threads
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
@@ -843,6 +852,9 @@ cargo run --release -p md-cli -- --library library.msl -o table.csv run1.cdf run
 cargo run --release -p metabolite-detector -- path/to/run.cdf
 example-data/fetch.sh             # Windows: .\example-data\fetch.ps1
 ```
+
+In a git worktree, `node scripts/link-example-data.mjs` links the main checkout's example data (`.ps1` and `.sh`
+do the same), so the golden tests run instead of skipping.
 
 `.github/workflows/ci.yml` runs for every non-draft PR and every push to `main`, with no paths filter, because the required
 checks must report on every PR. Ubuntu runs `cargo fmt --check`, Clippy (warnings fail), the tests through `cargo llvm-cov` and the
