@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-/// Run key (lower-case file name without extension) → replicate group.
+/// Run key (`run_key`: lower-case file name without extension; by hand `path_key`) → replicate group.
 pub type SampleGroups = BTreeMap<String, String>;
 
 /// Key of a run or table entry: path, the extension of a run file and the case (Windows) do not matter.

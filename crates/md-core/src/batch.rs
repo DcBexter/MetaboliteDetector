@@ -510,7 +510,7 @@ pub struct TableSettings {
     /// Groups from a sample table; they win over `replicates` for the runs the table names. A run
     /// it lacks is grouped by `replicates`.
     pub sample_groups: SampleGroups,
-    /// Groups set by hand per run; they win over the sample table and the pattern.
+    /// Groups set by hand per run, keyed by `path_key`; entries of runs not in the batch are ignored; they win over the sample table and the pattern.
     pub manual_groups: SampleGroups,
     /// Keep a substance only if some group quantifies it in at least this fraction of its runs.
     pub min_reproducibility: f64,

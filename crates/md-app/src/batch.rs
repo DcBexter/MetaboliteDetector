@@ -371,44 +371,51 @@ fn manual_groups_row(
     let hint = "Set the replicate group of single runs by hand. It wins over the table and the \
                 pattern; an empty field leaves the run to them.";
     ui.label("Group per run").on_hover_text(hint);
-    egui::CollapsingHeader::new(format!("{} of {} runs set", manual.len(), paths.len()))
-        .id_salt("manual groups")
-        .show(ui, |ui| {
-            if ui
-                .add_enabled(!manual.is_empty(), egui::Button::new("Clear all"))
-                .clicked()
-            {
-                manual.clear();
-            }
-            let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
-            egui::ScrollArea::vertical()
-                .id_salt("manual groups list")
-                .max_height(200.0)
-                .show_rows(ui, height, paths.len(), |ui, rows| {
-                    for path in &paths[rows] {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        let key = path_key(path);
-                        let mut text = manual.get(&key).cloned().unwrap_or_default();
-                        ui.horizontal(|ui| {
-                            let label = ui.label(name.as_ref());
-                            let edit = egui::TextEdit::singleline(&mut text)
-                                .desired_width(100.0)
-                                .hint_text(hint_text(
-                                    table.get(&run_key(&name)),
-                                    has_pattern,
-                                    !table.is_empty(),
-                                ));
-                            if ui.add(edit).labelled_by(label.id).changed() {
-                                if text.trim().is_empty() {
-                                    manual.remove(&key);
-                                } else {
-                                    manual.insert(key, text);
-                                }
+    egui::CollapsingHeader::new(format!(
+        "{} of {} runs set",
+        paths
+            .iter()
+            .filter(|p| manual.contains_key(&path_key(p)))
+            .count(),
+        paths.len()
+    ))
+    .id_salt("manual groups")
+    .show(ui, |ui| {
+        if ui
+            .add_enabled(!manual.is_empty(), egui::Button::new("Clear all"))
+            .clicked()
+        {
+            manual.clear();
+        }
+        let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+        egui::ScrollArea::vertical()
+            .id_salt("manual groups list")
+            .max_height(200.0)
+            .show_rows(ui, height, paths.len(), |ui, rows| {
+                for path in &paths[rows] {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    let key = path_key(path);
+                    let mut text = manual.get(&key).cloned().unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        let label = ui.label(name.as_ref());
+                        let edit = egui::TextEdit::singleline(&mut text)
+                            .desired_width(100.0)
+                            .hint_text(hint_text(
+                                table.get(&run_key(&name)),
+                                has_pattern,
+                                !table.is_empty(),
+                            ));
+                        if ui.add(edit).labelled_by(label.id).changed() {
+                            if text.trim().is_empty() {
+                                manual.remove(&key);
+                            } else {
+                                manual.insert(key, text);
                             }
-                        });
-                    }
-                });
-        });
+                        }
+                    });
+                }
+            });
+    });
     ui.end_row();
 }
 
@@ -868,8 +875,6 @@ impl Batch {
             }
             if ui.button("Clear").clicked() {
                 self.paths.clear();
-                // Groups of removed runs would still be counted.
-                self.settings.manual_groups.clear();
             }
             ui.label(format!("{} runs", self.paths.len()));
         });
