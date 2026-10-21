@@ -81,11 +81,13 @@ So the order is filter, match, reproducibility, rescan. The rescan comes last an
 - If no component has the ion, the peaks are grouped per ion value; per group it keeps the one peak whose apex
   scan is nearest to `rt2Scan(mean)` (`ri2Scan` in the RI branch, first one on a tie), sums the raw values of
   the kept peaks (`Peak::getValues`) and prints `INFORMATION: Found additional peak areas without deconvolution`.
-- Port (`batch/rescan.rs`): per missing ion the peak nearest to the mean, the higher one on a tie. So with
-  ΔRI 20 and no RI calibration, Glycine 3TMS (313 s) gets the m/z 177 peak at 321 s in the example runs, as in
-  3.3: its own `DefaultPeakDetector` finds no other m/z 177 peak in 302.9..323.1 s (`old-md-3.3.tsv`, runs
-  7235eg04, 20 and 32). Left as is: the port deconvolutes the picked peaks of all missing ions together and
-  does not fall back to the next component when the fit loses the ion (it sums the raw values of the peak).
+- Port (`batch/rescan.rs`): per missing ion it deconvolutes that ion's window peaks on their own and takes the
+  fit of the peak nearest to the mean (in RI on a calibrated run), the higher one on a tie, else the next
+  nearest with a fit, else the raw sum of the nearest peak. It ranks by the peak's apex, not the component's
+  apex, and keeps one peak in the raw sum where the old code keeps one per exact ion value. So with ΔRI 20 and
+  no RI calibration, Glycine 3TMS (313 s) gets the m/z 177 peak at 321 s in the example runs, as in 3.3: its
+  own `DefaultPeakDetector` finds no other m/z 177 peak in 302.9..323.1 s (`old-md-3.3.tsv`, runs 7235eg04,
+  20 and 32).
 - `ResultSeriesException("Not implemented yet")` is thrown when the byte at `ResultSeries+0x141` is false. The
   constructor stores its first bool there and both `createResultSeries` and `createReplicateResultSeries` pass 1,
   so batch quantification never reaches it.
