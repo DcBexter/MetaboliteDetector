@@ -47,6 +47,9 @@ mod view;
 use jobs::{poll_job, spawn};
 
 fn main() -> eframe::Result {
+    // First, so the notes of `guard` and a failed start come in it too; a saved choice replaces it
+    // in `restore`.
+    lang::set(lang::Lang::system());
     // Without our config dir eframe would pick its own; name it, so `persist::guard` checks that file.
     let file = (persist::config_dir().or_else(|| eframe::storage_dir("MetaboliteDetector")))
         .map(|d| d.join("app.ron"));
@@ -64,8 +67,6 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
             let mut app = App::default();
-            // A saved choice replaces it in `restore`.
-            lang::set(lang::Lang::system());
             persist::restore(&mut app, &cc.egui_ctx, cc.storage, file, guarded);
             app.updater.start(&cc.egui_ctx);
             for path in std::env::args_os().skip(1).map(PathBuf::from) {

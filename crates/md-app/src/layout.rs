@@ -397,7 +397,11 @@ mod tests {
             "Library hits",
             "a_long_run_name_from_the_lab_60.cdf",
         ];
-        // The English run checks the titles; the German one draws the same windows.
+        if crate::lang::de() {
+            // The titles are German; at least the windows of `windows_open_beside_the_run_list_and_apart`.
+            let windows = (nodes.names.values()).filter(|(role, _)| role == "Window");
+            assert!(windows.count() >= 12, "German: windows not drawn");
+        }
         for title in shown.into_iter().filter(|_| !crate::lang::de()) {
             let drawn = nodes
                 .names

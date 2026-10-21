@@ -31,9 +31,10 @@ pub fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, Strin
     match rx.try_recv() {
         Ok(v) => Some(Ok(v)),
         Err(mpsc::TryRecvError::Empty) => None,
-        Err(mpsc::TryRecvError::Disconnected) => {
-            Some(Err(crate::lang::tf!("{what} crashed", "{what} abgestürzt")))
-        }
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(crate::lang::tf!(
+            "{what} crashed",
+            "{what} ist abgestürzt"
+        ))),
     }
 }
 

@@ -563,7 +563,9 @@ fn compare(a: &Row, b: &Row, col: Col) -> std::cmp::Ordering {
     let num = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
     let (x, y) = (&a.res, &b.res);
     match col {
-        Col::Name => x.name.to_lowercase().cmp(&y.name.to_lowercase()),
+        Col::Name => shown_name(x)
+            .to_lowercase()
+            .cmp(&shown_name(y).to_lowercase()),
         Col::Rt => x.rt_s.total_cmp(&y.rt_s),
         Col::Ri => num(x.ri).total_cmp(&num(y.ri)),
         Col::Area => a.area.total_cmp(&b.area),

@@ -11,6 +11,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | Language | Rust (edition 2024) | Memory-safe, fast numerics, one static binary per OS, no runtime to install. |
 | GUI | [egui](https://github.com/emilk/egui)/eframe + egui_plot | Pure Rust, single executable, interactive plots that handle large series. Chosen by the maintainer 2026-10-19. |
 | File dialogs | rfd | Native dialogs on every OS. |
+| UI language | `sys-locale`, app only | The system language as the default (S8); already in the tree through winit. See [UI language](#ui-language). |
 | NetCDF | `netcdf3` (pure Rust) | ANDI-MS files are NetCDF-3; no libnetcdf/HDF5 C dependency to ship on Windows. |
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
 | Updates | `ureq` (rustls), `serde_json`, `sha2`, `semver`, `tar` + `flate2`, app only | `ureq`: HTTPS to the GitHub API and release assets without a system TLS library; `serde_json`: read the release list; `sha2`: verify downloads against `SHA256SUMS.txt`; `semver`: order versions incl. pre-releases; `tar`: unpack the Linux tar.gz. See [Updates](#updates). |
@@ -767,7 +768,19 @@ geometry and, under the key `metabolite-detector`, our `KEY=value` lines. These 
 field under its old key (`LS_RI_DIFF=10`, ranges as `73:75;147:148`, `PEAK_DETECTOR=default` or
 `matched <width> <threshold>`), `panel.<area>` for the View menu, `library`, `nist_library` and `recent`
 (newest first, at most 10; File → Open recent) and `mode` (`guided` or `expert`, S7). Keys the version does
-not know are written back unchanged; `language` (S8) is reserved for that feature.
+not know are written back unchanged. `language` is `en` or `de` (S8); without it the system language
+is used, an unknown value is replaced by the current language.
+
+## UI language
+
+S8, #257. `md-app/src/lang.rs`: every UI text is an English/German pair at its call site, `lang::t` for
+fixed texts and `lang::tf!` for formatted ones, so no text can miss a language. The language is per
+thread (a thread starts in English, so parallel tests do not see each other's choice); `main` sets the
+system language (`sys-locale`), `persist` the saved one, and `jobs::spawn` hands it to its worker. CSV
+headers, file contents, default file names and saved keys stay English literals; where md-core's English
+text is shown (`Normalization::label`, "No match: N") md-app translates at the display site. A window
+whose title is translated keeps the English title as its id. `every_ui_text_is_translated` scans the
+sources for bare widget texts; md-core's error messages stay English for now.
 
 ## Guided mode
 
