@@ -482,8 +482,8 @@ mod tests {
             width: Some(30.0),
             ..saved.clone()
         };
-        let mut traces = IonTraces::new(&run).unwrap();
-        let found = traces.detect_all_peaks(&ps);
+        let mut traces = IonTraces::new(&run, 0.5).unwrap();
+        let found = traces.detect_peaks(&ps);
         let comps = deconvolute(&traces, &found, &run.scan_times_s, &saved);
         assert_eq!(comps.len(), 2);
         let now = deconvolute(&traces, &found, &run.scan_times_s, &wide);

@@ -416,7 +416,7 @@ pub(crate) mod tests {
     #[test]
     fn separates_two_overlapping_substances() {
         let (c, truth) = two_substances();
-        let mut traces = IonTraces::new(&c).unwrap();
+        let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         assert_eq!(comps.len(), 2, "{comps:?}");
@@ -439,7 +439,7 @@ pub(crate) mod tests {
     #[test]
     fn rejects_components_with_too_few_ions_and_empty_input() {
         let (c, _) = two_substances();
-        let mut traces = IonTraces::new(&c).unwrap();
+        let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let strict = DeconvSettings {
             min_peak_number: 13,
@@ -481,7 +481,7 @@ pub(crate) mod tests {
             ..auto.clone()
         };
         assert_eq!(set.width_scans(&times(20.0)), 3.0);
-        let mut traces = IonTraces::new(&c).unwrap();
+        let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
         assert_eq!(
             deconvolute(&traces, &peaks, &c.scan_times_s, &auto),

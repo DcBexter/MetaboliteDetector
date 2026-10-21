@@ -91,7 +91,7 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
-    let mut traces = IonTraces::new(data).map_err(|e| e.to_string())?;
+    let mut traces = IonTraces::new(data, key.0.fwhm).map_err(|e| e.to_string())?;
     let peaks = traces.detect_all_peaks(&key.0);
     let mut components = deconvolute(&traces, &peaks, &data.scan_times_s, &key.1);
     components.sort_by_key(|k| k.apex_scan);
@@ -518,7 +518,7 @@ impl Settings {
         );
 
         ui.add_space(8.0);
-        ui.strong("Centroiding (export)");
+        ui.strong("Centroiding");
         egui::Grid::new("centroid").num_columns(2).show(ui, |ui| {
             let used = "Finds the peaks of a profile spectrum when it is exported as centroids.";
             for (name, key, v) in [
@@ -540,6 +540,14 @@ impl Settings {
             ] {
                 row(ui, name, key, used, num(v, ANY));
             }
+            row(
+                ui,
+                "Centroid: FWHM share",
+                "SF_FWHM",
+                "Points at or above this share of a peak's maximum make up its centroid mass, \
+                 in every centroiding (high-resolution CDF import, centroid export, MSL export, TOF calibration).",
+                num(&mut d.sf_fwhm, 0.0..=1.0).speed(0.01),
+            );
         });
 
         ui.add_space(8.0);
@@ -567,13 +575,6 @@ impl Settings {
                 ] {
                     row(ui, name, key, dead, num(v, ANY));
                 }
-                row(
-                    ui,
-                    "Spectrum filter: FWHM",
-                    "SF_FWHM",
-                    "3.3 centroids with the points at or above this share of a peak's maximum; this version always uses 0.5.",
-                    num(&mut d.sf_fwhm, ANY),
-                );
                 let stored: [(&str, &str, &mut f64); 3] = [
                     (
                         "Peak baseline deviation",

@@ -166,7 +166,8 @@ impl LibraryEditor {
     }
 
     /// "Export MSL" with the three types of the old export dialog; only `.msl` files are written.
-    fn export_menu(&mut self, ui: &mut egui::Ui, stem: &str) {
+    /// `fwhm` is `SF_FWHM` of the centroiding.
+    fn export_menu(&mut self, ui: &mut egui::Ui, stem: &str, fwhm: f64) {
         ui.menu_button("Export MSL", |ui| {
             for (kind, label) in [
                 (MslType::Nominal, "MSL Nominal"),
@@ -182,7 +183,7 @@ impl LibraryEditor {
                     else {
                         return;
                     };
-                    let text = write_msl_as(&self.compounds, kind);
+                    let text = write_msl_as(&self.compounds, kind, fwhm);
                     self.error = if path
                         .extension()
                         .is_some_and(|e| e.eq_ignore_ascii_case("msl"))
@@ -209,6 +210,7 @@ impl LibraryEditor {
         ui: &mut egui::Ui,
         library: Option<&Library>,
         source: Option<Source>,
+        fwhm: f64,
     ) -> Option<PathBuf> {
         let mut saved = None;
         ui.horizontal(|ui| {
@@ -235,7 +237,7 @@ impl LibraryEditor {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            self.export_menu(ui, &stem);
+            self.export_menu(ui, &stem, fwhm);
             if ui
                 .button("Save as…")
                 .on_hover_text("Write a .mdlib file. For an .msl file use Export MSL.")
@@ -597,6 +599,7 @@ impl App {
             quant: self.settings.applied.quant(),
             search: self.settings.applied.search(),
         });
+        let fwhm = self.settings.applied.sf_fwhm;
         let ed = &mut self.editor;
         let name = if ed.name.is_empty() {
             "new library"
@@ -613,7 +616,7 @@ impl App {
             .id(egui::Id::unique("library editor"))
             .open(&mut open)
             .show(ctx, |ui| {
-                saved = ed.contents(ui, self.library.as_deref(), source);
+                saved = ed.contents(ui, self.library.as_deref(), source, fwhm);
             });
         ed.open = open;
         // The app searches with the saved library from now on.

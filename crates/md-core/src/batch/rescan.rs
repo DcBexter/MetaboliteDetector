@@ -191,7 +191,7 @@ fn span(v: &[f64]) -> (f64, f64) {
 }
 
 fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
-    let mut traces = IonTraces::new(&c)?;
+    let mut traces = IonTraces::new(&c, s.peaks.fwhm)?;
     let times = c.scan_times_s.clone();
     drop(c);
     let peaks = traces.detect_peaks(&s.peaks);

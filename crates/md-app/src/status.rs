@@ -92,4 +92,26 @@ mod tests {
         app.panels.components = false;
         assert_eq!(app.hidden_list_note(), Some("Save failed: disk full"));
     }
+
+    /// The note must stand in the drawn bar, not only in the chooser (#326).
+    #[test]
+    fn the_drawn_status_bar_shows_the_note_while_the_list_is_hidden() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = App::default();
+        app.runs.push(crate::results::tests::run());
+        app.results.set_note("Save failed: disk full".into());
+        app.panels.components = false;
+        let mut h = Harness::builder()
+            .with_context_setup(crate::style::apply)
+            .build_ui_state(|ui, app: &mut App| app.status_bar(ui), app);
+        h.run();
+        h.get_by_label_contains("Save failed: disk full");
+        h.state_mut().panels.components = true;
+        h.run();
+        assert!(
+            h.query_by_label_contains("Save failed: disk full")
+                .is_none()
+        );
+    }
 }
