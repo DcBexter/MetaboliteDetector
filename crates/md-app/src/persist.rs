@@ -841,6 +841,26 @@ size=@Size(1591 800)
         assert_eq!(width(&app), Some(2.5), "only 1 is switched");
     }
 
+    /// The start itself runs the switch, not only the helper.
+    #[test]
+    fn restore_switches_the_saved_width() {
+        struct Fake(String);
+        impl eframe::Storage for Fake {
+            fn get_string(&self, _: &str) -> Option<String> {
+                Some(self.0.clone())
+            }
+            fn set_string(&mut self, _: &str, _: String) {}
+            fn remove_string(&mut self, _: &str) {}
+            fn flush(&mut self) {}
+        }
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        let fake = Fake("AN_DECONVOLUTION_WIDTH=1\n".into());
+        restore(&mut app, &ctx, Some(&fake), None, None);
+        assert_eq!(app.settings.applied.an_deconvolution_width, None);
+        assert!(text(&app).contains("\nauto_width_once=true\n"));
+    }
+
     /// Reads a real old `MetaboliteDetector.conf` copied into `example-data/old-results/`.
     #[test]
     fn real_old_conf() {
