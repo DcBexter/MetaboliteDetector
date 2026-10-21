@@ -27,7 +27,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use regex::Regex;
 
 use crate::Chromatogram;
-use crate::deconv::{Component, DeconvSettings, deconvolute};
+use crate::analysis::{PeakPass, RunAnalysis, analyze_run};
+use crate::deconv::{Component, DeconvSettings};
 use crate::library::LibraryCompound;
 use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
 use crate::ri::RiCalibration;
@@ -205,17 +206,14 @@ fn scan_and_save(
     s: &ScanSettings,
     cmp: Option<&Path>,
 ) -> Result<(Scanned, Option<String>), TooLarge> {
-    let mut traces = IonTraces::new(&c, s.peaks.fwhm)?;
-    // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
+    // The run goes in by value: its spectra are dropped once the ion index is built, which halves the
     // peak memory per run.
-    let times = c.scan_times_s.clone();
-    drop(c);
-    let peaks = traces.detect_all_peaks(&s.peaks);
-    let comps = deconvolute(&traces, &peaks, &times, &s.deconv);
-    let masses: Vec<u32> = (peaks.iter())
-        .map(|p| traces.masses[p.row as usize])
-        .collect();
-    drop(traces);
+    let RunAnalysis {
+        times,
+        peaks,
+        components: comps,
+        masses,
+    } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered)?;
     let scanned = scan_components(&times, &comps, &peaks, lib, s, |i| masses[i]);
     let failed = cmp.and_then(|path| {
         let ris = (scanned.calibration.as_ref()).map_or_else(
@@ -1351,15 +1349,14 @@ NUM PEAKS: 1
         let direct = scan_chromatogram(run.clone(), &prepared, &s).unwrap();
         assert_eq!(direct.found.len(), 2);
 
-        let mut traces = IonTraces::new(&run, 0.5).unwrap();
-        let peaks = traces.detect_peaks(&s.peaks);
-        let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
-        let masses: Vec<u32> = peaks
-            .iter()
-            .map(|p| traces.masses[p.row as usize])
-            .collect();
-        let compounds =
-            crate::cmp::compounds_of_components(&comps, &masses, &peaks, &run.scan_times_s, &[]);
+        let a = analyze_run(&run, &s.peaks, &s.deconv, PeakPass::Fresh).unwrap();
+        let compounds = crate::cmp::compounds_of_components(
+            &a.components,
+            &a.masses,
+            &a.peaks,
+            &run.scan_times_s,
+            &[],
+        );
         let path = dir.join("run.cmp");
         crate::cmp::write_cmp(&path, &compounds).unwrap();
 
@@ -1452,9 +1449,8 @@ NUM PEAKS: 1
         let saved: Vec<PathBuf> = runs.iter().map(|p| p.with_extension("cmp")).collect();
 
         // The saved components are those of the deconvolution, with the RI of the search.
-        let mut traces = IonTraces::new(&run, 0.5).unwrap();
-        let peaks = traces.detect_all_peaks(&s.peaks);
-        let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
+        let comps =
+            (analyze_run(&run, &s.peaks, &s.deconv, PeakPass::Reordered).unwrap()).components;
         let (loaded, _, _) =
             crate::cmp::components_from_file(&saved[0], &run.scan_times_s).unwrap();
         let key = |c: &crate::deconv::Component| (c.apex_scan, c.spectrum.clone());
