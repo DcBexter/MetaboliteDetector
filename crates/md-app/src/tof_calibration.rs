@@ -58,7 +58,8 @@ impl Default for TofWindow {
 }
 
 impl TofWindow {
-    pub fn window(&mut self, ctx: &egui::Context) {
+    /// `fwhm` is `SF_FWHM` of the peak centring.
+    pub fn window(&mut self, ctx: &egui::Context, fwhm: f64) {
         if let Some(rx) = &self.job
             && let Some(result) = poll_job(rx, "FastFlight import").map(|r| r.and_then(|x| x))
         {
@@ -72,7 +73,7 @@ impl TofWindow {
         egui::Window::new("TOF calibration")
             .tool_window(ctx, 11, [520.0, 560.0])
             .open(&mut open)
-            .show(ctx, |ui| self.contents(ui));
+            .show(ctx, |ui| self.contents(ui, fwhm));
         self.open = open;
     }
 
@@ -81,7 +82,7 @@ impl TofWindow {
         self.run = Some(run);
     }
 
-    fn contents(&mut self, ui: &mut egui::Ui) {
+    fn contents(&mut self, ui: &mut egui::Ui, fwhm: f64) {
         self.buttons(ui);
         if let Some(e) = &self.error {
             let mut clear = false;
@@ -102,7 +103,7 @@ impl TofWindow {
                 ui.label("Adding up the scans of the run…");
             });
         }
-        self.plot(ui);
+        self.plot(ui, fwhm);
         let fit = self.fit();
         self.table(ui, fit.as_ref().ok());
         self.result(ui, &fit);
@@ -175,7 +176,7 @@ impl TofWindow {
     }
 
     /// The summed spectrum with a line at each reference ion; a click adds an ion at the peak there.
-    fn plot(&mut self, ui: &mut egui::Ui) {
+    fn plot(&mut self, ui: &mut egui::Ui, fwhm: f64) {
         if self.run.is_none() {
             ui.label(
                 "Open a FastFlight run, then click its peaks to add reference ions. \
@@ -209,7 +210,7 @@ impl TofWindow {
             && let Some(at) = shown.inner
             && let Some((_, spectrum)) = &self.run
         {
-            match peak_bin(spectrum, at.x as f32, self.reach) {
+            match peak_bin(spectrum, at.x as f32, self.reach, fwhm) {
                 Some(bin) => self.rows.push(Row {
                     bin: f64::from(bin),
                     mz: 0.0,
