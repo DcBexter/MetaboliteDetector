@@ -44,6 +44,12 @@ fn write_rows(
     Ok(())
 }
 
+/// A name like `01`: digits with a leading zero, which a spreadsheet opens as the number 1 (no encoding
+/// in a CSV prevents that without an import option; `="01"` would clash with the formula guard).
+pub fn is_zero_name(s: &str) -> bool {
+    s.len() > 1 && s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Rewrites a CSV of this crate for a spreadsheet with German locale, where `,` is the decimal mark and
 /// `;` the separator: numeric cells get a decimal comma, cells with `;` get quoted. The header line
 /// and the first `text_cols` columns (names, which must stay as they are) are not converted.
@@ -53,11 +59,7 @@ pub fn to_excel_de(csv: &str, text_cols: usize) -> String {
     let flush = |cell: &mut String, end: &str, header: bool, col: usize, out: &mut String| {
         let (text, numeric) = (std::mem::take(cell), !header && col >= text_cols);
         // A name like `01` is quoted: Calc then keeps it as text if "Quoted field as text" is on.
-        let zero_name = !header
-            && !numeric
-            && text.len() > 1
-            && text.starts_with('0')
-            && text.bytes().all(|b| b.is_ascii_digit());
+        let zero_name = !header && !numeric && is_zero_name(&text);
         if text.starts_with('"') {
             out.push_str(&text);
         } else if numeric && text.parse::<f64>().is_ok() {

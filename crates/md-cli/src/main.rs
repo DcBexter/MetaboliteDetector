@@ -344,11 +344,11 @@ fn run(a: Args) -> Result<bool, String> {
     }
     // Groups, settings and ion integrals go next to a CSV file; standard output has no room for more tables.
     if let Some(p) = &a.output {
-        // Every file written, with the number of leading name columns `--excel-de` leaves as they are.
-        let mut written = vec![(p.clone(), 3)];
+        // Every file written, with the number of leading text columns `--excel-de` leaves as they are.
+        let mut written = vec![(p.clone(), 1)];
         written.extend(table.write_groups_file(p).map_err(io)?.map(|f| (f, 2)));
         let stats = table.write_group_stats_file(p, Some("BLANK")).map_err(io)?;
-        written.extend(stats.map(|f| (f, 3)));
+        written.extend(stats.map(|f| (f, 1)));
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
         ts.write_csv(&how, f).map_err(io)?;

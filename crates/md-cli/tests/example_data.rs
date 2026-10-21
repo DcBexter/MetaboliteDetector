@@ -90,3 +90,46 @@ fn csv_equals_the_core_table_of_the_example_runs() {
     assert_eq!(t.runs.len(), 15);
     assert!(!t.rows.is_empty(), "no substance found in any run");
 }
+
+/// `scripts/r/load_results.R` reads both CSV variants (default and `--excel-de`) with R: numbers are
+/// numeric, group `04` stays text. Skipped without the example data or `Rscript` on the PATH.
+#[test]
+fn load_results_r_reads_both_variants() {
+    let Some(dir) = data_dir() else { return };
+    if Command::new("Rscript").arg("--version").output().is_err() {
+        eprintln!("skipped: Rscript not found");
+        return;
+    }
+    let lib = Path::new(env!("CARGO_TARGET_TMPDIR")).join("example-library-r.msl");
+    std::fs::write(&lib, library_msl(&dir)).unwrap();
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/r/load_results.R");
+    for (name, extra) in [("plain", None), ("german", Some("--excel-de"))] {
+        let csv = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("r-{name}.csv"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_md-cli"));
+        cmd.arg("-l").arg(&lib).arg("-o").arg(&csv);
+        cmd.args(["--replicates", r"7235eg(\d\d)"]).args(extra);
+        cmd.args(["7235eg04", "7235eg06", "7235eg07"].map(|r| dir.join(format!("{r}.cdf"))));
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let code = format!(
+            "csv_path <- '{}'; source('{}'); stopifnot(is.numeric(data$RT_s), \
+             all(sapply(data[-(1:3)], is.numeric)), identical(unname(groups[1]), '04'), \
+             is.numeric(groupstats$RT_s))",
+            csv.display().to_string().replace(r"\", "/"),
+            script.display().to_string().replace(r"\", "/")
+        );
+        let r = Command::new("Rscript")
+            .args(["-e", &code])
+            .output()
+            .unwrap();
+        assert!(
+            r.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+    }
+}

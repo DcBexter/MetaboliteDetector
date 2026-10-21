@@ -441,9 +441,15 @@ failed runs go to stderr, and the exit code is 2 if the table is complete except
 The default CSV format (`,` and decimal points) never changes, so scripts keep working; a spreadsheet with German
 locale reads `.` as thousands mark (`293.808` becomes 293808, #249). `--excel-de` (the app: "Excel (German)")
 rewrites every file of the export with `csv::to_excel_de`: `;` separators and decimal commas in the number
-columns; header lines, name columns (so a group `0.5` stays) and the values of `FILE.settings.csv` (text for
-`load_results.R`) keep their text, quoting as before. `load_results.R` reads both. A group name like `01` is still
-quoted (`"01"`): Calc (de-DE) keeps it text only with "Quoted field as text" in the import dialog, else it reads 1; CRLF files keep CRLF. Checked in LibreOffice Calc headless (numbers stay numbers, names text); `load_results.R` was not run (no R installed).
+columns (also `RT_s`; `Quant_ions` is text with spaces and stays); header lines, name columns (so a group `0.5` stays)
+and the values of `FILE.settings.csv` (text for `load_results.R`) keep their text, quoting as before. `load_results.R`
+reads both; run with R 4.5.2 on the 15 example runs with groups (#322): `data` loads, groups `04` stay text, a leading
+guard `'` is stripped, numbers are numeric (a test in `crates/md-cli/tests/example_data.rs` repeats this and skips
+without `Rscript`). A group name like `01` is still quoted (`"01"`), but there is **no encoding that keeps it text on a plain
+open**: Calc (de-DE, checked headless) reads `"01"`, `01` and `+01` as 1 and shows `'01` with the apostrophe; only `="01"` stays text, a
+formula that the guard on `=` would have to let through (and `load_results.R` could not read back). Text stays only with "Quoted field as text" in
+the import dialog, so the export dialog says so when a group like `01` exists with "Excel (German)" on (Excel behaves the same as far as
+known, not checked); CRLF files keep CRLF. Checked in LibreOffice Calc headless (numbers stay numbers, names text).
 Without `--settings` and `--calibration` the table equals the app's batch window with default settings
 and no RI calibration. `crates/md-cli/tests/example_data.rs` checks this on the 15 example runs.
 
