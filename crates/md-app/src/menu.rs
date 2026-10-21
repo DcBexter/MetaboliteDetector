@@ -146,7 +146,7 @@ impl App {
                 ui.label(t("MIT licence", "MIT-Lizenz"));
                 ui.separator();
                 ui.label(t(
-                    "Rewrite (2026): by Milan Burgmann.Original program, version 3.3 (2009): by Milan Burgmann, and the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.",
+                    "Rewrite (2026): by Milan Burgmann. Original program, version 3.3 (2009): by Milan Burgmann, and the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.",
                     "Neuentwicklung (2026): von Milan Burgmann. Originalprogramm, Version 3.3 (2009): von Milan Burgmann und den unten im Zitat genannten Autoren, Karsten Hiller et al., TU Braunschweig.",
                 ));
                 ui.label(t("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.", "Bitte zitieren: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439."));

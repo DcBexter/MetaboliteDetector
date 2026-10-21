@@ -324,7 +324,8 @@ impl LibraryEditor {
         ui.horizontal_wrapped(|ui| {
             if ui.button(t("New compound", "Neue Substanz")).clicked() {
                 self.compounds
-                    .push(LibraryCompound::new(t("New compound", "Neue Substanz")));
+                    // Data in the library file, so English like the file formats.
+                    .push(LibraryCompound::new("New compound"));
                 self.dirty = true;
                 self.select(Some(self.compounds.len() - 1));
             }

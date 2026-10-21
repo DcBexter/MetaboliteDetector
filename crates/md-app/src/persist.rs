@@ -2,7 +2,7 @@
 //! memory (panel sizes, tool window positions), the window geometry and, under [`KEY`], our own
 //! `KEY=value` lines: the analysis settings under the old QSettings names, the shown panels, the
 //! libraries and the recent files. Unknown keys are kept as they are, so a newer version's values
-//! survive. `language` is `en` or `de` (S8); without it the system language is used. `mode` is the guided or expert mode (S7); without it
+//! survive. `language` is `en` or `de` (S8), saved once the user picks one other than the system's. `mode` is the guided or expert mode (S7); without it
 //! the start asks for it. The first start imports the old
 //! 3.3 settings once (`~/.config/TU-Braunschweig/MetaboliteDetector.conf`, on Windows the registry).
 //! Every value is checked; a bad one keeps its default. A saved deconvolution width 1 becomes Auto once
@@ -44,6 +44,8 @@ pub struct Saved {
     file: Option<PathBuf>,
     /// The one-time width 1 → Auto switch ran (#311); saved as [`WIDTH_ONCE`].
     width_once: bool,
+    /// A language was saved; without one the app follows the system language until the user picks another.
+    language: bool,
 }
 
 impl Saved {
@@ -468,9 +470,13 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
                     true
                 }
                 ("", "language") => {
-                    // An unknown one (maybe from a newer version) keeps the system language.
-                    if let Some(l) = crate::lang::Lang::from_key(&v) {
-                        crate::lang::set(l);
+                    match crate::lang::Lang::from_key(&v) {
+                        Some(l) => {
+                            crate::lang::set(l);
+                            app.saved.language = true;
+                        }
+                        // Maybe from a newer version: kept, the system language is used meanwhile.
+                        None => app.saved.extra.push((key.clone(), v)),
                     }
                     true
                 }
@@ -563,7 +569,12 @@ pub fn text(app: &App) -> String {
     if !app.guided.ask {
         lines.push(("mode".into(), app.guided.mode.key().into()));
     }
-    lines.push(("language".into(), crate::lang::get().key().into()));
+    // Only a choice is saved, so the default keeps following the system language.
+    let lang = crate::lang::get();
+    let chosen = app.saved.language || lang != crate::lang::Lang::system();
+    if chosen {
+        lines.push(("language".into(), lang.key().into()));
+    }
     if app.saved.width_once {
         lines.push((WIDTH_ONCE.into(), "true".into()));
     }
@@ -581,11 +592,11 @@ pub fn text(app: &App) -> String {
         let p = std::path::absolute(&p).unwrap_or(p);
         Some((k.to_owned(), p.to_str()?.to_owned()))
     }));
-    // An answered question replaces a kept unknown `mode`.
+    // An answered question replaces a kept unknown `mode`, a chosen language a kept unknown one.
     let answered = !app.guided.ask;
     lines.extend(
         (app.saved.extra.iter())
-            .filter(|(k, _)| !(answered && k == "mode"))
+            .filter(|(k, _)| !(answered && k == "mode") && !(chosen && k == "language"))
             .cloned(),
     );
     // A line break would split a value into a second, wrong line.
@@ -949,6 +960,7 @@ size=@Size(1591 800)
         app.saved.extra.push(("future_key".into(), "x".into()));
         app.guided.mode = crate::guided::Mode::Guided;
         crate::lang::set(crate::lang::Lang::De);
+        app.saved.language = true;
         let text = text(&app);
         crate::lang::set(crate::lang::Lang::En);
         assert!(text.contains("\nAN_DECONVOLUTION_WIDTH=auto\n"), "{text}");
@@ -967,6 +979,17 @@ size=@Size(1591 800)
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
         assert_eq!(back.saved.extra, app.saved.extra);
+    }
+
+    #[test]
+    fn the_system_language_is_not_saved_and_an_unknown_one_kept() {
+        let system = crate::lang::Lang::system();
+        crate::lang::set(system);
+        assert!(!text(&App::default()).contains("language="));
+        let (app, bad) = apply_text("language=fr\n", own_entries);
+        assert!(bad.is_empty(), "{bad:?}");
+        assert!(text(&app).contains("\nlanguage=fr\n"));
+        crate::lang::set(crate::lang::Lang::En);
     }
 
     #[test]

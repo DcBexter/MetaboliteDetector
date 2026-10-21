@@ -674,8 +674,8 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
     }
 }
 
-/// "Export …" and "Copy …" of one of the old program's text exports; `labels` are the two
-/// buttons and the note after copying.
+/// "Export …" and "Copy …" of one of the old program's text exports; `labels` are
+/// `[export button, copy button, note after copying]`.
 fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, note: &mut String) {
     let [export, copy, copied] = labels;
     if ui.button(export).clicked()
@@ -685,7 +685,7 @@ fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, 
             .save_file()
     {
         *note = match std::fs::write(&p, text) {
-            Ok(()) => tf!("Saved {}", "{} gespeichert", p.display()),
+            Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
             Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
         };
     }

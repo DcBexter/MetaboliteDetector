@@ -91,11 +91,56 @@ fn is_prose(literal: &str) -> bool {
             _ => {}
         }
     }
-    let mut run = 0;
-    plain.chars().any(|c| {
-        run = if c.is_ascii_lowercase() { run + 1 } else { 0 };
-        run >= 3
+    // A word: two letters or more, all lowercase after the first ("Run", "ms"; not "RI", "NetCDF").
+    (plain.split(|c: char| !c.is_alphabetic())).any(|w| {
+        let mut rest = w.chars().skip(1).peekable();
+        rest.peek().is_some() && rest.all(char::is_lowercase)
     })
+}
+
+/// String literals of the argument list `args` (the text after a call's `(`) that are passed as they
+/// are: directly, or as the format string of a `format!`. Literals inside other nested calls, like
+/// `t(..)`, or inside `[..]` (file extensions) are not.
+/// shortcut: char literals like `'('` are not skipped; none sits in a UI call today.
+fn bare_literals(args: &str) -> Vec<&str> {
+    let (mut found, mut depth, mut format_at) = (Vec::new(), 0, None);
+    let mut chars = args.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => {
+                let mut end = args.len();
+                let mut escaped = false;
+                for (j, c) in chars.by_ref() {
+                    match c {
+                        '"' if !escaped => {
+                            end = j;
+                            break;
+                        }
+                        '\\' => escaped = !escaped,
+                        _ => escaped = false,
+                    }
+                }
+                if depth == 0 || format_at == Some(depth) {
+                    found.push(&args[i + 1..end]);
+                }
+            }
+            '(' | '[' => {
+                depth += 1;
+                if depth == 1 && c == '(' && args[..i].trim_end().ends_with("format!") {
+                    format_at = Some(1);
+                }
+            }
+            ')' | ']' if depth == 0 => break,
+            ')' | ']' => {
+                if format_at == Some(depth) {
+                    format_at = None;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    found
 }
 
 /// Texts passed to a [`TEXT_CALLS`] call as a bare literal or `format!`, not through `lang::t` or
@@ -125,25 +170,20 @@ fn untranslated() -> Vec<String> {
             let pattern = format!("{call}(");
             for (at, _) in code.match_indices(&pattern) {
                 let before = code[..at].chars().next_back();
-                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                // `plot_export::button(..)` is our own function, not the widget method.
+                let path_call = before == Some(':') && !call.contains("::");
+                if path_call || before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     continue;
                 }
-                let rest = &code[at + pattern.len()..];
-                // The text is the first argument with a quote, before any nested call or the end.
-                let Some(end) = rest.find(['"', '(', ')']) else {
-                    continue;
-                };
-                let literal = if rest[end..].starts_with('"') {
-                    &rest[end + 1..]
-                } else if rest[..end].trim_end().ends_with("format!") {
-                    rest[end + 1..].trim_start().trim_start_matches('"')
-                } else {
-                    continue;
-                };
-                let literal = &literal[..literal.find('"').unwrap_or(literal.len())];
-                if is_prose(literal) {
-                    let line = code[..at].lines().count();
-                    found.push(format!("{}:{line}: {call}(\"{literal}\"", path.display()));
+                // The first string is the shown text; later ones are file names or keys.
+                for literal in bare_literals(&code[at + pattern.len()..])
+                    .into_iter()
+                    .take(1)
+                {
+                    if is_prose(literal) {
+                        let line = code[..at].lines().count();
+                        found.push(format!("{}:{line}: {call}(\"{literal}\"", path.display()));
+                    }
                 }
             }
         }
@@ -169,6 +209,24 @@ fn prose_needs_a_lowercase_word() {
     assert!(is_prose("{n} runs"));
     assert!(!is_prose("RI"));
     assert!(!is_prose("m/z {mz:.1}"));
+    assert!(is_prose("Run") && is_prose("New"));
+    assert!(!is_prose("NetCDF (ANDI-MS)"));
+}
+
+#[test]
+fn bare_literals_skip_translated_and_nested_ones() {
+    let args = |s| bare_literals(s);
+    assert_eq!(
+        args(r#"x.is_some(), "Open results") + 1"#),
+        ["Open results"]
+    );
+    assert_eq!(
+        args(r#"t("Open", "Öffnen")).clicked()"#),
+        Vec::<&str>::new()
+    );
+    assert_eq!(args(r#"format!("{n} runs", n = f(1)))"#), ["{n} runs"]);
+    assert_eq!(args(r#"t("CSV", "CSV"), &["csv"])"#), Vec::<&str>::new());
+    assert_eq!(args(r#""say \"hi\"")"#), [r#"say \"hi\""#]);
 }
 
 /// Symbols like arrows are not in egui's default font; without a fallback they draw as boxes.

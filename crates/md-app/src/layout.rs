@@ -402,7 +402,9 @@ mod tests {
             let windows = (nodes.names.values()).filter(|(role, _)| role == "Window");
             assert!(windows.count() >= 12, "German: windows not drawn");
         }
-        for title in shown.into_iter().filter(|_| !crate::lang::de()) {
+        // Data names are the same in both languages; window titles only in English.
+        let data = ["Substance 0", "a_long_run_name_from_the_lab_60.cdf"];
+        for title in (shown.into_iter()).filter(|t| !crate::lang::de() || data.contains(t)) {
             let drawn = nodes
                 .names
                 .values()

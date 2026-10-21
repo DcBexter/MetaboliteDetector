@@ -391,7 +391,7 @@ impl TofWindow {
                 .map(|r| (r.bin as f32, r.mz))
                 .collect();
             match c.write(&path, &pairs) {
-                Ok(()) => self.note = Some(tf!("Saved {}", "{} gespeichert", path.display())),
+                Ok(()) => self.note = Some(tf!("Saved {}", "Gespeichert: {}", path.display())),
                 Err(e) => self.error = Some(e.to_string()),
             }
         }

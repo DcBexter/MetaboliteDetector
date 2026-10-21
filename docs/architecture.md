@@ -768,8 +768,8 @@ geometry and, under the key `metabolite-detector`, our `KEY=value` lines. These 
 field under its old key (`LS_RI_DIFF=10`, ranges as `73:75;147:148`, `PEAK_DETECTOR=default` or
 `matched <width> <threshold>`), `panel.<area>` for the View menu, `library`, `nist_library` and `recent`
 (newest first, at most 10; File → Open recent) and `mode` (`guided` or `expert`, S7). Keys the version does
-not know are written back unchanged. `language` is `en` or `de` (S8); without it the system language
-is used, an unknown value is replaced by the current language.
+not know are written back unchanged. `language` is `en` or `de` (S8), saved only once the user picks a
+language other than the system's; without it the app follows the system language.
 
 ## UI language
 
