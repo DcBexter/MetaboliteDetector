@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use std::sync::atomic::AtomicBool;
+use md_core::job::Cancel;
 
 use md_core::batch::{
     Found, IonPeak, RunResult, ScanSettings, Unknown, add_unknowns, scan_chromatogram,
@@ -308,7 +308,7 @@ fn pool_unknowns() {
             .collect();
         let s = ScanSettings::default();
         let t = Instant::now();
-        let lib = add_unknowns(&mut runs, 0, &s, &AtomicBool::new(false)).unwrap();
+        let lib = add_unknowns(&mut runs, 0, &s, &Cancel::default()).unwrap();
         println!(
             "pool {n} unknowns in 20 runs ({} groups): {:?}",
             lib.len(),

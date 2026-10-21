@@ -14,6 +14,7 @@ pub mod detail;
 pub mod diskscan;
 pub mod fastflight;
 pub mod isotope;
+pub mod job;
 pub mod library;
 pub mod library_add;
 pub mod mid;

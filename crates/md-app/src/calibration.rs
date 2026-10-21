@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
@@ -16,7 +16,7 @@ use md_core::ri::{RiCalibration, marker_peaks, match_mix, series_points};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
 use crate::identify::Library;
-use crate::{Run, spawn};
+use crate::{Job, Run};
 
 /// One line of the calibration table; lines that are not `used` (a mix substance not found, or switched
 /// off by hand) stay out of the calibration.
@@ -37,7 +37,7 @@ struct Saved {
     error: Option<Msg>,
 }
 
-type RowsJob = (Msg, mpsc::Receiver<Result<Vec<Row>, Msg>>);
+type RowsJob = (Msg, Job<Result<Vec<Row>, Msg>>);
 
 pub struct Calibration {
     /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
@@ -73,7 +73,7 @@ pub struct Calibration {
     /// Cutoff being edited; applied when the drag ends, so dragging does not search on every frame.
     cutoff_edit: f64,
     /// Running alkane search and the source it will set.
-    job: Option<(Msg, mpsc::Receiver<Result<RiCalibration, Msg>>)>,
+    job: Option<(Msg, Job<Result<RiCalibration, Msg>>)>,
     error: Option<Msg>,
 }
 
@@ -241,10 +241,10 @@ impl Calibration {
         active: usize,
         lib: Option<&Library>,
     ) {
-        if let Some((source, rx)) = &self.job
-            && let Some(result) =
-                crate::poll_job(rx, || t("RI calibration", "RI-Kalibrierung").into())
-                    .map(|r| r.and_then(|x| x))
+        if let Some((source, job)) = &self.job
+            && let Some(result) = job
+                .poll(|| t("RI calibration", "RI-Kalibrierung").into())
+                .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(cal) => self.set(cal, source.clone()),
@@ -252,10 +252,10 @@ impl Calibration {
             }
             self.job = None;
         }
-        if let Some((source, rx)) = &self.mix_job
-            && let Some(result) =
-                crate::poll_job(rx, || t("calibration mix", "Kalibriermischung").into())
-                    .map(|r| r.and_then(|x| x))
+        if let Some((source, job)) = &self.mix_job
+            && let Some(result) = job
+                .poll(|| t("calibration mix", "Kalibriermischung").into())
+                .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(rows) => self.set_rows(rows, source.clone()),
@@ -384,8 +384,11 @@ impl Calibration {
                 let (data, mz, density, threshold) = (run.data.clone(), self.mz, self.density, self.threshold);
                 let ris: Vec<f64> = (self.first..=self.last).map(|n| 100.0 * n as f64).collect();
                 let source = Msg::from(format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last));
-                let job = spawn(ui.ctx(), move || {
+                let job = Job::spawn(ui.ctx(), move |_, cancel| {
                     let peaks = marker_peaks(&data, mz, density, threshold);
+                    if cancel.is_cancelled() {
+                        return Err(msg!("Cancelled.", "Abgebrochen."));
+                    }
                     RiCalibration::new(series_points(&peaks, &ris)).map_err(|e| e.to_string().into())
                 });
                 self.job = Some((source, job));
@@ -497,8 +500,11 @@ impl Calibration {
                     run.name,
                     self.mix.len()
                 );
-                let job = spawn(ui.ctx(), move || {
-                    Ok(find_mix(mix, &comps, &data.scan_times_s, &s))
+                let job = Job::spawn(ui.ctx(), move |_, cancel| {
+                    match cancel.is_cancelled() {
+                        true => Err(msg!("Cancelled.", "Abgebrochen.")),
+                        false => Ok(find_mix(mix, &comps, &data.scan_times_s, &s)),
+                    }
                 });
                 self.mix_job = Some((source, job));
             }

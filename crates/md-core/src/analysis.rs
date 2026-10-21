@@ -5,6 +5,7 @@ use std::borrow::Borrow;
 
 use crate::Chromatogram;
 use crate::deconv::{Component, DeconvSettings, deconvolute};
+use crate::job::Cancel;
 use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
 
 /// Which peak detection a caller wants (algorithms.md §4.0).
@@ -33,16 +34,30 @@ pub struct RunAnalysis {
     pub masses: Vec<u32>,
 }
 
+/// Why a run was not analysed.
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+pub enum AnalyzeError {
+    #[error(transparent)]
+    TooLarge(#[from] TooLarge),
+    #[error("cancelled")]
+    Cancelled,
+}
+
 /// Builds the ion traces and detects the peaks. An owned `run` is dropped right after the index is
 /// built: the spectra are not needed any more, which halves the peak memory per run.
 pub fn find_run_peaks(
     run: impl Borrow<Chromatogram>,
     s: &PeakSettings,
     pass: PeakPass,
-) -> Result<RunPeaks, TooLarge> {
+    cancel: &Cancel,
+) -> Result<RunPeaks, AnalyzeError> {
     let mut traces = IonTraces::new(run.borrow(), s.fwhm)?;
     let times = run.borrow().scan_times_s.clone();
     drop(run);
+    // The stages are not interruptible inside; `cancel` is looked at between them.
+    if cancel.is_cancelled() {
+        return Err(AnalyzeError::Cancelled);
+    }
     let peaks = match pass {
         PeakPass::Reordered => traces.detect_all_peaks(s),
         PeakPass::Fresh => traces.detect_peaks(s),
@@ -54,18 +69,23 @@ pub fn find_run_peaks(
     })
 }
 
-/// [`find_run_peaks`], then the deconvolution of all peaks; the ion index is dropped.
+/// [`find_run_peaks`], then the deconvolution of all peaks; the ion index is dropped. A set `cancel`
+/// gives [`AnalyzeError::Cancelled`] at the next stage boundary.
 pub fn analyze_run(
     run: impl Borrow<Chromatogram>,
     peak_settings: &PeakSettings,
     deconv: &DeconvSettings,
     pass: PeakPass,
-) -> Result<RunAnalysis, TooLarge> {
+    cancel: &Cancel,
+) -> Result<RunAnalysis, AnalyzeError> {
     let RunPeaks {
         traces,
         times,
         peaks,
-    } = find_run_peaks(run, peak_settings, pass)?;
+    } = find_run_peaks(run, peak_settings, pass, cancel)?;
+    if cancel.is_cancelled() {
+        return Err(AnalyzeError::Cancelled);
+    }
     let components = deconvolute(&traces, &peaks, &times, deconv);
     let masses = (peaks.iter())
         .map(|p| traces.masses[p.row as usize])
@@ -117,7 +137,9 @@ mod tests {
     fn peak_pass_selects_reordering() {
         let (c, s) = (split_masses(), PeakSettings::default());
         let apexes = |pass| -> Vec<u32> {
-            let p = find_run_peaks(&c, &s, pass).unwrap().peaks;
+            let p = find_run_peaks(&c, &s, pass, &Cancel::default())
+                .unwrap()
+                .peaks;
             p.iter().map(|p| p.apex_scan).collect()
         };
         assert_eq!(apexes(PeakPass::Fresh), vec![100, 103, 103]);
@@ -148,8 +170,8 @@ mod tests {
                 .collect();
             // Borrowed (app) and owned (batch) runs give the same result.
             for a in [
-                analyze_run(&c, &s, &d, pass).unwrap(),
-                analyze_run(c.clone(), &s, &d, pass).unwrap(),
+                analyze_run(&c, &s, &d, pass, &Cancel::default()).unwrap(),
+                analyze_run(c.clone(), &s, &d, pass, &Cancel::default()).unwrap(),
             ] {
                 assert_eq!(a.peaks, peaks);
                 assert_eq!(a.components, components);
@@ -158,7 +180,31 @@ mod tests {
             }
         }
         // The pass reaches the result: the reordered apexes differ from the fresh ones.
-        let analyzed = |pass| analyze_run(&c, &s, &d, pass).unwrap().peaks;
+        let analyzed = |pass| {
+            analyze_run(&c, &s, &d, pass, &Cancel::default())
+                .unwrap()
+                .peaks
+        };
         assert_ne!(analyzed(PeakPass::Reordered), analyzed(PeakPass::Fresh));
+    }
+
+    #[test]
+    fn a_set_cancel_stops_before_the_peaks() {
+        let (c, s, d) = (
+            split_masses(),
+            PeakSettings::default(),
+            DeconvSettings::default(),
+        );
+        let cancel = Cancel::default();
+        cancel.cancel();
+        let p = PeakPass::Reordered;
+        assert_eq!(
+            find_run_peaks(&c, &s, p, &cancel).err(),
+            Some(AnalyzeError::Cancelled)
+        );
+        assert_eq!(
+            analyze_run(&c, &s, &d, p, &cancel).err(),
+            Some(AnalyzeError::Cancelled)
+        );
     }
 }

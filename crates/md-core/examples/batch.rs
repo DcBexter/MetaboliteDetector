@@ -1,8 +1,8 @@
 //! Times the batch quantification on real files.
 //! `cargo run --release -p md-core --example batch -- [--untargeted] [--rescan] PARALLEL LIBRARY.msl|.lbr RUN.cdf...`
 
+use md_core::job::{Cancel, Progress};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
@@ -38,7 +38,7 @@ fn main() {
     let prepared = PreparedLibrary::new(&lib, &s.search);
 
     let t = Instant::now();
-    let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let (done, cancel) = (Progress::default(), Cancel::default());
     let (mut runs, errors) = scan_runs(&paths, &prepared, &s, parallel, &done, &cancel).unwrap();
     let scanned = t.elapsed();
     let t = Instant::now();
