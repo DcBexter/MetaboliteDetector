@@ -562,11 +562,14 @@ mod tests {
         "but ",
     ];
 
+    fn err<T, E: std::fmt::Display>(result: Result<T, E>) -> String {
+        result.err().expect("an error").to_string()
+    }
+
     /// Real texts from `md-core`, so a changed wording there fails here and not silently in the window.
     #[test]
     fn real_core_messages_are_translated() {
-        let msl = |text| parse_msl(text).unwrap_err().to_string();
-        let msl_cases = [
+        let msl = [
             "NAME: A\nNUM PEAKS: 1\n(1 x)",
             "NAME: A\nNUM PEAKS: 2\n(1 2)",
             "(1 2)",
@@ -584,159 +587,118 @@ mod tests {
             "NAME: A\nNUM PEAKS: 2\n71 100 72",
             "NAME: A\nNUM PEAKS: 1\n71 x",
         ];
-        let mut errors: Vec<String> = msl_cases.iter().map(|c| msl(c)).collect();
-        errors.push(parse_targetsearch("x").unwrap_err().to_string());
-        errors.push(
-            parse_targetsearch(&format!("{}\nA\t1", "Name	RI	Win_1	SEL_MASS	SPECTRUM"))
-                .unwrap_err()
-                .to_string(),
-        );
-        let mdlib = |body: &str| {
-            parse_mdlib(&format!("{}\n{body}", "MetaboliteDetector library 2"))
-                .unwrap_err()
-                .to_string()
-        };
-        errors.extend(
-            [
-                "end",
-                "compound\nend",
-                "compound\nname A",
-                "compound\nname A\nname B\nend",
-                "compound\ncompound\nend",
-                "compound\nname A\nscan x\nend",
-                "compound\nname A\npeaks 1\nend",
-                "compound\nname A\nfeature k\nend",
-                "compound\nname A\nfeature k\tv\nfeature k\tv\nend",
-                "compound\nname A\nblock 12\nend",
-                "compound\nname A\npeak 1 2\nend",
-                "compound\nname A\nmodel 1 2\nend",
-                "compound\nname A\nformula 1\nend",
-                "compound\nname A\nmid_size 1 2\nend",
-                "compound\nname A\nwhat 1\nend",
-                "compound\nname A\\q\nend",
-                "compound\nname A\\\nend",
-            ]
-            .map(mdlib),
-        );
-        errors.push(parse_mdlib("nonsense").unwrap_err().to_string());
-        errors.push(
-            parse_mdlib("MetaboliteDetector library 99")
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(RiCalibration::parse_calib("1 2 3").unwrap_err().to_string());
-        errors.push(RiCalibration::parse_calib("1 x").unwrap_err().to_string());
-        errors.push(RiCalibration::parse_calib("1 5").unwrap_err().to_string());
-        errors.push(
-            RiCalibration::parse_calib("1 5\n2 5")
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(
-            RiCalibration::new([(1.0, 1.0), (1.0 + 1e-12, 2.0)])
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(
-            RiCalibration::new([(f64::NAN, 1.0)])
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(TofCalibration::parse("").unwrap_err().to_string());
-        errors.push(
-            TofCalibration::parse("Polynomial order:")
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(
-            TofCalibration::parse("Polynomial order: 99")
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(
-            TofCalibration::parse("Polynomial order: 1 Parameter: 0 1")
-                .unwrap_err()
-                .to_string(),
-        );
-        errors.push(AndiError::MissingVariable("mass_values").to_string());
+        let mdlib = [
+            "end",
+            "compound\nend",
+            "compound\nname A",
+            "compound\nname A\nname B\nend",
+            "compound\ncompound\nend",
+            "compound\nname A\nscan x\nend",
+            "compound\nname A\npeaks 1\nend",
+            "compound\nname A\nfeature k\nend",
+            "compound\nname A\nfeature k\tv\nfeature k\tv\nend",
+            "compound\nname A\nblock 12\nend",
+            "compound\nname A\npeak 1 2\nend",
+            "compound\nname A\nmodel 1 2\nend",
+            "compound\nname A\nformula 1\nend",
+            "compound\nname A\nmid_size 1 2\nend",
+            "compound\nname A\nwhat 1\nend",
+            "compound\nname A\\q\nend",
+            "compound\nname A\\\nend",
+        ]
+        .map(|body| format!("MetaboliteDetector library 2\n{body}"));
         let settings = md_core::settings::GcmsSettings::default();
-        errors.push(settings.from_bytes(&[]).unwrap_err());
-        errors.push(settings.from_bytes(&[0; 200]).unwrap_err());
-        errors.push(settings.from_bytes(&[0x1f, 0x8b, 0x08]).unwrap_err());
         let mut bytes = settings.to_bytes();
-        errors.push(settings.from_bytes(&bytes[..bytes.len() - 1]).unwrap_err());
+        let truncated = bytes[..bytes.len() - 1].to_vec();
         let last = bytes.len() - 1;
         bytes[last] ^= 0x40;
-        errors.push(settings.from_bytes(&bytes).unwrap_err());
-        errors.push("could not save a.cmp: disk full".into());
-        errors.push("not saved: a.cmp is an input of this batch".into());
-        errors.push("not saved: another run is also saved as a.cmp".into());
-        errors.push("Warning: No fragment (FRAG) defined for compound A".into());
-        errors.push("Error: Can not parse \"x\". SYNTAX(e.g): (174/8)(261/5)".into());
-        errors.push(AndiError::Inconsistent("one TIC per scan needed".into()).to_string());
-        errors.push(DiskScanError::Magic(5).to_string());
-        errors.push(DiskScanError::Corrupt("scan 3 listed twice".into()).to_string());
-        errors.push(DiskScanError::Io("a.idx".into(), std::io::Error::other("x")).to_string());
-        errors.push(FastFlightError::NoCalibration("a".into()).to_string());
-        errors.push(
+        let table = md_core::batch::SampleTable::parse("A\tB\nx\t1\nx\t2").unwrap();
+        let invalid_settings = |sf_fwhm| md_core::settings::GcmsSettings {
+            sf_fwhm,
+            ..Default::default()
+        };
+        let io = || std::io::Error::other("x");
+        let mut errors: Vec<String> = [
+            // Typed errors.
+            AndiError::MissingVariable("mass_values").to_string(),
+            AndiError::Inconsistent("one TIC per scan needed".into()).to_string(),
+            DiskScanError::Magic(5).to_string(),
+            DiskScanError::Corrupt("scan 3 listed twice".into()).to_string(),
+            DiskScanError::Io("a.idx".into(), io()).to_string(),
+            FastFlightError::NoCalibration("a".into()).to_string(),
             FastFlightError::Corrupt("scan at 5 ms: end of file inside a record".into())
                 .to_string(),
-        );
-        errors.push(FastFlightError::Calibration(TofError::NotEnoughPairs).to_string());
-        errors.push(TofError::Singular.to_string());
-        errors.push(LibraryError::Io(std::io::Error::other("x")).to_string());
-        errors.push(
+            FastFlightError::Calibration(TofError::NotEnoughPairs).to_string(),
+            TofError::Singular.to_string(),
+            LibraryError::Io(io()).to_string(),
             LibraryError::Corrupt {
                 offset: 3,
                 reason: "truncated, 4 more bytes expected".into(),
             }
             .to_string(),
-        );
-        errors.push(AddError::NoEntry(2).to_string());
-        errors.push(AddError::NameTaken("A".into()).to_string());
-        errors.push(AddError::NoName.to_string());
-        errors.push(CalibError::Io(std::io::Error::other("x")).to_string());
-        errors.push(
+            AddError::NoEntry(2).to_string(),
+            AddError::NameTaken("A".into()).to_string(),
+            AddError::NoName.to_string(),
+            CalibError::Io(io()).to_string(),
             TooLarge {
                 masses: 1,
                 scans: 2,
             }
             .to_string(),
+            // Texts md-core builds itself.
+            "could not save a.cmp: disk full".into(),
+            "not saved: a.cmp is an input of this batch".into(),
+            "not saved: another run is also saved as a.cmp".into(),
+            "Warning: No fragment (FRAG) defined for compound A".into(),
+            "Error: Can not parse \"x\". SYNTAX(e.g): (174/8)(261/5)".into(),
+            // Parsers.
+            err(parse_targetsearch("x")),
+            err(parse_targetsearch(
+                "Name\tRI\tWin_1\tSEL_MASS\tSPECTRUM\nA\t1",
+            )),
+            err(parse_mdlib("nonsense")),
+            err(parse_mdlib("MetaboliteDetector library 99")),
+            err(RiCalibration::new([(1.0, 1.0), (1.0 + 1e-12, 2.0)])),
+            err(RiCalibration::new([(f64::NAN, 1.0)])),
+            err(settings.from_bytes(&[])),
+            err(settings.from_bytes(&[0; 200])),
+            err(settings.from_bytes(&[0x1f, 0x8b, 0x08])),
+            err(settings.from_bytes(&truncated)),
+            err(settings.from_bytes(&bytes)),
+            err(invalid_settings(2.0).validate()),
+            err(invalid_settings(f64::NAN).validate()),
+            err(md_core::batch::SampleTable::parse("")),
+            err(table.column("C")),
+            err(table.groups(0, 0)),
+            err(table.groups(0, 1)),
+        ]
+        .into();
+        errors.extend(msl.map(|text| err(parse_msl(text))));
+        errors.extend(mdlib.map(|text| err(parse_mdlib(&text))));
+        errors.extend(
+            ["1 2 3", "1 x", "1 5", "1 5\n2 5"].map(|text| err(RiCalibration::parse_calib(text))),
         );
-        errors.push(md_core::isotope::parse_formula("(C").unwrap_err());
-        errors.push(md_core::isotope::parse_formula("C)").unwrap_err());
-        errors.push(md_core::isotope::parse_formula("C-").unwrap_err());
-        errors.push(md_core::isotope::parse_formula("").unwrap_err());
-        errors.push(md_core::isotope::parse_formula("C99999999999").unwrap_err());
-        errors.push(
-            md_core::settings::GcmsSettings {
-                sf_fwhm: 2.0,
-                ..Default::default()
-            }
-            .validate()
-            .unwrap_err(),
+        errors.extend(
+            [
+                "",
+                "Polynomial order:",
+                "Polynomial order: 99",
+                "Polynomial order: 1 Parameter: 0 1",
+            ]
+            .map(|text| err(TofCalibration::parse(text))),
         );
-        errors.push(
-            md_core::settings::GcmsSettings {
-                sf_fwhm: f64::NAN,
-                ..Default::default()
-            }
-            .validate()
-            .unwrap_err(),
+        errors.extend(
+            ["(C", "C)", "C-", "", "C99999999999"]
+                .map(|text| err(md_core::isotope::parse_formula(text))),
         );
-        errors.push(md_core::batch::SampleTable::parse("").unwrap_err());
-        let table = md_core::batch::SampleTable::parse("A\tB\nx\t1\nx\t2").unwrap();
-        errors.push(table.column("C").unwrap_err());
-        errors.push(table.groups(0, 0).unwrap_err());
-        errors.push(table.groups(0, 1).unwrap_err());
-        let mut untranslated = Vec::new();
-        for e in errors {
-            let de = german(&e);
-            // A tail left in English: a text nothing matched, or a template missing for its reason.
-            if de == e || ENGLISH.iter().any(|w| de.contains(w)) {
-                untranslated.push(e);
-            }
-        }
+        let untranslated: Vec<_> = errors
+            .into_iter()
+            .filter(|e| {
+                let de = german(e);
+                // A tail left in English: a text nothing matched, or a template missing for its reason.
+                de == *e || ENGLISH.iter().any(|w| de.contains(w))
+            })
+            .collect();
         assert!(
             untranslated.is_empty(),
             "no template:\n{}",
