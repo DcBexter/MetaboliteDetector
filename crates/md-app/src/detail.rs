@@ -71,7 +71,7 @@ pub fn charts(mode: Mode, c: &Comparison, library: &str) -> Vec<BarChart> {
                 tf!("Library: {library}", "Bibliothek: {library}"),
                 bars(c.library.iter().map(|v| -v).collect()),
             )
-            .id("library"),
+            .id(("library", library)),
         ],
         Mode::Difference => vec![
             BarChart::new(

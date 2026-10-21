@@ -542,7 +542,7 @@ fn valid(mut s: GcmsSettings, bad: &mut Vec<String>) -> GcmsSettings {
         } else {
             e.split(':').next().unwrap_or_default()
         };
-        bad.push(crate::errors::text(&e));
+        bad.push(e.clone());
         let Some((_, field)) = FIELDS.iter().find(|(k, _)| *k == key) else {
             break;
         };
@@ -718,6 +718,12 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
     }
 }
 
+/// The values `apply` reset, in the current language (called inside `msg!`, so in both).
+fn shown(bad: &[String]) -> String {
+    let bad: Vec<String> = bad.iter().map(|b| crate::errors::text(b)).collect();
+    bad.join(", ")
+}
+
 /// At start: the saved state, else on the first start the old app's settings; then the libraries.
 /// `guarded` is what [`guard`] said about the file.
 pub fn restore(
@@ -738,7 +744,7 @@ pub fn restore(
                 Err(msg!(
                     "Saved values could not be read and use their defaults: {}.",
                     "Gespeicherte Werte konnten nicht gelesen werden und nutzen ihre Standardwerte: {}.",
-                    bad.join(", ")
+                    shown(&bad)
                 ))
             })
         }
@@ -756,7 +762,7 @@ pub fn restore(
                 Err(msg!(
                     "{done} These keep their defaults: {}.",
                     "{done} Diese behalten ihre Standardwerte: {}.",
-                    bad.join(", ")
+                    shown(&bad)
                 ))
             }
         }),

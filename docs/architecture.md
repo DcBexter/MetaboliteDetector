@@ -794,9 +794,16 @@ sources for bare widget texts.
 md-core errors (#339): md-core, md-cli and files keep the English `Display` texts. `md-app/src/errors.rs`
 translates them where the window shows them: `errors::text` matches a message against a table of
 English templates (`errors.txt`, `{}` for the changing parts, translated in turn; a file name before `: ` stays) and
-returns the English text when none fits (an operating system text). Every red error label goes through it
-(`error_labels_translate_core_messages`), and `real_core_messages_are_translated` runs real md-core errors
+returns the English text when none fits (an operating system text). A red error label draws a fixed text,
+a `Msg` or `errors::text` (`error_labels_translate_core_messages`), and `real_core_messages_are_translated` runs real md-core errors
 through the table, so a changed wording of one of those texts fails there. A new md-core error text needs a template.
+
+Stored texts (#341): a note, an error or the RI source that is shown later is a `lang::Msg`, not a `String`.
+`Msg::new(|| ...)` (or `msg!`, `tf!` as a `Msg`) runs its text once per language and keeps both; the language is
+picked when it is drawn (`&*msg`), so a switch changes texts already on screen. `md-core` texts and file names
+enter through `Msg::from(String)`, the German side through `errors::text`. Jobs build a `Msg` too, so the language
+of the worker thread does not matter (`jobs::poll_job` returns `Result<T, Msg>`). egui_plot hides a curve by its
+id, which is its name unless set: a curve with a translated name needs a fixed `.id(...)` when its plot has a legend.
 
 ## Guided mode
 
