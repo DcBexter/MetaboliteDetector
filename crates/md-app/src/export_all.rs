@@ -211,6 +211,7 @@ mod tests {
                 mz,
                 intensity,
                 exact_masses: false,
+                baseline: Default::default(),
             })
         };
         let c = run(

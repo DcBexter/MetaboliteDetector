@@ -292,6 +292,7 @@ mod tests {
                 })
                 .collect(),
             exact_masses: true,
+            baseline: Default::default(),
         };
         let todo = Todo {
             compound: 0,

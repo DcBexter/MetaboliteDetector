@@ -108,7 +108,7 @@ enum Field<'a> {
 type Access = fn(&mut GcmsSettings) -> Field<'_>;
 
 /// Every setting under its old key; reading and writing both go through this one table.
-const FIELDS: [(&str, Access); 35] = [
+const FIELDS: [(&str, Access); 36] = [
     ("SF_PEAK_THRESHOLD_BEGIN", |s| {
         Field::F64(&mut s.sf_peak_threshold_begin)
     }),
@@ -146,6 +146,10 @@ const FIELDS: [(&str, Access); 35] = [
     ("AN_MIN_HEIGHT_BP", |s| Field::F64(&mut s.an_min_height_bp)),
     ("AN_MODELED_VALUES_FOR_INTEGRATION", |s| {
         Field::Bool(&mut s.an_modeled_values_for_integration)
+    }),
+    // The old QSettings key under [Algorithm], so an old settings file imports it as it is.
+    ("baseline_correction", |s| {
+        Field::Bool(&mut s.baseline_correction)
     }),
     ("LS_RI_DIFF", |s| Field::F64(&mut s.ls_ri_diff)),
     ("LS_PURE_FACTOR", |s| Field::F64(&mut s.ls_pure_factor)),
@@ -776,6 +780,7 @@ LS_USE_SCALED_LIB=true
 MASS_FILTER=@Invalid()
 QUANT_EXCL_IONS=@Invalid()
 QUANT_ION_NUMBER=3
+baseline_correction=true
 rc_lib_file=
 rc_open_file=/data/run 1.bin
 
@@ -798,6 +803,7 @@ size=@Size(1591 800)
         assert_eq!(s.ls_resolution, 0.3);
         assert_eq!(s.an_peak_threshold_end, -5.0);
         assert_eq!(s.ls_cutoff, 0.85);
+        assert!(s.baseline_correction, "the old QSettings key, default off");
         assert_eq!(
             s.an_deconvolution_width,
             Some(1.0),

@@ -61,9 +61,50 @@ pub struct Chromatogram {
     /// Exact masses as FastFlight writes them (old DataType 0/1): analysed with one trace per m/z
     /// and `reorder_peaks`. Otherwise (CDF, DataType 2) the scans are centroided to nominal masses.
     pub exact_masses: bool,
+    /// Per-scan baseline of old type 1 caches; empty for every other format.
+    pub baseline: Baseline,
+}
+
+/// Old `BaselineStatistics` mean per scan, as `(int)` like `DataProvider::getSignal` reads it.
+/// Only type 1 caches (FastFlight, compressed profile) store non-zero means (algorithms.md §4b.4).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Baseline {
+    /// One value per scan, or empty: then every mean is 0 and correction changes nothing.
+    pub means: Vec<f32>,
+    /// The old `baseline_correction`: the means are subtracted from the intensities.
+    pub corrected: bool,
 }
 
 impl Chromatogram {
+    /// What a mass missing from `scan` reads in an ion trace: the scan's mean, or 0 once corrected.
+    pub fn missing_value(&self, scan: usize) -> f32 {
+        match self.baseline.corrected {
+            true => 0.0,
+            false => self.baseline.means.get(scan).copied().unwrap_or(0.0),
+        }
+    }
+
+    /// Old `setBaselineCorrectionEnabled`: on, every intensity of a scan loses that scan's mean
+    /// (`DataProvider::baselineCorrection`); off restores them. The TIC stays the uncorrected one.
+    pub fn set_baseline_correction(&mut self, on: bool) {
+        let means = self.baseline.means.len();
+        if on == self.baseline.corrected || (means != 0 && means != self.scan_count()) {
+            return;
+        }
+        let sign = if on { -1.0 } else { 1.0 };
+        let mut rest = &mut self.intensity[..];
+        let mut scans = Vec::with_capacity(self.baseline.means.len());
+        for w in self.offsets.windows(2) {
+            let (scan, tail) = std::mem::take(&mut rest).split_at_mut(w[1] - w[0]);
+            scans.push(scan);
+            rest = tail;
+        }
+        // Integers below 2^24 (f32's exact range), so subtracting and adding back is exact there.
+        (scans.into_par_iter().zip(&self.baseline.means))
+            .for_each(|(scan, mean)| scan.iter_mut().for_each(|v| *v += sign * mean));
+        self.baseline.corrected = on;
+    }
+
     pub fn scan_count(&self) -> usize {
         self.scan_times_s.len()
     }
@@ -78,7 +119,17 @@ impl Chromatogram {
     pub fn tic(&self) -> Vec<f64> {
         (0..self.scan_count())
             .into_par_iter()
-            .map(|s| self.spectrum(s).1.iter().map(|i| *i as f64).sum())
+            .map(|s| {
+                let (_, i) = self.spectrum(s);
+                // 3.3 shows the stored TIC (`getTotalSignal`), which the correction does not touch.
+                let mean = self
+                    .baseline
+                    .means
+                    .get(s)
+                    .filter(|_| self.baseline.corrected);
+                let added = mean.map_or(0.0, |m| *m as f64 * i.len() as f64);
+                i.iter().map(|i| *i as f64).sum::<f64>() + added
+            })
             .collect()
     }
 
@@ -219,6 +270,7 @@ mod tests {
             mz: vec![73.0, 147.0, 73.0, 73.1, 200.0],
             intensity: vec![10.0, 5.0, 20.0, 1.0, 4.0],
             exact_masses: false,
+            baseline: Default::default(),
         };
         assert_eq!(c.tic(), vec![15.0, 20.0, 5.0]);
         assert_eq!(c.sic(73.0, 0.5), vec![10.0, 20.0, 1.0]);

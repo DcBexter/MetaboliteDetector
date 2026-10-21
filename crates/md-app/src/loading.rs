@@ -13,8 +13,13 @@ impl App {
     pub fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let p = path.clone();
         let key = self.settings.key();
+        let correct = self.settings.applied.baseline_correction;
         let rx = spawn(ctx, move || {
             md_core::read_run(&p)
+                .map(|mut data| {
+                    data.set_baseline_correction(correct);
+                    data
+                })
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
                     _ => {

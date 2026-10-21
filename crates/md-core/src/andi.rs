@@ -244,6 +244,7 @@ pub(crate) fn build(
         mz,
         intensity,
         exact_masses: false,
+        baseline: Default::default(),
     })
 }
 

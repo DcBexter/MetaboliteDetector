@@ -122,8 +122,17 @@ impl Settings {
     /// Returns the error of an analysis that failed (the run keeps its old components).
     pub fn update_runs(&self, ctx: &egui::Context, runs: &mut [Run]) -> Option<String> {
         let wanted = self.key();
+        let correct = self.applied.baseline_correction;
         let mut error = None;
         for run in runs {
+            // Runs without stored means (CDF, other caches) stay as they are, components included.
+            if !run.data.baseline.means.is_empty() && run.data.baseline.corrected != correct {
+                // Copies the run only while a worker still reads the old data.
+                std::sync::Arc::make_mut(&mut run.data).set_baseline_correction(correct);
+                // Components, SIC and the shown spectrum come from the corrected values; the TIC does not.
+                (run.analysis.key, run.analysis.job) = (None, None);
+                (run.sic_for, run.sic_job) = (None, None);
+            }
             let a = &mut run.analysis;
             if let Some((key, rx)) = &a.job {
                 match rx.try_recv() {
@@ -406,6 +415,13 @@ impl Settings {
                 "AN_MODELED_VALUES_FOR_INTEGRATION",
                 "Integrate the fitted model instead of the raw trace.",
                 egui::Checkbox::without_text(&mut d.an_modeled_values_for_integration),
+            );
+            row(
+                ui,
+                "Baseline correction",
+                "baseline_correction",
+                "Subtract each scan's stored baseline from its intensities. Only old type 1 caches (FastFlight .bin/.idx) store one; other runs stay unchanged.",
+                egui::Checkbox::without_text(&mut d.baseline_correction),
             );
         });
         ranges(

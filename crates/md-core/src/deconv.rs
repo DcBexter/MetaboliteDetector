@@ -409,6 +409,7 @@ pub(crate) mod tests {
                 .collect(),
             intensity,
             exact_masses: false,
+            baseline: Default::default(),
         };
         (c, s)
     }

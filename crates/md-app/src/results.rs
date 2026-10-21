@@ -669,6 +669,7 @@ pub(crate) mod tests {
                 mz: Vec::new(),
                 intensity: Vec::new(),
                 exact_masses: false,
+                baseline: Default::default(),
             }),
             minutes: vec![0.0, 1.0, 2.0],
             tic: vec![0.0; 3],
