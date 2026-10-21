@@ -22,6 +22,7 @@ mod guided;
 mod identify;
 mod isotopes;
 mod jobs;
+mod lang;
 mod layout;
 mod library_editor;
 mod loading;
@@ -63,6 +64,8 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             style::apply(&cc.egui_ctx);
             let mut app = App::default();
+            // A saved choice replaces it in `restore`.
+            lang::set(lang::Lang::system());
             persist::restore(&mut app, &cc.egui_ctx, cc.storage, file, guarded);
             app.updater.start(&cc.egui_ctx);
             for path in std::env::args_os().skip(1).map(PathBuf::from) {
@@ -80,7 +83,10 @@ fn main() -> eframe::Result {
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
             .set_title("MetaboliteDetector")
-            .set_description(format!("The window could not be opened: {e}"))
+            .set_description(lang::tf!(
+                "The window could not be opened: {e}",
+                "Das Fenster konnte nicht geöffnet werden: {e}"
+            ))
             .show();
     }
     result

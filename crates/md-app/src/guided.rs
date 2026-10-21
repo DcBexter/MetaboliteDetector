@@ -6,88 +6,199 @@
 use eframe::egui;
 
 use crate::App;
+use crate::lang::t;
 use crate::layout::ToolWindow;
 
 /// Every text this module shows, in one place for the translation (S8, #257).
 pub mod text {
     use super::{Flow, Step};
+    use crate::lang::{t, tf};
 
-    pub const ADVANCED: &str = "Advanced";
-    pub const SWITCH: &str = "Guided mode";
-    pub const SWITCH_HINT: &str = "Guided: the main tasks step by step, expert options under a \
-        closed \"Advanced\". Expert: every option open. Every function stays reachable in both.";
-    pub const MODE: &str = "Mode";
-    pub const ASK_TITLE: &str = "How do you want to work?";
-    pub const GUIDED: &str = "Guided";
-    pub const GUIDED_HINT: &str = "Recommended to start: the main tasks step by step \
-        (Analysis → Step by step), expert options under \"Advanced\".";
-    pub const EXPERT: &str = "Expert";
-    pub const EXPERT_HINT: &str = "Every window with all its options open, as in the old program.";
-    pub const ASK_LATER: &str = "You can switch at any time in Help and in Settings.";
-    pub const CONTINUE: &str = "Continue";
-    pub const MENU: &str = "Step by step";
-    pub const BACK: &str = "Back";
-    pub const NEXT: &str = "Next";
-    pub const SKIP: &str = "Skip";
-    pub const SKIP_HINT: &str = "Go on without this step; you can come back with Back";
-    pub const FINISH: &str = "Finish";
-    pub const TO_EXPERT: &str = "Open the window";
-    pub const TO_EXPERT_HINT: &str =
-        "Leave the steps and go on in the full window, with the values set so far";
-    pub const LIBRARY_LOADING: &str = "Library: loading…";
-    pub const BACK_HINT: &str = "The step before; what you set stays";
-    pub const NEXT_HINT: &str = "The next step";
-    pub const CONTINUE_HINT: &str = "Start working in the chosen mode";
+    pub fn advanced() -> &'static str {
+        t("Advanced", "Erweitert")
+    }
+    pub fn switch() -> &'static str {
+        t("Guided mode", "Geführter Modus")
+    }
+    pub fn switch_hint() -> &'static str {
+        t(
+            "Guided: the main tasks step by step, expert options under a \
+             closed \"Advanced\". Expert: every option open. Every function stays reachable in both.",
+            "Geführt: die Hauptaufgaben Schritt für Schritt, Expertenoptionen unter einem \
+             geschlossenen „Erweitert“. Experte: alle Optionen offen. Jede Funktion bleibt in beiden \
+             erreichbar.",
+        )
+    }
+    pub fn mode() -> &'static str {
+        t("Mode", "Modus")
+    }
+    pub fn ask_title() -> &'static str {
+        t("How do you want to work?", "Wie möchten Sie arbeiten?")
+    }
+    pub fn guided() -> &'static str {
+        t("Guided", "Geführt")
+    }
+    pub fn guided_hint() -> &'static str {
+        t(
+            "Recommended to start: the main tasks step by step \
+             (Analysis → Step by step), expert options under \"Advanced\".",
+            "Für den Einstieg empfohlen: die Hauptaufgaben Schritt für Schritt \
+             (Analyse → Schritt für Schritt), Expertenoptionen unter „Erweitert“.",
+        )
+    }
+    pub fn expert() -> &'static str {
+        t("Expert", "Experte")
+    }
+    pub fn expert_hint() -> &'static str {
+        t(
+            "Every window with all its options open, as in the old program.",
+            "Jedes Fenster mit allen Optionen offen, wie im alten Programm.",
+        )
+    }
+    pub fn ask_later() -> &'static str {
+        t(
+            "You can switch at any time in Help and in Settings.",
+            "Sie können jederzeit unter Hilfe und in den Einstellungen wechseln.",
+        )
+    }
+    pub fn continue_() -> &'static str {
+        t("Continue", "Weiter")
+    }
+    pub fn menu() -> &'static str {
+        t("Step by step", "Schritt für Schritt")
+    }
+    pub fn back() -> &'static str {
+        t("Back", "Zurück")
+    }
+    pub fn next() -> &'static str {
+        t("Next", "Weiter")
+    }
+    pub fn skip() -> &'static str {
+        t("Skip", "Überspringen")
+    }
+    pub fn skip_hint() -> &'static str {
+        t(
+            "Go on without this step; you can come back with Back",
+            "Ohne diesen Schritt weitermachen; mit Zurück kommen Sie wieder hierher",
+        )
+    }
+    pub fn finish() -> &'static str {
+        t("Finish", "Fertigstellen")
+    }
+    pub fn to_expert() -> &'static str {
+        t("Open the window", "Fenster öffnen")
+    }
+    pub fn to_expert_hint() -> &'static str {
+        t(
+            "Leave the steps and go on in the full window, with the values set so far",
+            "Die Schritte verlassen und im vollen Fenster weitermachen, mit den bisher gesetzten Werten",
+        )
+    }
+    pub fn library_loading() -> &'static str {
+        t("Library: loading…", "Bibliothek: wird geladen…")
+    }
+    pub fn back_hint() -> &'static str {
+        t(
+            "The step before; what you set stays",
+            "Der Schritt davor; Ihre Eingaben bleiben",
+        )
+    }
+    pub fn next_hint() -> &'static str {
+        t("The next step", "Der nächste Schritt")
+    }
+    pub fn continue_hint() -> &'static str {
+        t(
+            "Start working in the chosen mode",
+            "Im gewählten Modus beginnen",
+        )
+    }
 
     pub fn active_run(name: Option<&str>) -> String {
         match name {
-            Some(n) => format!("Active run: {n}"),
-            None => "No run open yet".into(),
+            Some(n) => tf!("Active run: {n}", "Aktiver Lauf: {n}"),
+            None => t("No run open yet", "Noch kein Lauf geöffnet").into(),
         }
     }
 
     pub fn library(name: Option<&str>) -> String {
         match name {
-            Some(n) => format!("Library: {n}"),
-            None => "No library open yet".into(),
+            Some(n) => tf!("Library: {n}", "Bibliothek: {n}"),
+            None => t("No library open yet", "Noch keine Bibliothek geöffnet").into(),
         }
     }
 
     pub fn step_of(x: usize, n: usize) -> String {
-        format!("Step {x} of {n}")
+        tf!("Step {x} of {n}", "Schritt {x} von {n}")
     }
 
     pub fn result((runs, errors): (usize, usize)) -> String {
-        format!("Last run: {runs} runs, errors: {errors}. Finish shows the details.")
+        tf!(
+            "Last run: {runs} runs, errors: {errors}. Finish shows the details.",
+            "Letzter Durchgang: {runs} Läufe, Fehler: {errors}. Fertigstellen zeigt die Details."
+        )
     }
 
     pub fn finish_hint(window: &str) -> String {
-        format!("Close the steps and open the window \"{window}\" with the values set")
+        tf!(
+            "Close the steps and open the window \"{window}\" with the values set",
+            "Die Schritte schließen und das Fenster „{window}“ mit den gesetzten Werten öffnen"
+        )
     }
 
     /// Menu entry, its hover text and the title of the steps' window.
     pub fn flow(f: Flow) -> (&'static str, &'static str, &'static str) {
         match f {
             Flow::Ri => (
-                "RI calibration…",
-                "Retention indices from an alkane mix or a .calib file",
-                "RI calibration step by step",
+                t("RI calibration…", "RI-Kalibrierung…"),
+                t(
+                    "Retention indices from an alkane mix or a .calib file",
+                    "Retentionsindizes aus einem Alkan-Mix oder einer .calib-Datei",
+                ),
+                t(
+                    "RI calibration step by step",
+                    "RI-Kalibrierung Schritt für Schritt",
+                ),
             ),
             Flow::Detection => (
-                "Component detection…",
-                "Detect the components of many runs and save them as .cmp files",
-                "Component detection step by step",
+                t("Component detection…", "Komponentenerkennung…"),
+                t(
+                    "Detect the components of many runs and save them as .cmp files",
+                    "Die Komponenten vieler Läufe erkennen und als .cmp-Dateien speichern",
+                ),
+                t(
+                    "Component detection step by step",
+                    "Komponentenerkennung Schritt für Schritt",
+                ),
             ),
             Flow::Batch => (
-                "Batch quantification…",
-                "Quantify the library's substances across many runs",
-                "Batch quantification step by step",
+                t("Batch quantification…", "Batch-Quantifizierung…"),
+                t(
+                    "Quantify the library's substances across many runs",
+                    "Die Substanzen der Bibliothek über viele Läufe quantifizieren",
+                ),
+                t(
+                    "Batch quantification step by step",
+                    "Batch-Quantifizierung Schritt für Schritt",
+                ),
             ),
             Flow::Mid => (
-                "Mass isotopomer distributions…",
-                "Isotopomer distributions of the library's fragments in labelling experiments",
-                "MIDs step by step",
+                t("Mass isotopomer distributions…", "Isotopomere (MID)…"),
+                t(
+                    "Isotopomer distributions of the library's fragments in labelling experiments",
+                    "Isotopomerverteilungen der Fragmente der Bibliothek in Markierungsexperimenten",
+                ),
+                t("MIDs step by step", "MIDs Schritt für Schritt"),
             ),
+        }
+    }
+
+    /// The English title of the steps' window: its id, stable across a language switch.
+    pub fn flow_id(f: Flow) -> &'static str {
+        match f {
+            Flow::Ri => "RI calibration step by step",
+            Flow::Detection => "Component detection step by step",
+            Flow::Batch => "Batch quantification step by step",
+            Flow::Mid => "MIDs step by step",
         }
     }
 
@@ -95,63 +206,110 @@ pub mod text {
     pub fn step(s: Step) -> (&'static str, &'static str, &'static str) {
         match s {
             Step::OpenRun => (
-                "Open the alkane run",
-                "Open the run of your n-alkane mix. It becomes the active run.",
-                "Open a run first",
+                t("Open the alkane run", "Den Alkan-Lauf öffnen"),
+                t(
+                    "Open the run of your n-alkane mix. It becomes the active run.",
+                    "Öffnen Sie den Lauf Ihres n-Alkan-Mixes. Er wird der aktive Lauf.",
+                ),
+                t("Open a run first", "Erst einen Lauf öffnen"),
             ),
             Step::FindAlkanes => (
-                "Find the alkanes",
-                "Set the marker ion and the first and last alkane of your mix, then find them \
-                 in the active run. A saved .calib file works too.",
-                "Find the alkanes or load a .calib file first",
+                t("Find the alkanes", "Die Alkane finden"),
+                t(
+                    "Set the marker ion and the first and last alkane of your mix, then find them \
+                     in the active run. A saved .calib file works too.",
+                    "Setzen Sie das Marker-Ion und das erste und letzte Alkan Ihres Mixes und \
+                     finden Sie sie dann im aktiven Lauf. Eine gespeicherte .calib-Datei geht auch.",
+                ),
+                t(
+                    "Find the alkanes or load a .calib file first",
+                    "Erst die Alkane finden oder eine .calib-Datei laden",
+                ),
             ),
             Step::CheckPoints => (
-                "Check the points",
-                "Each alkane gives one point from retention time to retention index. Switch \
-                 off a point that was found at the wrong peak.",
+                t("Check the points", "Die Punkte prüfen"),
+                t(
+                    "Each alkane gives one point from retention time to retention index. Switch \
+                     off a point that was found at the wrong peak.",
+                    "Jedes Alkan ergibt einen Punkt von Retentionszeit zu Retentionsindex. \
+                     Schalten Sie einen Punkt ab, der am falschen Peak gefunden wurde.",
+                ),
                 "",
             ),
             Step::Library => (
-                "Open the library",
-                "The substances are searched in this library. It is opened again at the next start.",
-                "Open a library first",
+                t("Open the library", "Die Bibliothek öffnen"),
+                t(
+                    "The substances are searched in this library. It is opened again at the next start.",
+                    "Die Substanzen werden in dieser Bibliothek gesucht. Sie wird beim nächsten \
+                     Start wieder geöffnet.",
+                ),
+                t("Open a library first", "Erst eine Bibliothek öffnen"),
             ),
             Step::BatchRuns => (
-                "Add the runs",
-                "Add every run of the experiment.",
-                "Add runs first",
+                t("Add the runs", "Die Läufe hinzufügen"),
+                t(
+                    "Add every run of the experiment.",
+                    "Fügen Sie jeden Lauf des Experiments hinzu.",
+                ),
+                t("Add runs first", "Erst Läufe hinzufügen"),
             ),
             Step::SaveCmp => (
-                "Where the components go",
-                "The components of each run are saved as run.cmp, next to the run or in a \
-                 folder you choose. They load faster later.",
+                t("Where the components go", "Wohin die Komponenten kommen"),
+                t(
+                    "The components of each run are saved as run.cmp, next to the run or in a \
+                     folder you choose. They load faster later.",
+                    "Die Komponenten jedes Laufs werden als run.cmp gespeichert, neben dem Lauf \
+                     oder in einem Ordner Ihrer Wahl. Sie laden später schneller.",
+                ),
                 "",
             ),
             Step::QuantSettings => (
-                "Groups and filters",
-                "Name the replicate groups by a pattern on the file name or a sample table, and \
-                 how reproducible a substance must be.",
+                t("Groups and filters", "Gruppen und Filter"),
+                t(
+                    "Name the replicate groups by a pattern on the file name or a sample table, and \
+                     how reproducible a substance must be.",
+                    "Benennen Sie die Replikatgruppen über ein Muster im Dateinamen oder eine \
+                     Probentabelle, und legen Sie fest, wie reproduzierbar eine Substanz sein muss.",
+                ),
                 "",
             ),
             Step::StartBatch => (
-                "Start",
-                "Start the scan. It goes on in the background; the window shows the result.",
+                t("Start", "Starten"),
+                t(
+                    "Start the scan. It goes on in the background; the window shows the result.",
+                    "Den Durchgang starten. Er läuft im Hintergrund; das Fenster zeigt das Ergebnis.",
+                ),
                 "",
             ),
             Step::MidMethod => (
-                "Correction",
-                "Choose how the labelled spectra are corrected and the tracer element.",
+                t("Correction", "Korrektur"),
+                t(
+                    "Choose how the labelled spectra are corrected and the tracer element.",
+                    "Wählen Sie, wie die markierten Spektren korrigiert werden, und das \
+                     Tracer-Element.",
+                ),
                 "",
             ),
             Step::MidRuns => (
-                "Add the runs",
-                "Add the labelled runs and, for the reference correction, unlabelled runs of the \
-                 same substances.",
-                "Add the runs first, or fix what the step shows",
+                t("Add the runs", "Die Läufe hinzufügen"),
+                t(
+                    "Add the labelled runs and, for the reference correction, unlabelled runs of the \
+                     same substances.",
+                    "Fügen Sie die markierten Läufe hinzu und, für die Referenzkorrektur, \
+                     unmarkierte Läufe derselben Substanzen.",
+                ),
+                t(
+                    "Add the runs first, or fix what the step shows",
+                    "Erst die Läufe hinzufügen oder beheben, was der Schritt zeigt",
+                ),
             ),
             Step::StartMid => (
-                "Start",
-                "Start the calculation. It goes on in the background; the window shows the result.",
+                t("Start", "Starten"),
+                t(
+                    "Start the calculation. It goes on in the background; the window shows the result.",
+                    "Die Berechnung starten. Sie läuft im Hintergrund; das Fenster zeigt das \
+                     Ergebnis.",
+                ),
                 "",
             ),
         }
@@ -206,9 +364,18 @@ impl Flow {
     /// The expert window the flow ends in: its title and its open flag.
     fn window(self, app: &mut App) -> (&'static str, &mut bool) {
         match self {
-            Flow::Ri => ("RI calibration", &mut app.ri.open),
-            Flow::Detection | Flow::Batch => ("Batch quantification", &mut app.batch.open),
-            Flow::Mid => ("Mass isotopomer distributions", &mut app.mid.open),
+            Flow::Ri => (t("RI calibration", "RI-Kalibrierung"), &mut app.ri.open),
+            Flow::Detection | Flow::Batch => (
+                t("Batch quantification", "Batch-Quantifizierung"),
+                &mut app.batch.open,
+            ),
+            Flow::Mid => (
+                t(
+                    "Mass isotopomer distributions",
+                    "Massenisotopomerverteilungen",
+                ),
+                &mut app.mid.open,
+            ),
         }
     }
 }
@@ -260,7 +427,7 @@ pub fn advanced_open(ui: &mut egui::Ui, id: &str, force: bool, add: impl FnOnce(
         .data(|d| d.get_temp::<Mode>(mode_id()))
         .unwrap_or_default();
     // Salted with the mode, so a switch opens or closes every section anew.
-    egui::CollapsingHeader::new(text::ADVANCED)
+    egui::CollapsingHeader::new(text::advanced())
         .id_salt((id, mode))
         .default_open(mode == Mode::Expert)
         .open(force.then_some(true))
@@ -271,8 +438,8 @@ pub fn advanced_open(ui: &mut egui::Ui, id: &str, force: bool, add: impl FnOnce(
 pub fn switch(ui: &mut egui::Ui, mode: &mut Mode) {
     let mut on = *mode == Mode::Guided;
     if ui
-        .checkbox(&mut on, text::SWITCH)
-        .on_hover_text(text::SWITCH_HINT)
+        .checkbox(&mut on, text::switch())
+        .on_hover_text(text::switch_hint())
         .changed()
     {
         *mode = if on { Mode::Guided } else { Mode::Expert };
@@ -282,7 +449,7 @@ pub fn switch(ui: &mut egui::Ui, mode: &mut Mode) {
 impl App {
     /// Analysis → Step by step: the four flows, in both modes.
     pub fn flows_menu(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button(text::MENU, |ui| {
+        ui.menu_button(text::menu(), |ui| {
             for f in Flow::ALL {
                 let (name, hint, _) = text::flow(f);
                 if ui.button(name).on_hover_text(hint).clicked() {
@@ -304,20 +471,20 @@ impl App {
             let g = &mut self.guided;
             let modal = egui::Modal::new(egui::Id::unique("ask mode")).show(ctx, |ui| {
                 ui.set_max_width(420.0);
-                ui.heading(text::ASK_TITLE);
+                ui.heading(text::ask_title());
                 ui.add_space(8.0);
                 for (mode, name, hint) in [
-                    (Mode::Guided, text::GUIDED, text::GUIDED_HINT),
-                    (Mode::Expert, text::EXPERT, text::EXPERT_HINT),
+                    (Mode::Guided, text::guided(), text::guided_hint()),
+                    (Mode::Expert, text::expert(), text::expert_hint()),
                 ] {
                     ui.radio_value(&mut g.mode, mode, name);
                     ui.indent(name, |ui| ui.weak(hint));
                 }
                 ui.add_space(8.0);
-                ui.label(text::ASK_LATER);
+                ui.label(text::ask_later());
                 ui.add_space(8.0);
-                ui.button(text::CONTINUE)
-                    .on_hover_text(text::CONTINUE_HINT)
+                ui.button(text::continue_())
+                    .on_hover_text(text::continue_hint())
                     .clicked()
             });
             // Escape or a click outside keeps the preselected choice.
@@ -339,6 +506,7 @@ impl App {
         let mut open = true;
         let mut go = None;
         egui::Window::new(text::flow(flow).2)
+            .id(egui::Id::unique(text::flow_id(flow)))
             .tool_window(ctx, 6, [520.0, 480.0])
             .open(&mut open)
             .show(ctx, |ui| {
@@ -355,15 +523,15 @@ impl App {
                 ui.horizontal(|ui| {
                     if i > 0
                         && ui
-                            .button(text::BACK)
-                            .on_hover_text(text::BACK_HINT)
+                            .button(text::back())
+                            .on_hover_text(text::back_hint())
                             .clicked()
                     {
                         go = Some(i - 1);
                     }
                     if i + 1 == steps.len() {
                         if ui
-                            .button(text::FINISH)
+                            .button(text::finish())
                             .on_hover_text(text::finish_hint(window))
                             .clicked()
                         {
@@ -372,23 +540,23 @@ impl App {
                         return;
                     }
                     if ui
-                        .add_enabled(self.done(step), egui::Button::new(text::NEXT))
-                        .on_hover_text(text::NEXT_HINT)
+                        .add_enabled(self.done(step), egui::Button::new(text::next()))
+                        .on_hover_text(text::next_hint())
                         .on_disabled_hover_text(waiting)
                         .clicked()
                     {
                         go = Some(i + 1);
                     }
                     if ui
-                        .button(text::SKIP)
-                        .on_hover_text(text::SKIP_HINT)
+                        .button(text::skip())
+                        .on_hover_text(text::skip_hint())
                         .clicked()
                     {
                         go = Some(i + 1);
                     }
                     if ui
-                        .button(text::TO_EXPERT)
-                        .on_hover_text(text::TO_EXPERT_HINT)
+                        .button(text::to_expert())
+                        .on_hover_text(text::to_expert_hint())
                         .clicked()
                     {
                         go = Some(steps.len());
@@ -453,7 +621,7 @@ impl App {
             Step::Library => {
                 self.open_library_button(ui);
                 if self.library_job.is_some() {
-                    ui.label(text::LIBRARY_LOADING);
+                    ui.label(text::library_loading());
                 } else {
                     let name = self.library.as_ref().map(|l| l.name.as_str());
                     ui.label(text::library(name));

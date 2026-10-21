@@ -3,20 +3,21 @@
 use eframe::egui;
 
 use crate::App;
+use crate::lang::{t, tf};
 use crate::shortcuts::{Action, REPO};
 
 impl App {
     pub fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| self.file_menu(ui));
-                ui.menu_button("Analysis", |ui| self.analysis_menu(ui));
-                ui.menu_button("View", |ui| {
+                ui.menu_button(t("File", "Datei"), |ui| self.file_menu(ui));
+                ui.menu_button(t("Analysis", "Analyse"), |ui| self.analysis_menu(ui));
+                ui.menu_button(t("View", "Ansicht"), |ui| {
                     for (on, name, hint) in self.panels.toggles() {
                         ui.checkbox(on, name).on_hover_text(hint);
                     }
                 });
-                ui.menu_button("Help", |ui| self.help_menu(ui));
+                ui.menu_button(t("Help", "Hilfe"), |ui| self.help_menu(ui));
             });
         });
     }
@@ -24,8 +25,11 @@ impl App {
     pub fn open_chromatograms_button(&mut self, ui: &mut egui::Ui) {
         self.action_item(
             ui,
-            "Open chromatograms…",
-            "Load one or more GC-MS runs; each is analysed in the background",
+            t("Open chromatograms…", "Chromatogramme öffnen…"),
+            t(
+                "Load one or more GC-MS runs; each is analysed in the background",
+                "Einen oder mehrere GC-MS-Läufe laden; jeder wird im Hintergrund analysiert",
+            ),
             Action::Open,
             true,
         );
@@ -34,8 +38,20 @@ impl App {
     pub fn pick_chromatograms(&mut self, ctx: &egui::Context) {
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter("NetCDF (ANDI-MS)", &["cdf", "CDF", "nc"])
-            .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-            .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
+            .add_filter(
+                t(
+                    "Old MetaboliteDetector (.bin + .idx)",
+                    "Alter MetaboliteDetector (.bin + .idx)",
+                ),
+                &["bin"],
+            )
+            .add_filter(
+                t(
+                    "FastFlight raw data (MsData.FFT)",
+                    "FastFlight-Rohdaten (MsData.FFT)",
+                ),
+                &["FFT", "fft"],
+            )
             .pick_files()
         {
             for path in paths {
@@ -59,9 +75,9 @@ impl App {
             .add_enabled(enabled, button)
             .on_hover_text(hint)
             .on_disabled_hover_text(if self.runs.is_empty() {
-                "Open a run first"
+                t("Open a run first", "Erst einen Lauf öffnen")
             } else {
-                "Select a component first"
+                t("Select a component first", "Erst eine Komponente wählen")
             })
             .clicked()
         {
@@ -73,22 +89,31 @@ impl App {
     fn help_menu(&mut self, ui: &mut egui::Ui) {
         self.action_item(
             ui,
-            "Manual",
-            "The README with screenshots, in the browser",
+            t("Manual", "Handbuch"),
+            t(
+                "The README with screenshots, in the browser",
+                "Das README mit Bildschirmfotos, im Browser",
+            ),
             Action::Manual,
             true,
         );
         if ui
-            .button("About MetaboliteDetector…")
-            .on_hover_text("Version, licence, authors and how to cite")
+            .button(t("About MetaboliteDetector…", "Über MetaboliteDetector…"))
+            .on_hover_text(t(
+                "Version, licence, authors and how to cite",
+                "Version, Lizenz, Autoren und Zitierweise",
+            ))
             .clicked()
         {
             self.about_open = true;
         }
         ui.separator();
         if ui
-            .button("Open log folder")
-            .on_hover_text("The folder where the app keeps its files; it writes no log yet")
+            .button(t("Open log folder", "Log-Ordner öffnen"))
+            .on_hover_text(t(
+                "The folder where the app keeps its files; it writes no log yet",
+                "Der Ordner, in dem das Programm seine Dateien ablegt; es schreibt noch kein Log",
+            ))
             .clicked()
             && let Some(dir) = crate::update::config_path()
                 .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
@@ -106,21 +131,26 @@ impl App {
         self.updater.menu(ui);
         ui.separator();
         crate::guided::switch(ui, &mut self.guided.mode);
+        crate::lang::switch(ui);
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("About MetaboliteDetector")
+        egui::Window::new(t("About MetaboliteDetector", "Über MetaboliteDetector"))
+            .id(egui::Id::unique("About MetaboliteDetector"))
             .open(&mut self.about_open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("MetaboliteDetector");
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                ui.label("MIT licence");
+                ui.heading(t("MetaboliteDetector", "MetaboliteDetector"));
+                ui.label(tf!("Version {}", "Version {}", env!("CARGO_PKG_VERSION")));
+                ui.label(t("MIT licence", "MIT-Lizenz"));
                 ui.separator();
-                ui.label("Rewrite (2026): by Milan Burgmann.Original program, version 3.3 (2009): by Milan Burgmann, and the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.");
-                ui.label("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.");
-                ui.hyperlink_to("Source code", REPO);
+                ui.label(t(
+                    "Rewrite (2026): by Milan Burgmann.Original program, version 3.3 (2009): by Milan Burgmann, and the authors named in the citation below, Karsten Hiller et al., TU Braunschweig.",
+                    "Neuentwicklung (2026): von Milan Burgmann. Originalprogramm, Version 3.3 (2009): von Milan Burgmann und den unten im Zitat genannten Autoren, Karsten Hiller et al., TU Braunschweig.",
+                ));
+                ui.label(t("Please cite: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439.", "Bitte zitieren: Hiller K, Hangebrauk J, Jäger C, Spura J, Schreiber K, Schomburg D. MetaboliteDetector: Comprehensive Analysis Tool for Targeted and Nontargeted GC/MS Based Metabolome Analysis. Anal. Chem. 2009, 81(9), 3429–3439."));
+                ui.hyperlink_to(t("Source code", "Quellcode"), REPO);
             });
     }
 
@@ -133,29 +163,44 @@ impl App {
         let has_component = (self.runs.get(self.active)).is_some_and(|r| r.component.is_some());
         self.action_item(
             ui,
-            "Save components…",
-            "Writes the components of the active run as a .cmp file (old format)",
+            t("Save components…", "Komponenten speichern…"),
+            t(
+                "Writes the components of the active run as a .cmp file (old format)",
+                "Schreibt die Komponenten des aktiven Laufs als .cmp-Datei (altes Format)",
+            ),
             Action::SaveComponents,
             has_run,
         );
         self.action_item(
             ui,
-            "Export results as CSV…",
-            "Save the component list of the active run as CSV",
+            t("Export results as CSV…", "Ergebnisse als CSV exportieren…"),
+            t(
+                "Save the component list of the active run as CSV",
+                "Die Komponentenliste des aktiven Laufs als CSV speichern",
+            ),
             Action::ExportCsv,
             has_run,
         );
         self.action_item(
             ui,
-            "Add component to library…",
-            "The selected component of the active run becomes a library entry",
+            t(
+                "Add component to library…",
+                "Komponente zur Bibliothek hinzufügen…",
+            ),
+            t(
+                "The selected component of the active run becomes a library entry",
+                "Die gewählte Komponente des aktiven Laufs wird ein Bibliothekseintrag",
+            ),
             Action::AddToLibrary,
             has_component,
         );
         if ui
-            .add_enabled(!self.runs.is_empty(), egui::Button::new("Close all"))
-            .on_hover_text("Close every open run")
-            .on_disabled_hover_text("No runs are open")
+            .add_enabled(
+                !self.runs.is_empty(),
+                egui::Button::new(t("Close all", "Alle schließen")),
+            )
+            .on_hover_text(t("Close every open run", "Jeden offenen Lauf schließen"))
+            .on_disabled_hover_text(t("No runs are open", "Keine Läufe geöffnet"))
             .clicked()
         {
             (self.runs, self.active) = (Vec::new(), 0);
@@ -165,14 +210,22 @@ impl App {
             ui.separator();
         }
         if !self.runs.is_empty() {
-            ui.menu_button("Export as NetCDF", |ui| self.netcdf_menu(ui));
+            ui.menu_button(t("Export as NetCDF", "Als NetCDF exportieren"), |ui| {
+                self.netcdf_menu(ui)
+            });
         }
         if ui
             .add_enabled(
                 !self.runs.is_empty(),
-                egui::Button::new("Export all runs as NetCDF…"),
+                egui::Button::new(t(
+                    "Export all runs as NetCDF…",
+                    "Alle Läufe als NetCDF exportieren…",
+                )),
             )
-            .on_hover_text("Write every open run into one folder")
+            .on_hover_text(t(
+                "Write every open run into one folder",
+                "Jeden offenen Lauf in einen Ordner schreiben",
+            ))
             .clicked()
         {
             self.export_all.open = true;
@@ -180,34 +233,56 @@ impl App {
         self.export_menu(ui);
         ui.separator();
         if ui
-            .button("Library editor…")
-            .on_hover_text("Create or change a library: compounds, RI, quantification ions")
+            .button(t("Library editor…", "Bibliothekseditor…"))
+            .on_hover_text(t(
+                "Create or change a library: compounds, RI, quantification ions",
+                "Eine Bibliothek anlegen oder ändern: Substanzen, RI, Quantifizierungsionen",
+            ))
             .clicked()
         {
             self.editor.open = true;
         }
         ui.separator();
-        self.action_item(ui, "Quit", "Close the program", Action::Quit, true);
+        self.action_item(
+            ui,
+            t("Quit", "Beenden"),
+            t("Close the program", "Das Programm schließen"),
+            Action::Quit,
+            true,
+        );
     }
 
     /// The three ways the old program wrote a run: all points, one point per peak, or per nominal mass.
     fn netcdf_menu(&mut self, ui: &mut egui::Ui) {
         use md_core::centroid::{CentroidSettings, ExportKind, reduce};
         for kind in ExportKind::ALL {
-            let hint = match kind {
-                ExportKind::Profile => {
-                    "Save every point of the active run as an ANDI-MS NetCDF file"
-                }
-                ExportKind::Centroid => "Save one point per detected peak (centroided spectra)",
-                ExportKind::Nominal => "Save the highest intensity per nominal mass (bins of 1)",
+            let (label, hint) = match kind {
+                ExportKind::Profile => (
+                    t("Profile…", "Profil…"),
+                    t(
+                        "Save every point of the active run as an ANDI-MS NetCDF file",
+                        "Jeden Punkt des aktiven Laufs als ANDI-MS-NetCDF-Datei speichern",
+                    ),
+                ),
+                ExportKind::Centroid => (
+                    t("Centroid…", "Zentroid…"),
+                    t(
+                        "Save one point per detected peak (centroided spectra)",
+                        "Einen Punkt pro erkanntem Peak speichern (zentroidierte Spektren)",
+                    ),
+                ),
+                ExportKind::Nominal => (
+                    t("Nominal mass…", "Nominalmasse…"),
+                    t(
+                        "Save the highest intensity per nominal mass (bins of 1)",
+                        "Die höchste Intensität pro Nominalmasse speichern (Klassen der Breite 1)",
+                    ),
+                ),
             };
             let Some(r) = self.runs.get(self.active) else {
                 return;
             };
-            if ui
-                .button(format!("{}…", kind.label()))
-                .on_hover_text(hint)
-                .clicked()
+            if ui.button(label).on_hover_text(hint).clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("NetCDF (ANDI-MS)", &["cdf"])
                     .set_file_name(format!("{}{}.cdf", r.name, kind.suffix()))
@@ -237,54 +312,78 @@ impl App {
         let groups: [&[(&str, &str, Toggle, bool)]; 4] = [
             &[
                 (
-                    "Settings…",
-                    "Peak detection, deconvolution and library search parameters",
+                    t("Settings…", "Einstellungen…"),
+                    t(
+                        "Peak detection, deconvolution and library search parameters",
+                        "Parameter für Peakerkennung, Dekonvolution und Bibliothekssuche",
+                    ),
                     |a| &mut a.settings.open,
                     false,
                 ),
                 (
-                    "RI calibration…",
-                    "Retention index calibration from alkanes, a calibration mix or a .calib file",
+                    t("RI calibration…", "RI-Kalibrierung…"),
+                    t(
+                        "Retention index calibration from alkanes, a calibration mix or a .calib file",
+                        "Retentionsindex-Kalibrierung aus Alkanen, einem Kalibriermix oder einer .calib-Datei",
+                    ),
                     |a| &mut a.ri.open,
                     false,
                 ),
             ],
             &[(
-                "Run info…",
-                "File, instrument and scan details of the active run",
+                t("Run info…", "Laufinfo…"),
+                t(
+                    "File, instrument and scan details of the active run",
+                    "Datei-, Geräte- und Scan-Details des aktiven Laufs",
+                ),
                 |a| &mut a.view.info_open,
                 true,
             )],
             &[
                 (
-                    "Batch quantification…",
-                    "Quantify the library's substances across many runs",
+                    t("Batch quantification…", "Batch-Quantifizierung…"),
+                    t(
+                        "Quantify the library's substances across many runs",
+                        "Die Substanzen der Bibliothek über viele Läufe quantifizieren",
+                    ),
                     |a| &mut a.batch.open,
                     false,
                 ),
                 (
-                    "Mass isotopomer distributions…",
-                    "Labelling experiments: isotopomer distributions of the library's fragments across runs",
+                    t("Mass isotopomer distributions…", "Isotopomere (MID)…"),
+                    t(
+                        "Labelling experiments: isotopomer distributions of the library's fragments across runs",
+                        "Markierungsexperimente: Isotopomerverteilungen der Fragmente der Bibliothek über Läufe",
+                    ),
                     |a| &mut a.mid.open,
                     false,
                 ),
                 (
-                    "Biomarker statistics…",
-                    "Group comparison, box plots and PCA of the batch table",
+                    t("Biomarker statistics…", "Biomarker-Statistik…"),
+                    t(
+                        "Group comparison, box plots and PCA of the batch table",
+                        "Gruppenvergleich, Boxplots und PCA der Batch-Tabelle",
+                    ),
                     |a| &mut a.statistics.open,
                     false,
                 ),
             ],
             &[
                 (
-                    "Natural isotopes…",
-                    "Isotope distribution (M+0, M+1, …) of a molecular formula",
+                    t("Natural isotopes…", "Natürliche Isotope…"),
+                    t(
+                        "Isotope distribution (M+0, M+1, …) of a molecular formula",
+                        "Isotopenverteilung (M+0, M+1, …) einer Summenformel",
+                    ),
                     |a| &mut a.isotopes.open,
                     false,
                 ),
                 (
-                    "TOF calibration…",
-                    "m/z calibration of FastFlight raw data from reference ions; saved as .mzcalib",
+                    t("TOF calibration…", "TOF-Kalibrierung…"),
+                    t(
+                        "m/z calibration of FastFlight raw data from reference ions; saved as .mzcalib",
+                        "m/z-Kalibrierung von FastFlight-Rohdaten aus Referenzionen; gespeichert als .mzcalib",
+                    ),
                     |a| &mut a.tof.open,
                     false,
                 ),
@@ -301,7 +400,7 @@ impl App {
                         egui::Button::new(*name),
                     )
                     .on_hover_text(*hint)
-                    .on_disabled_hover_text("Open a run first")
+                    .on_disabled_hover_text(t("Open a run first", "Erst einen Lauf öffnen"))
                     .clicked()
                 {
                     *open(self) = true;

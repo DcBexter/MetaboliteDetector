@@ -17,6 +17,7 @@ use md_core::ri::RiCalibration;
 use md_core::search::SearchSettings;
 
 use super::LibraryEditor;
+use crate::lang::{t, tf};
 use crate::{Run, poll_job, spawn};
 
 /// What the editor takes from the active run and the settings.
@@ -67,34 +68,62 @@ impl AddDialog {
     fn choices(&mut self, ui: &mut egui::Ui, library: &[LibraryCompound], exists: bool) {
         let before = (self.name.clone(), self.choice);
         ui.horizontal(|ui| {
-            ui.label("Name");
+            ui.label(t("Name", "Name"));
             ui.text_edit_singleline(&mut self.name);
         });
-        egui::ComboBox::from_label("Existing entry")
-            .selected_text("choose…")
-            .height(300.0)
-            .show_ui(ui, |ui| {
-                for c in library {
-                    if ui.selectable_label(c.name == self.name, &c.name).clicked() {
-                        self.name.clone_from(&c.name);
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("Existing entry")
+                .selected_text(t("choose…", "auswählen…"))
+                .height(300.0)
+                .show_ui(ui, |ui| {
+                    for c in library {
+                        if ui.selectable_label(c.name == self.name, &c.name).clicked() {
+                            self.name.clone_from(&c.name);
+                        }
                     }
-                }
-            });
+                });
+            ui.label(t("Existing entry", "Vorhandener Eintrag"));
+        });
         if exists {
             ui.separator();
-            ui.label("The library has an entry with this name:");
-            ui.radio_value(&mut self.choice, Choice::Replace, "Replace entry")
-                .on_hover_text("Remove the entry and add the found compound.");
-            ui.radio_value(&mut self.choice, Choice::KeepFeatures, "Replace RT/Spec")
-                .on_hover_text(
-                    "Replace spectrum, retention time and retention index but keep quantification ions and comments.",
-                );
-            ui.radio_value(&mut self.choice, Choice::QuantIons, "Exchange quant. ions")
-                .on_hover_text("Set only the automatic quantification ions of the entry.");
+            ui.label(t(
+                "The library has an entry with this name:",
+                "Die Bibliothek hat einen Eintrag mit diesem Namen:",
+            ));
+            ui.radio_value(
+                &mut self.choice,
+                Choice::Replace,
+                t("Replace entry", "Eintrag ersetzen"),
+            )
+            .on_hover_text(t(
+                "Remove the entry and add the found compound.",
+                "Entfernt den Eintrag und fügt die gefundene Substanz hinzu.",
+            ));
+            ui.radio_value(
+                &mut self.choice,
+                Choice::KeepFeatures,
+                t("Replace RT/Spec", "RT/Spektrum ersetzen"),
+            )
+            .on_hover_text(t(
+                "Replace spectrum, retention time and retention index but keep quantification ions and comments.",
+                "Ersetzt Spektrum, Retentionszeit und Retentionsindex, behält aber Quantifizierungsionen und Kommentare.",
+            ));
+            ui.radio_value(
+                &mut self.choice,
+                Choice::QuantIons,
+                t("Exchange quant. ions", "Quant-Ionen austauschen"),
+            )
+            .on_hover_text(t(
+                "Set only the automatic quantification ions of the entry.",
+                "Setzt nur die automatischen Quantifizierungsionen des Eintrags.",
+            ));
         } else {
-            ui.label("A new entry is added.");
+            ui.label(t(
+                "A new entry is added.",
+                "Ein neuer Eintrag wird hinzugefügt.",
+            ));
         }
-        ui.label("Comment");
+        ui.label(t("Comment", "Kommentar"));
         ui.add(egui::TextEdit::multiline(&mut self.comment).desired_rows(2));
         // The question was for the entry and choice it showed.
         if (self.name.as_str(), self.choice) != (before.0.as_str(), before.1) {
@@ -104,25 +133,31 @@ impl AddDialog {
 
     /// RT and RI of the component and the question.
     fn status(&self, ui: &mut egui::Ui) {
-        ui.label(format!(
-            "RT {:.3} min, RI {}",
-            self.data.scan_times_s[self.comp.apex_scan as usize] / 60.0,
-            self.ri.map_or("unknown".into(), |r| format!("{r:.1}")),
-        ));
+        let rt = self.data.scan_times_s[self.comp.apex_scan as usize] / 60.0;
+        let ri = (self.ri).map_or(t("unknown", "unbekannt").into(), |r| format!("{r:.1}"));
+        ui.label(tf!("RT {rt:.3} min, RI {ri}", "RT {rt:.3} min, RI {ri}"));
         if self.ions.is_empty() {
-            ui.label("This component has no ion peaks (the old program saved it without), so no quantification ions are chosen.");
+            ui.label(t(
+                "This component has no ion peaks (the old program saved it without), so no quantification ions are chosen.",
+                "Diese Komponente hat keine Ionen-Peaks (das alte Programm speicherte sie ohne), daher werden keine Quantifizierungsionen gewählt.",
+            ));
         }
         if self.confirm {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
                 match self.choice {
-                    Choice::Replace => "Do you really want to replace the existing entry?",
-                    Choice::KeepFeatures => {
-                        "Do you really want to replace spectrum, RT and RI of the entry?"
-                    }
-                    Choice::QuantIons => {
-                        "Do you really want to set the detected quantification ions?"
-                    }
+                    Choice::Replace => t(
+                        "Do you really want to replace the existing entry?",
+                        "Wollen Sie den vorhandenen Eintrag wirklich ersetzen?",
+                    ),
+                    Choice::KeepFeatures => t(
+                        "Do you really want to replace spectrum, RT and RI of the entry?",
+                        "Wollen Sie Spektrum, RT und RI des Eintrags wirklich ersetzen?",
+                    ),
+                    Choice::QuantIons => t(
+                        "Do you really want to set the detected quantification ions?",
+                        "Wollen Sie die erkannten Quantifizierungsionen wirklich setzen?",
+                    ),
                 },
             );
         }
@@ -139,12 +174,13 @@ impl AddDialog {
         let (mut apply, mut cancel) = (false, false);
         ui.horizontal(|ui| {
             let ready = self.can_apply(exists);
-            let label = if self.confirm { "Yes" } else { "OK" };
+            let label = if self.confirm { t("Yes", "Ja") } else { "OK" };
             let ok = ui
                 .add_enabled(ready, egui::Button::new(label))
-                .on_disabled_hover_text(
+                .on_disabled_hover_text(t(
                     "Needs a name, and ion peaks to exchange the quantification ions.",
-                );
+                    "Braucht einen Namen und Ionen-Peaks, um die Quantifizierungsionen auszutauschen.",
+                ));
             if ok.clicked() {
                 if exists && !self.confirm {
                     self.confirm = true;
@@ -152,7 +188,7 @@ impl AddDialog {
                     apply = true;
                 }
             }
-            cancel = ui.button("Cancel").clicked();
+            cancel = ui.button(t("Cancel", "Abbrechen")).clicked();
         });
         (apply, cancel)
     }
@@ -206,16 +242,20 @@ impl LibraryEditor {
         let Some(d) = &mut self.add else { return };
         let existing = find(&self.compounds, &d.name);
         let (mut open, mut apply, mut cancel) = (true, false, false);
-        egui::Window::new("Add component to library")
-            .tool_window(ctx, 9, [340.0, 420.0])
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                d.choices(ui, &self.compounds, existing.is_some());
-                d.status(ui);
-                ui.separator();
-                (apply, cancel) = d.buttons(ui, existing.is_some());
-            });
+        egui::Window::new(t(
+            "Add component to library",
+            "Komponente zur Bibliothek hinzufügen",
+        ))
+        .id(egui::Id::unique("Add component to library"))
+        .tool_window(ctx, 9, [340.0, 420.0])
+        .open(&mut open)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            d.choices(ui, &self.compounds, existing.is_some());
+            d.status(ui);
+            ui.separator();
+            (apply, cancel) = d.buttons(ui, existing.is_some());
+        });
         if !open || cancel {
             self.add = None;
         } else if apply {
@@ -251,7 +291,7 @@ impl LibraryEditor {
     fn rt_window(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.rt else { return };
         if let Some(rx) = &d.job
-            && let Some(r) = poll_job(rx, "retention time search")
+            && let Some(r) = poll_job(rx, t("retention time search", "Retentionszeitsuche"))
         {
             d.job = None;
             match r {
@@ -260,36 +300,45 @@ impl LibraryEditor {
             }
         }
         let (mut open, mut apply) = (true, false);
-        egui::Window::new("Copy retention times")
+        egui::Window::new(t("Copy retention times", "Retentionszeiten kopieren"))
+            .id(egui::Id::unique("Copy retention times"))
             .tool_window(ctx, 10, [340.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(format!(
-                    "Assigned components of the active run → entries of {}.",
-                    if self.name.is_empty() {
-                        "the new library"
-                    } else {
-                        &self.name
-                    }
-                ));
+                ui.label(if self.name.is_empty() {
+                    t(
+                        "Assigned components of the active run → entries of the new library.",
+                        "Zugeordnete Komponenten des aktiven Laufs → Einträge der neuen Bibliothek.",
+                    )
+                    .to_owned()
+                } else {
+                    let name = &self.name;
+                    tf!(
+                        "Assigned components of the active run → entries of {name}.",
+                        "Zugeordnete Komponenten des aktiven Laufs → Einträge von {name}.",
+                    )
+                });
                 if d.job.is_some() {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Searching the library…");
+                        ui.label(t("Searching the library…", "Bibliothek wird durchsucht…"));
                     });
                 } else if d.plan.is_empty() {
-                    ui.label("No component was assigned to an entry.");
+                    ui.label(t(
+                        "No component was assigned to an entry.",
+                        "Keine Komponente wurde einem Eintrag zugeordnet.",
+                    ));
                 }
                 egui::ScrollArea::vertical()
                     .max_height(360.0)
                     .show(ui, |ui| {
                         egui::Grid::new("rt plan").striped(true).show(ui, |ui| {
                             for h in [
-                                "Compound",
+                                t("Compound", "Substanz"),
                                 "RT (min)",
-                                "Lib RT (min)",
+                                t("Lib RT (min)", "Bibl.-RT (min)"),
                                 "RI",
-                                "Lib RI",
+                                t("Lib RI", "Bibl.-RI"),
                                 "Score",
                             ] {
                                 ui.strong(h);
@@ -309,9 +358,15 @@ impl LibraryEditor {
                 if ui
                     .add_enabled(
                         !d.plan.is_empty(),
-                        egui::Button::new(format!("Copy {} RTs", d.plan.len())),
+                        egui::Button::new({
+                            let n = d.plan.len();
+                            tf!("Copy {n} RTs", "{n} RTs kopieren")
+                        }),
                     )
-                    .on_hover_text("Replaces RT and RI of the entries; Save writes the library.")
+                    .on_hover_text(t(
+                        "Replaces RT and RI of the entries; Save writes the library.",
+                        "Ersetzt RT und RI der Einträge; Speichern schreibt die Bibliothek.",
+                    ))
                     .clicked()
                 {
                     apply = true;

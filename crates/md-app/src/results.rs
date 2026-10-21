@@ -13,6 +13,7 @@ use std::sync::{Arc, Weak};
 
 use crate::Run;
 use crate::identify::Library;
+use crate::lang::{t, tf};
 
 /// A column of the list in the app's spelling; the CSV keeps the old program's
 /// (`md_core::results::write_csv`).
@@ -48,16 +49,16 @@ const WITH_LIBRARY: [Col; 10] = [
 impl Col {
     fn title(self) -> &'static str {
         match self {
-            Col::Name => "Compound name",
+            Col::Name => t("Compound name", "Substanzname"),
             Col::Rt => "RT (min)",
             Col::Ri => "RI",
-            Col::Area => "Peak area",
+            Col::Area => t("Peak area", "Peakfläche"),
             Col::Score => "Score",
-            Col::Spectrum => "Spectrum",
-            Col::RiScore => "RI score",
+            Col::Spectrum => t("Spectrum", "Spektrum"),
+            Col::RiScore => t("RI score", "RI-Score"),
             Col::Sn => "S/N",
-            Col::Ions => "Ions",
-            Col::QuantIons => "Quant ions",
+            Col::Ions => t("Ions", "Ionen"),
+            Col::QuantIons => t("Quant ions", "Quant-Ionen"),
         }
     }
 
@@ -131,7 +132,7 @@ impl Results {
         cal: Option<&RiCalibration>,
         cutoff: f64,
     ) {
-        ui.strong("Component list");
+        ui.strong(t("Component list", "Komponentenliste"));
         let Some(run) = run else {
             return;
         };
@@ -148,8 +149,11 @@ impl Results {
         let mut loaded = false;
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("Export CSV…")
-                .on_hover_text("Save the list as CSV, in the columns of the old program")
+                .button(t("Export CSV…", "CSV exportieren…"))
+                .on_hover_text(t(
+                    "Save the list as CSV, in the columns of the old program",
+                    "Speichert die Liste als CSV, in den Spalten des alten Programms",
+                ))
                 .clicked()
             {
                 let res: Vec<ResultRow> = rows.iter().map(|r| r.res.clone()).collect();
@@ -163,17 +167,23 @@ impl Results {
             return;
         }
         ui.horizontal_wrapped(|ui| {
-            let label = ui.label("Find substance");
+            let label = ui.label(t("Find substance", "Substanz suchen"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter).hint_text(match lib {
-                    Some(_) => "Name in the list and the library",
-                    None => "Name in the list",
+                    Some(_) => t(
+                        "Name in the list and the library",
+                        "Name in der Liste und der Bibliothek",
+                    ),
+                    None => t("Name in the list", "Name in der Liste"),
                 }),
             )
             .labelled_by(label.id);
             if !self.filter.is_empty()
-                && (ui.button("Clear"))
-                    .on_hover_text("Clear the search and show every component")
+                && (ui.button(t("Clear", "Leeren")))
+                    .on_hover_text(t(
+                        "Clear the search and show every component",
+                        "Leert die Suche und zeigt alle Komponenten",
+                    ))
                     .clicked()
             {
                 self.filter.clear();
@@ -193,7 +203,7 @@ impl Results {
         }
 
         let mut order: Vec<usize> = (0..rows.len())
-            .filter(|i| want.is_empty() || rows[*i].res.name.to_lowercase().contains(&want))
+            .filter(|i| want.is_empty() || shown_name(&rows[*i].res).to_lowercase().contains(&want))
             .collect();
         if let Some((col, desc)) = self.sort {
             order.sort_by(|a, b| {
@@ -202,13 +212,20 @@ impl Results {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{} of {} components", order.len(), rows.len()));
+            let (s, n) = (order.len(), rows.len());
+            ui.label(tf!("{s} of {n} components", "{s} von {n} Komponenten"));
             if lib.is_none() {
-                ui.weak("Open a library to name them.");
+                ui.weak(t(
+                    "Open a library to name them.",
+                    "Eine Bibliothek öffnen, um sie zu benennen.",
+                ));
             }
         });
         if order.is_empty() && !rows.is_empty() {
-            ui.weak("No component matches. Clear the search to see all.");
+            ui.weak(t(
+                "No component matches. Clear the search to see all.",
+                "Keine Komponente passt. Die Suche leeren, um alle zu sehen.",
+            ));
         }
         // ↑/↓ step through the list as it is shown, unless a text field takes the keys.
         let step = ui.input(|i| {
@@ -239,24 +256,42 @@ impl Results {
         cal: Option<&RiCalibration>,
     ) -> bool {
         if ui
-            .button("Save components…")
-            .on_hover_text("Writes the components and their peaks as a .cmp file (old format)")
+            .button(t("Save components…", "Komponenten speichern…"))
+            .on_hover_text(t(
+                "Writes the components and their peaks as a .cmp file (old format)",
+                "Schreibt die Komponenten und ihre Peaks als .cmp-Datei (altes Format)",
+            ))
             .clicked()
         {
             self.save(run, cal);
         }
         let busy = run.analysis.busy();
         if ui
-            .add_enabled(!busy, egui::Button::new("Load components…"))
-            .on_hover_text("Replaces the components with those of a .cmp file of this run")
-            .on_disabled_hover_text("Wait until the analysis has finished")
+            .add_enabled(
+                !busy,
+                egui::Button::new(t("Load components…", "Komponenten laden…")),
+            )
+            .on_hover_text(t(
+                "Replaces the components with those of a .cmp file of this run",
+                "Ersetzt die Komponenten durch die einer .cmp-Datei dieses Laufs",
+            ))
+            .on_disabled_hover_text(t(
+                "Wait until the analysis has finished",
+                "Warten, bis die Analyse fertig ist",
+            ))
             .clicked()
             && let Some(p) = dialog(run).pick_file()
         {
             let result = load_components(run, &p);
             self.note = match &result {
-                Ok(n) => format!("Loaded {n} components from {}", p.display()),
-                Err(e) => format!("Load failed: {e}"),
+                Ok(n) => {
+                    let p = p.display();
+                    tf!(
+                        "Loaded {n} components from {p}",
+                        "{n} Komponenten aus {p} geladen"
+                    )
+                }
+                Err(e) => tf!("Load failed: {e}", "Laden fehlgeschlagen: {e}"),
             };
             return result.is_ok();
         }
@@ -275,8 +310,14 @@ impl Results {
     pub fn save(&mut self, run: &Run, cal: Option<&RiCalibration>) {
         if let Some(p) = dialog(run).save_file() {
             self.note = match save_components(run, &p, cal) {
-                Ok(n) => format!("Saved {n} components to {}", p.display()),
-                Err(e) => format!("Save failed: {e}"),
+                Ok(n) => {
+                    let p = p.display();
+                    tf!(
+                        "Saved {n} components to {p}",
+                        "{n} Komponenten in {p} gespeichert"
+                    )
+                }
+                Err(e) => tf!("Save failed: {e}", "Speichern fehlgeschlagen: {e}"),
             };
         } else {
             self.note.clear();
@@ -301,7 +342,7 @@ impl Results {
             .filter(|(_, c)| c.name.to_lowercase().contains(want))
             .take(8);
         ui.horizontal_wrapped(|ui| {
-            ui.label("Library:");
+            ui.label(t("Library:", "Bibliothek:"));
             for (i, c) in names {
                 if ui
                     .selectable_label(self.looked_up == Some(i), &c.name)
@@ -327,7 +368,7 @@ impl Results {
         ui.horizontal_wrapped(|ui| {
             ui.strong(&lib.compounds[i].name);
             if found.is_empty() {
-                ui.label("not found in this run");
+                ui.label(t("not found in this run", "in diesem Lauf nicht gefunden"));
             }
             for (k, score) in found.iter().take(12) {
                 let at = run.data.scan_times_s[run.components[*k].apex_scan as usize] / 60.0;
@@ -483,11 +524,14 @@ fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(Col, bool)>, col: Col) {
         Some((s, d)) if s == col => [" ▲", " ▼"][d as usize],
         _ => "",
     };
-    let t = egui::RichText::new(format!("{}{arrow}", col.title())).strong();
+    let text = egui::RichText::new(format!("{}{arrow}", col.title())).strong();
     let resp = ui
-        .add(egui::Label::new(t).sense(egui::Sense::click()))
+        .add(egui::Label::new(text).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Click to sort: ascending, descending, off");
+        .on_hover_text(t(
+            "Click to sort: ascending, descending, off",
+            "Klicken zum Sortieren: aufsteigend, absteigend, aus",
+        ));
     if resp.clicked() {
         *sort = next_sort(*sort, col);
     }
@@ -498,7 +542,7 @@ fn cell(r: &Row, col: Col) -> String {
     use crate::detail::num;
     let res = &r.res;
     match col {
-        Col::Name => res.name.clone(),
+        Col::Name => shown_name(res),
         Col::Rt => format!("{:.2}", res.rt_s / 60.0),
         Col::Ri => num(res.ri, 1),
         Col::Area => format!("{:.0}", r.area),
@@ -532,10 +576,19 @@ fn compare(a: &Row, b: &Row, col: Col) -> std::cmp::Ordering {
     }
 }
 
+/// md-core names a component without match "No match: N" for the CSV too; on screen it is translated.
+fn shown_name(r: &ResultRow) -> String {
+    match r.compound {
+        None => tf!("No match: {}", "Kein Treffer: {}", r.component + 1),
+        Some(_) => r.name.clone(),
+    }
+}
+
 /// Old tooltip: scores, RI, RT and the alternative hits of the component.
 fn hover(ui: &mut egui::Ui, r: &ResultRow, run: &Run, lib: Option<&Library>) {
-    ui.strong(&r.name);
-    ui.label(format!("RT {:.2} min", r.rt_s / 60.0));
+    ui.strong(shown_name(r));
+    let rt = r.rt_s / 60.0;
+    ui.label(tf!("RT {rt:.2} min", "RT {rt:.2} min"));
     if let Some(ri) = r.ri {
         ui.label(format!("RI {ri:.1}"));
     }
@@ -558,7 +611,7 @@ fn hover(ui: &mut egui::Ui, r: &ResultRow, run: &Run, lib: Option<&Library>) {
 /// The file dialog for the saved components of `run`: `.cmp` next to the run, where it is found again.
 fn dialog(run: &Run) -> rfd::FileDialog {
     let d = rfd::FileDialog::new()
-        .add_filter("Saved components", &["cmp"])
+        .add_filter(t("Saved components", "Gespeicherte Komponenten"), &["cmp"])
         .set_file_name(format!("{}.cmp", run.name));
     match run.path.parent() {
         Some(dir) => d.set_directory(dir),
@@ -614,8 +667,11 @@ fn export(run: &str, rows: &[ResultRow]) -> String {
         .map(std::io::BufWriter::new)
         .and_then(|f| write_csv(f, rows))
     {
-        Ok(()) => format!("Saved {}", p.display()),
-        Err(e) => format!("Export failed: {e}"),
+        Ok(()) => {
+            let p = p.display();
+            tf!("Saved {p}", "{p} gespeichert")
+        }
+        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     }
 }
 

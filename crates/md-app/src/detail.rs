@@ -8,6 +8,7 @@ use md_core::library::LibraryCompound;
 use md_core::search::LibraryHit;
 use md_core::spectrum::Normalization;
 
+use crate::lang::{t, tf};
 use crate::{Run, Trace, export, identify};
 
 /// Old split plot: the found spectrum alone, found above and library mirrored below, or their difference.
@@ -24,9 +25,9 @@ impl Mode {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Normal => "Found only",
-            Self::Split => "Split",
-            Self::Difference => "Difference",
+            Self::Normal => t("Found only", "Nur gefunden"),
+            Self::Split => t("Split", "Geteilt"),
+            Self::Difference => t("Difference", "Differenz"),
         }
     }
 }
@@ -64,13 +65,16 @@ pub fn charts(mode: Mode, c: &Comparison, library: &str) -> Vec<BarChart> {
     match mode {
         Mode::Normal => Vec::new(),
         Mode::Split => vec![
-            BarChart::new("Found", bars(c.found.clone())),
+            BarChart::new(t("Found", "Gefunden"), bars(c.found.clone())),
             BarChart::new(
-                format!("Library: {library}"),
+                tf!("Library: {library}", "Bibliothek: {library}"),
                 bars(c.library.iter().map(|v| -v).collect()),
             ),
         ],
-        Mode::Difference => vec![BarChart::new("Found − library", bars(c.difference()))],
+        Mode::Difference => vec![BarChart::new(
+            t("Found − library", "Gefunden − Bibliothek"),
+            bars(c.difference()),
+        )],
     }
 }
 
@@ -83,22 +87,31 @@ pub fn controls(
     file_stem: &str,
 ) -> Option<String> {
     let mut error = None;
+    // On its own line: beside a long title the buttons are squeezed and push the controls wider.
+    ui.strong(title);
     ui.horizontal_wrapped(|ui| {
-        ui.strong(title);
-        let none = "Select a component with a library hit to compare.";
+        let none = t(
+            "Select a component with a library hit to compare.",
+            "Zum Vergleichen eine Komponente mit Bibliothekstreffer wählen.",
+        );
         ui.add_enabled_ui(cmp.is_some(), |ui| {
             for m in Mode::ALL {
                 ui.selectable_value(mode, m, m.label());
             }
             if ui
-                .button("Copy both")
-                .on_hover_text("Found and library spectrum as CSV text")
+                .button(t("Copy both", "Beide kopieren"))
+                .on_hover_text(t(
+                    "Found and library spectrum as CSV text",
+                    "Gefundenes und Bibliotheksspektrum als CSV-Text",
+                ))
                 .clicked()
                 && let Some((c, _)) = cmp
             {
                 ui.ctx().copy_text(c.csv_text());
             }
-            if ui.button("Save both as CSV…").clicked()
+            if ui
+                .button(t("Save both as CSV…", "Als CSV speichern…"))
+                .clicked()
                 && let Some((c, _)) = cmp
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("CSV", &["csv"])
@@ -111,8 +124,11 @@ pub fn controls(
         .response
         .on_disabled_hover_text(none);
         match cmp {
-            Some((_, lib)) => ui.weak(format!("vs. {}", lib.name)),
-            None => ui.weak("No library hit to compare"),
+            Some((_, lib)) => ui.weak(tf!("vs. {}", "vs. {}", lib.name)),
+            None => ui.weak(t(
+                "No library hit to compare",
+                "Kein Bibliothekstreffer zum Vergleichen",
+            )),
         };
     });
     error
@@ -132,8 +148,11 @@ pub fn panel(
     crate::layout::dock(egui::Panel::right("info"), ui, 340.0).show(ui, |ui| {
         egui::ScrollArea::both().show(ui, |ui| {
             let Some(k) = run.component else {
-                ui.strong("Component info");
-                ui.weak("Select a component in the list or on the chromatogram.");
+                ui.strong(t("Component info", "Komponenteninfo"));
+                ui.weak(t(
+                    "Select a component in the list or on the chromatogram.",
+                    "Eine Komponente in der Liste oder im Chromatogramm wählen.",
+                ));
                 return;
             };
             body(ui, run, k, (mz, trace), cal);
@@ -158,19 +177,19 @@ fn body(
     (mz, trace): (&mut f32, &mut Trace),
     cal: Option<&md_core::ri::RiCalibration>,
 ) {
-    ui.strong(format!("Component {}", k + 1));
+    ui.strong(tf!("Component {}", "Komponente {}", k + 1));
     let c = &run.components[k];
     let d = component_detail(c, &run.peaks, &run.peak_masses);
     let hit = shown_hit(run);
     if let Some((l, _)) = hit {
-        ui.label(format!("Library: {}", l.name));
+        ui.label(tf!("Library: {}", "Bibliothek: {}", l.name));
     }
     // The detected component beside its library entry, as in the old Compound Information.
     egui::Grid::new("component values").show(ui, |ui| {
         ui.label("");
-        number(ui, egui::RichText::new("Detected").strong());
+        number(ui, egui::RichText::new(t("Detected", "Erkannt")).strong());
         if hit.is_some() {
-            number(ui, egui::RichText::new("Library").strong());
+            number(ui, egui::RichText::new(t("Library", "Bibliothek")).strong());
         }
         ui.end_row();
         let mut row = |name: &str, tip: &str, found: String, lib: Option<String>| {
@@ -183,39 +202,54 @@ fn body(
         };
         let lib = |f: fn(&LibraryCompound, &LibraryHit) -> String| hit.map(|(l, h)| f(l, h));
         row(
-            "RT (min)",
-            "Retention time of the apex",
+            t("RT (min)", "RT (min)"),
+            t("Retention time of the apex", "Retentionszeit des Apex"),
             format!("{:.2}", run.minutes[c.apex_scan as usize]),
             lib(|l, _| num(Some(l.spectrum.rt_ms / 60_000.0).filter(|t| *t > 0.0), 2)),
         );
         row(
-            "RI",
-            "Retention index; needs an RI calibration",
+            t("RI", "RI"),
+            t(
+                "Retention index; needs an RI calibration",
+                "Retentionsindex; braucht eine RI-Kalibrierung",
+            ),
             num(crate::results::component_ri(run, k, cal), 1),
             lib(|l, _| num(Some(l.spectrum.ri).filter(|ri| *ri >= 0.0), 1)),
         );
         // The rewrite reads centroid spectra only, so there is no profile count (architecture.md).
         row(
-            "Ions (centroid)",
-            "Number of ions in the spectrum; spectra are centroided",
+            t("Ions (centroid)", "Ionen (Zentroid)"),
+            t(
+                "Number of ions in the spectrum; spectra are centroided",
+                "Anzahl der Ionen im Spektrum; Spektren sind zentroidiert",
+            ),
             c.spectrum.len().to_string(),
             lib(|l, _| l.spectrum.masses.len().to_string()),
         );
         row(
-            "Mean S/N",
-            "Mean signal-to-noise of the ion peaks",
+            t("Mean S/N", "Mittleres S/N"),
+            t(
+                "Mean signal-to-noise of the ion peaks",
+                "Mittleres Signal-Rausch-Verhältnis der Ionen-Peaks",
+            ),
             stat(&d, d.mean_signal_to_noise, 1),
             None,
         );
         row(
-            "Peak sharpness",
-            "Mean sharpness of the ion peaks",
+            t("Peak sharpness", "Peakschärfe"),
+            t(
+                "Mean sharpness of the ion peaks",
+                "Mittlere Schärfe der Ionen-Peaks",
+            ),
             stat(&d, d.mean_sharpness, 2),
             None,
         );
         row(
-            "Peak discrepancy",
-            "Mean peak quality (old \"Peak dis.indx\"); 0 is best",
+            t("Peak discrepancy", "Peak-Abweichung"),
+            t(
+                "Mean peak quality (old \"Peak dis.indx\"); 0 is best",
+                "Mittlere Peakqualität (alt „Peak dis.indx“); 0 ist am besten",
+            ),
             num(Some(d.discrepancy).filter(|v| *v >= 0.0), 1),
             None,
         );
@@ -225,16 +259,26 @@ fn body(
                     row(name, tip, String::new(), lib(f))
                 };
             score(
-                "Score",
-                "Overall score of the compared library hit",
+                t("Score", "Score"),
+                t(
+                    "Overall score of the compared library hit",
+                    "Gesamt-Score des verglichenen Bibliothekstreffers",
+                ),
                 |_, h| format!("{:.3}", h.overall),
             );
-            score("Spectrum score", "Similarity of the spectra", |_, h| {
-                format!("{:.3}", h.spec_sim)
-            });
-            score("RI score", "Similarity of the retention indices", |_, h| {
-                num(h.ri_sim, 3)
-            });
+            score(
+                t("Spectrum score", "Spektrum-Score"),
+                t("Similarity of the spectra", "Ähnlichkeit der Spektren"),
+                |_, h| format!("{:.3}", h.spec_sim),
+            );
+            score(
+                t("RI score", "RI-Score"),
+                t(
+                    "Similarity of the retention indices",
+                    "Ähnlichkeit der Retentionsindizes",
+                ),
+                |_, h| num(h.ri_sim, 3),
+            );
         }
     });
     ui.separator();
@@ -263,8 +307,11 @@ fn peak_list(
     mz: &mut f32,
     trace: &mut Trace,
 ) {
-    ui.strong("Peaks");
-    ui.weak("Click an ion to show its SIC");
+    ui.strong(t("Peaks", "Peaks"));
+    ui.weak(t(
+        "Click an ion to show its SIC",
+        "Ein Ion anklicken, um sein SIC zu zeigen",
+    ));
     egui::ScrollArea::vertical()
         .id_salt("component peaks")
         .max_height(220.0)
@@ -272,8 +319,13 @@ fn peak_list(
             egui::Grid::new("component peak list")
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.strong("Ion");
-                    for head in ["Quality", "Sharp.", "S/N", "Area"] {
+                    ui.strong(t("Ion", "Ion"));
+                    for head in [
+                        t("Quality", "Qualität"),
+                        t("Sharp.", "Schärfe"),
+                        "S/N",
+                        t("Area", "Fläche"),
+                    ] {
                         number(ui, egui::RichText::new(head).strong());
                     }
                     ui.end_row();

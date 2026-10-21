@@ -7,6 +7,7 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::mpsc;
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
@@ -49,11 +50,13 @@ pub enum Pick {
 }
 
 /// (LS_USE_SPEC, LS_USE_RI) and the name of each score choice of the old dialog.
-const SCORES: [(bool, bool, &str); 3] = [
-    (true, true, "Combined"),
-    (true, false, "Spectrum"),
-    (false, true, "RI"),
-];
+fn scores() -> [(bool, bool, &'static str); 3] {
+    [
+        (true, true, t("Combined", "Kombiniert")),
+        (true, false, t("Spectrum", "Spektrum")),
+        (false, true, "RI"),
+    ]
+}
 
 #[derive(Default)]
 pub struct Settings {
@@ -153,7 +156,11 @@ impl Settings {
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Panicked: keep the old components and do not retry these settings.
-                        error = Some(format!("{}: analysis crashed", run.name));
+                        error = Some(tf!(
+                            "{}: analysis crashed",
+                            "{}: Analyse abgestürzt",
+                            run.name
+                        ));
                         a.key = Some(key.clone());
                         a.job = None;
                     }
@@ -181,7 +188,8 @@ impl Settings {
     ) -> Option<Pick> {
         let mut open = self.open;
         let mut pick = None;
-        egui::Window::new("Settings")
+        egui::Window::new(t("Settings", "Einstellungen"))
+            .id(egui::Id::unique("Settings"))
             .tool_window(ctx, 0, [560.0, 680.0])
             .open(&mut open)
             .show(ctx, |ui| {
@@ -189,8 +197,9 @@ impl Settings {
                     .max_height(ui.available_height() - 60.0)
                     .show(ui, |ui| {
                         pick = self.libraries(ui, libraries);
-                        ui.strong(crate::guided::text::MODE);
+                        ui.strong(crate::guided::text::mode());
                         crate::guided::switch(ui, mode);
+                        crate::lang::switch(ui);
                         ui.add_space(8.0);
                         // An invalid value must not hide under a closed "Advanced" (#303).
                         let invalid = self.draft.validate().is_err();
@@ -208,57 +217,75 @@ impl Settings {
     /// Libraries and appearance: they take effect at once, without "Apply".
     fn libraries(&mut self, ui: &mut egui::Ui, paths: [Option<&Path>; 2]) -> Option<Pick> {
         let mut pick = None;
-        ui.strong("Libraries");
+        ui.strong(t("Libraries", "Bibliotheken"));
         egui::Grid::new("libraries").num_columns(3).show(ui, |ui| {
             for (name, path, which, hint) in [
                 (
-                    "Compound library",
+                    t("Compound library", "Substanzbibliothek"),
                     paths[0],
                     Pick::Library,
-                    "Components are identified against it. Opened again at the next start.",
+                    t(
+                        "Components are identified against it. Opened again at the next start.",
+                        "Die Komponenten werden mit ihr identifiziert. Beim nächsten Start wieder geöffnet.",
+                    ),
                 ),
                 (
-                    "NIST library",
+                    t("NIST library", "NIST-Bibliothek"),
                     paths[1],
                     Pick::Nist,
-                    "Used by \"NIST search\" on the selected component. Opened again at the next start.",
+                    t(
+                        "Used by \"NIST search\" on the selected component. Opened again at the next start.",
+                        "Für die „NIST-Suche“ zur gewählten Komponente. Beim nächsten Start wieder geöffnet.",
+                    ),
                 ),
             ] {
                 ui.label(name).on_hover_text(hint);
                 match path {
                     Some(p) => ui.label(p.display().to_string()),
-                    None => ui.weak("none"),
+                    None => ui.weak(t("none", "keine")),
                 };
-                if ui.button("Choose…").on_hover_text(hint).clicked() {
+                if ui.button(t("Choose…", "Wählen…")).on_hover_text(hint).clicked() {
                     pick = Some(which);
                 }
                 ui.end_row();
             }
         });
         ui.add_space(8.0);
-        ui.strong("Appearance");
+        ui.strong(t("Appearance", "Darstellung"));
         let a = &mut self.appearance;
-        ui.checkbox(&mut a.axes_labels, "Axes labels").on_hover_text(
-            "Axis titles on the spectrum, the Detected Peaks plot and the y axis of the chromatograms",
-        );
-        ui.checkbox(&mut a.peak_labels, "Label highest peaks")
-            .on_hover_text(format!(
-                "The {LABELLED_PEAKS} highest peaks in view of the spectrum show their m/z"
+        ui.checkbox(&mut a.axes_labels, t("Axes labels", "Achsentitel"))
+            .on_hover_text(t(
+                "Axis titles on the spectrum, the Detected Peaks plot and the y axis of the chromatograms",
+                "Achsentitel am Spektrum, am Plot der erkannten Peaks und an der y-Achse der Chromatogramme",
             ));
+        ui.checkbox(
+            &mut a.peak_labels,
+            t("Label highest peaks", "Höchste Peaks beschriften"),
+        )
+        .on_hover_text(tf!(
+            "The {LABELLED_PEAKS} highest peaks in view of the spectrum show their m/z",
+            "Die {LABELLED_PEAKS} höchsten sichtbaren Peaks des Spektrums zeigen ihr m/z"
+        ));
         ui.add_space(8.0);
         pick
     }
 
     fn buttons(&mut self, ui: &mut egui::Ui, times: Option<&[f64]>) {
         let valid = self.draft.validate();
-        let fix = "Fix the value shown in red first (it names the old key)";
+        let fix = t(
+            "Fix the value shown in red first (it names the old key)",
+            "Erst den rot angezeigten Wert korrigieren (er nennt den alten Schlüssel)",
+        );
         ui.horizontal(|ui| {
             let changed = self.draft != self.applied;
             if ui
-                .add_enabled(valid.is_ok() && changed, egui::Button::new("Apply"))
-                .on_hover_text("Re-runs peak detection, deconvolution and the library search")
+                .add_enabled(valid.is_ok() && changed, egui::Button::new(t("Apply", "Übernehmen")))
+                .on_hover_text(t(
+                    "Re-runs peak detection, deconvolution and the library search",
+                    "Führt Peakerkennung, Dekonvolution und Bibliothekssuche neu aus",
+                ))
                 .on_disabled_hover_text(if valid.is_ok() {
-                    "Nothing changed"
+                    t("Nothing changed", "Nichts geändert")
                 } else {
                     fix
                 })
@@ -268,23 +295,32 @@ impl Settings {
                 self.note = None;
             }
             if ui
-                .button("Old defaults")
-                .on_hover_text("Fill in the old version's defaults, with the deconvolution width on Auto; Apply uses them")
+                .button(t("Old defaults", "Alte Standardwerte"))
+                .on_hover_text(t(
+                    "Fill in the old version's defaults, with the deconvolution width on Auto; Apply uses them",
+                    "Die Standardwerte der alten Version eintragen, Dekonvolutionsbreite auf Auto; Übernehmen verwendet sie",
+                ))
                 .clicked()
             {
                 self.draft = GcmsSettings::default();
             }
             if ui
-                .button("Load…")
-                .on_hover_text("Read an old GCMSSettings file and apply it")
+                .button(t("Load…", "Laden…"))
+                .on_hover_text(t(
+                    "Read an old GCMSSettings file and apply it",
+                    "Eine alte GCMSSettings-Datei lesen und übernehmen",
+                ))
                 .clicked()
                 && let Some(path) = dialog().pick_file()
             {
                 self.note = Some(self.load(&path));
             }
             if ui
-                .add_enabled(valid.is_ok(), egui::Button::new("Save…"))
-                .on_hover_text("Write these values as an old GCMSSettings file")
+                .add_enabled(valid.is_ok(), egui::Button::new(t("Save…", "Speichern…")))
+                .on_hover_text(t(
+                    "Write these values as an old GCMSSettings file",
+                    "Diese Werte als alte GCMSSettings-Datei schreiben",
+                ))
                 .on_disabled_hover_text(fix)
                 .clicked()
                 && let Some(path) = dialog().set_file_name("GCMSSettings").save_file()
@@ -294,7 +330,7 @@ impl Settings {
                 (file.an_deconvolution_width).get_or_insert_with(|| auto_width(times.unwrap_or_default()));
                 self.note = Some(
                     std::fs::write(&path, file.to_bytes())
-                        .map(|()| format!("Saved {}", path.display()))
+                        .map(|()| tf!("Saved {}", "Gespeichert: {}", path.display()))
                         .map_err(|e| format!("{}: {e}", path.display())),
                 );
             }
@@ -319,30 +355,44 @@ impl Settings {
             .and_then(|f| f.take(MAX_LEN + 1).read_to_end(&mut bytes))
             .map_err(|e| err(&e))?;
         if bytes.len() as u64 > MAX_LEN {
-            return Err(err(&"file too large for a settings file"));
+            return Err(err(&t(
+                "file too large for a settings file",
+                "Datei zu groß für eine Einstellungsdatei",
+            )));
         }
         self.draft = self.applied.from_bytes(&bytes).map_err(|e| err(&e))?;
         self.applied = self.draft.clone();
-        Ok(format!("Loaded {}", path.display()))
+        Ok(tf!("Loaded {}", "Geladen: {}", path.display()))
     }
 
     fn fields(&mut self, ui: &mut egui::Ui, times: Option<&[f64]>) {
         let d = &mut self.draft;
-        ui.strong("Peak detection and deconvolution");
+        ui.strong(t(
+            "Peak detection and deconvolution",
+            "Peakerkennung und Dekonvolution",
+        ));
         egui::Grid::new("an").num_columns(2).show(ui, |ui| {
-            let hint = "Default: the old version's slope detector. \
-                Matched Filtering: the old Calibration Setter's matched peak detector.";
-            let label = ui.label("Peak detection method").on_hover_text(hint);
+            let hint = t(
+                "Default: the old version's slope detector. \
+                 Matched Filtering: the old Calibration Setter's matched peak detector.",
+                "Standard: der Steigungsdetektor der alten Version. \
+                 Matched Filtering: der Matched-Peak-Detektor des alten Calibration Setter.",
+            );
+            let label = ui.label(t("Peak detection method", "Peakerkennungsmethode")).on_hover_text(hint);
             egui::ComboBox::from_id_salt("detector")
                 .selected_text(match d.peak_detector {
-                    Detector::Default => "Default",
+                    Detector::Default => t("Default", "Standard"),
                     Detector::Matched { .. } => "Matched Filtering",
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.peak_detector, Detector::Default, "Default");
+                    ui.selectable_value(
+                        &mut d.peak_detector,
+                        Detector::Default,
+                        t("Default", "Standard"),
+                    );
                     // Choosing it again keeps the width and threshold.
                     let matched = matches!(d.peak_detector, Detector::Matched { .. });
-                    if ui.selectable_label(matched, "Matched Filtering").clicked() && !matched {
+                    if ui.selectable_label(matched, t("Matched Filtering", "Matched Filtering")).clicked() && !matched {
                         d.peak_detector = Detector::MATCHED;
                     }
                 })
@@ -353,145 +403,204 @@ impl Settings {
             if let Detector::Matched { width, threshold } = &mut d.peak_detector {
                 row(
                     ui,
-                    "Peak width",
+                    t("Peak width", "Peakbreite"),
                     "",
-                    "Scans; the filter density is 4 × width. The slopes and Minimum S/N below are not used.",
+                    t(
+                        "Scans; the filter density is 4 × width. The slopes and Minimum S/N below are not used.",
+                        "Scans; die Filterdichte ist 4 × Breite. Die Steigungen und das Minimum-S/N unten werden nicht verwendet.",
+                    ),
                     egui::DragValue::new(width).range(1..=1000),
                 );
                 row(
                     ui,
-                    "Peak threshold",
+                    t("Peak threshold", "Peakschwelle"),
                     "",
-                    "A peak is a region where the filtered trace lies above this.",
+                    t(
+                        "A peak is a region where the filtered trace lies above this.",
+                        "Ein Peak ist ein Bereich, in dem die gefilterte Spur darüber liegt.",
+                    ),
                     egui::DragValue::new(threshold).range(-1_000_000_000..=1_000_000_000),
                 );
             }
             row(
                 ui,
-                "Peak start slope",
+                t("Peak start slope", "Steigung am Peakbeginn"),
                 "AN_PEAK_THRESHOLD_BEGIN",
-                "Smoothed slope that starts a peak.",
+                t(
+                    "Smoothed slope that starts a peak.",
+                    "Geglättete Steigung, mit der ein Peak beginnt.",
+                ),
                 num(&mut d.an_peak_threshold_begin, ANY),
             );
             row(
                 ui,
-                "Peak end slope",
+                t("Peak end slope", "Steigung am Peakende"),
                 "AN_PEAK_THRESHOLD_END",
-                "The falling flank ends once the slope stays above this.",
+                t(
+                    "The falling flank ends once the slope stays above this.",
+                    "Die fallende Flanke endet, sobald die Steigung darüber bleibt.",
+                ),
                 num(&mut d.an_peak_threshold_end, ANY),
             );
             row(
                 ui,
-                "Minimum S/N",
+                t("Minimum S/N", "Minimum-S/N"),
                 "AN_MIN_PEAK_HEIGHT",
-                "Minimum height above the baseline, in noise units.",
+                t(
+                    "Minimum height above the baseline, in noise units.",
+                    "Mindesthöhe über der Basislinie, in Rauscheinheiten.",
+                ),
                 num(&mut d.an_min_peak_height, 0.0..=1e9),
             );
             row(
                 ui,
-                "Apex steps per scan",
+                t("Apex steps per scan", "Apex-Schritte pro Scan"),
                 "AN_NUMBER_BINS",
-                "Sub-scan steps for locating the precise apex.",
+                t(
+                    "Sub-scan steps for locating the precise apex.",
+                    "Teilschritte innerhalb eines Scans, um den Apex genau zu finden.",
+                ),
                 egui::DragValue::new(&mut d.an_number_bins).range(1..=100),
             );
             width_row(ui, &mut d.an_deconvolution_width, times);
             row(
                 ui,
-                "Minimum ions per component",
+                t("Minimum ions per component", "Mindestzahl Ionen pro Komponente"),
                 "AN_MIN_PEAK_NUMBER",
-                "Components with fewer ion peaks are dropped.",
+                t(
+                    "Components with fewer ion peaks are dropped.",
+                    "Komponenten mit weniger Ionen-Peaks werden verworfen.",
+                ),
                 egui::DragValue::new(&mut d.an_min_peak_number).range(1..=10_000),
             );
             row(
                 ui,
-                "Minimum share of base peak",
+                t("Minimum share of base peak", "Mindestanteil am Basispeak"),
                 "AN_MIN_HEIGHT_BP",
-                "Ions below this fraction of the base peak leave the spectrum (0 = keep all).",
+                t(
+                    "Ions below this fraction of the base peak leave the spectrum (0 = keep all).",
+                    "Ionen unter diesem Anteil am Basispeak fallen aus dem Spektrum (0 = alle behalten).",
+                ),
                 num(&mut d.an_min_height_bp, 0.0..=1.0),
             );
             row(
                 ui,
-                "Integrate fitted model",
+                t("Integrate fitted model", "Angepasstes Modell integrieren"),
                 "AN_MODELED_VALUES_FOR_INTEGRATION",
-                "Integrate the fitted model instead of the raw trace.",
+                t(
+                    "Integrate the fitted model instead of the raw trace.",
+                    "Das angepasste Modell statt der Rohspur integrieren.",
+                ),
                 egui::Checkbox::without_text(&mut d.an_modeled_values_for_integration),
             );
             row(
                 ui,
-                "Baseline correction",
+                t("Baseline correction", "Basislinienkorrektur"),
                 "baseline_correction",
-                "Subtract each scan's stored baseline from its intensities. Only old type 1 caches (FastFlight .bin/.idx) store one; other runs stay unchanged.",
+                t(
+                    "Subtract each scan's stored baseline from its intensities. Only old type 1 caches (FastFlight .bin/.idx) store one; other runs stay unchanged.",
+                    "Die gespeicherte Basislinie jedes Scans von seinen Intensitäten abziehen. Nur alte Typ-1-Caches (FastFlight .bin/.idx) speichern eine; andere Läufe bleiben unverändert.",
+                ),
                 egui::Checkbox::without_text(&mut d.baseline_correction),
             );
         });
         ranges(
             ui,
-            "Ions left out of the model peak",
+            t(
+                "Ions left out of the model peak",
+                "Vom Modellpeak ausgenommene Ionen",
+            ),
             &explain(
-                "Ion ranges (m/z from–to) not used for the model peak.",
+                t(
+                    "Ion ranges (m/z from–to) not used for the model peak.",
+                    "Ionenbereiche (m/z von–bis), die nicht für den Modellpeak verwendet werden.",
+                ),
                 "QUANT_EXCL_IONS",
             ),
             &mut d.quant_excl_ions,
         );
 
         ui.add_space(8.0);
-        ui.strong("Library search");
+        ui.strong(t("Library search", "Bibliothekssuche"));
         egui::Grid::new("ls").num_columns(2).show(ui, |ui| {
             row(
                 ui,
-                "RI tolerance (sigma)",
+                t("RI tolerance (sigma)", "RI-Toleranz (Sigma)"),
                 "LS_RI_DIFF",
-                "Sigma of the RI score; differences above 3 sigma score 0.",
+                t(
+                    "Sigma of the RI score; differences above 3 sigma score 0.",
+                    "Sigma des RI-Scores; Abweichungen über 3 Sigma ergeben 0.",
+                ),
                 num(&mut d.ls_ri_diff, 1e-6..=1e9),
             );
             row(
                 ui,
-                "Pure spectrum weight",
+                t("Pure spectrum weight", "Gewicht reines Spektrum"),
                 "LS_PURE_FACTOR",
-                "Weight of the pure spectrum score.",
+                t(
+                    "Weight of the pure spectrum score.",
+                    "Gewicht des Scores des reinen Spektrums.",
+                ),
                 num(&mut d.ls_pure_factor, 0.0..=1e9),
             );
             row(
                 ui,
-                "Impure spectrum weight",
+                t("Impure spectrum weight", "Gewicht unreines Spektrum"),
                 "LS_IMPURE_FACTOR",
-                "Weight of the impure spectrum score.",
+                t(
+                    "Weight of the impure spectrum score.",
+                    "Gewicht des Scores des unreinen Spektrums.",
+                ),
                 num(&mut d.ls_impure_factor, 0.0..=1e9),
             );
             row(
                 ui,
-                "Mass exponent",
+                t("Mass exponent", "Massenexponent"),
                 "LS_SCALE_FACTOR_ION",
-                "Peaks are weighted as mass^a · intensity^b: this is a.",
+                t(
+                    "Peaks are weighted as mass^a · intensity^b: this is a.",
+                    "Peaks werden als Masse^a · Intensität^b gewichtet: dies ist a.",
+                ),
                 num(&mut d.ls_scale_factor_ion, ANY),
             );
             row(
                 ui,
-                "Intensity exponent",
+                t("Intensity exponent", "Intensitätsexponent"),
                 "LS_SCALE_FACTOR_VALUE",
-                "Peaks are weighted as mass^a · intensity^b: this is b.",
+                t(
+                    "Peaks are weighted as mass^a · intensity^b: this is b.",
+                    "Peaks werden als Masse^a · Intensität^b gewichtet: dies ist b.",
+                ),
                 num(&mut d.ls_scale_factor_value, ANY),
             );
             row(
                 ui,
-                "Unmatched peak factor",
+                t("Unmatched peak factor", "Faktor für Peaks ohne Partner"),
                 "LS_SCALE_FACTOR_NO_MATCH",
-                "Factor for peaks without a partner in the other spectrum.",
+                t(
+                    "Factor for peaks without a partner in the other spectrum.",
+                    "Faktor für Peaks ohne Partner im anderen Spektrum.",
+                ),
                 num(&mut d.ls_scale_factor_no_match, ANY),
             );
             let hint = explain(
-                "What the overall score is made of. Combined: spectrum score^(2/3) × RI score^(1/3).",
-                "LS_USE_SPEC and LS_USE_RI",
+                t(
+                    "What the overall score is made of. Combined: spectrum score^(2/3) × RI score^(1/3).",
+                    "Woraus sich der Gesamt-Score zusammensetzt. Kombiniert: Spektrum-Score^(2/3) × RI-Score^(1/3).",
+                ),
+                t("LS_USE_SPEC and LS_USE_RI", "LS_USE_SPEC und LS_USE_RI"),
             );
-            let label = ui.label("Score").on_hover_text(&hint);
+            let label = ui.label(t("Score", "Score")).on_hover_text(&hint);
             let now = (d.ls_use_spec, d.ls_use_ri);
             // An old file can switch both off: then every hit scores 1.
-            let name = (SCORES.iter().find(|m| (m.0, m.1) == now))
-                .map_or("None (every hit scores 1)", |m| m.2);
+            let name = (scores().iter().find(|m| (m.0, m.1) == now)).map_or(
+                t("None (every hit scores 1)", "Keiner (jeder Treffer ergibt 1)"),
+                |m| m.2,
+            );
             egui::ComboBox::from_id_salt("score")
                 .selected_text(name)
                 .show_ui(ui, |ui| {
-                    for (spec, ri, name) in SCORES {
+                    for (spec, ri, name) in scores() {
                         if ui.selectable_label(now == (spec, ri), name).clicked() {
                             (d.ls_use_spec, d.ls_use_ri) = (spec, ri);
                         }
@@ -503,53 +612,68 @@ impl Settings {
             ui.end_row();
             row(
                 ui,
-                "Cutoff score",
+                t("Cutoff score", "Mindest-Score"),
                 "LS_CUTOFF",
-                "A hit below this overall score counts as no match: in the component list, Find substance and the batch.",
+                t(
+                    "A hit below this overall score counts as no match: in the component list, Find substance and the batch.",
+                    "Ein Treffer unter diesem Gesamt-Score gilt als kein Treffer: in der Komponentenliste, bei Substanz finden und im Batch.",
+                ),
                 num(&mut d.ls_cutoff, 0.0..=1.0),
             );
             row(
                 ui,
-                "Number of fragments",
+                t("Number of fragments", "Anzahl Fragmente"),
                 "SQL_MAX_NUMBER_FRAGMENTS",
-                "NIST search: how many of the component's strongest fragments are compared.",
+                t(
+                    "NIST search: how many of the component's strongest fragments are compared.",
+                    "NIST-Suche: wie viele der stärksten Fragmente der Komponente verglichen werden.",
+                ),
                 num(&mut d.sql_max_number_fragments, 1..=100),
             );
             row(
                 ui,
-                "Minimum number of identical frag.",
+                t("Minimum number of identical frag.", "Mindestzahl gleicher Fragmente"),
                 "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS",
-                "NIST search: a library entry is scored only if it shares more than this many of them.",
+                t(
+                    "NIST search: a library entry is scored only if it shares more than this many of them.",
+                    "NIST-Suche: ein Bibliothekseintrag wird nur bewertet, wenn er mehr als so viele davon teilt.",
+                ),
                 num(&mut d.sql_minimal_number_equal_fragments, 0..=100),
             );
         });
         ranges(
             ui,
-            "Ignored masses",
+            t("Ignored masses", "Ignorierte Massen"),
             &explain(
-                "Mass ranges (m/z from–to) ignored in both spectra.",
+                t(
+                    "Mass ranges (m/z from–to) ignored in both spectra.",
+                    "Massenbereiche (m/z von–bis), die in beiden Spektren ignoriert werden.",
+                ),
                 "LS_MASS_FILTER",
             ),
             &mut d.ls_mass_filter,
         );
 
         ui.add_space(8.0);
-        ui.strong("Centroiding");
+        ui.strong(t("Centroiding", "Zentroidierung"));
         egui::Grid::new("centroid").num_columns(2).show(ui, |ui| {
-            let used = "Finds the peaks of a profile spectrum when it is exported as centroids.";
+            let used = t(
+                "Finds the peaks of a profile spectrum when it is exported as centroids.",
+                "Findet die Peaks eines Profilspektrums, wenn es als Zentroide exportiert wird.",
+            );
             for (name, key, v) in [
                 (
-                    "Centroid: peak start",
+                    t("Centroid: peak start", "Zentroid: Peakbeginn"),
                     "SF_CENTROID_THRESHOLD_BEGIN",
                     &mut d.sf_centroid_threshold_begin,
                 ),
                 (
-                    "Centroid: peak end",
+                    t("Centroid: peak end", "Zentroid: Peakende"),
                     "SF_CENTROID_THRESHOLD_END",
                     &mut d.sf_centroid_threshold_end,
                 ),
                 (
-                    "Centroid: baseline deviation",
+                    t("Centroid: baseline deviation", "Zentroid: Basislinienabweichung"),
                     "SF_CENTROID_MAX_BASE_DEV",
                     &mut d.sf_centroid_max_base_dev,
                 ),
@@ -558,33 +682,51 @@ impl Settings {
             }
             row(
                 ui,
-                "Centroid: FWHM share",
+                t("Centroid: FWHM share", "Zentroid: FWHM-Anteil"),
                 "SF_FWHM",
-                "Points at or above this share of a peak's maximum make up its centroid mass, \
-                 in every centroiding (high-resolution CDF import, centroid export, MSL export, TOF calibration).",
+                t(
+                    "Points at or above this share of a peak's maximum make up its centroid mass, \
+                     in every centroiding (high-resolution CDF import, centroid export, MSL export, TOF calibration).",
+                    "Punkte ab diesem Anteil am Maximum eines Peaks bilden seine Zentroidmasse, \
+                     bei jeder Zentroidierung (hochauflösender CDF-Import, Zentroid-Export, MSL-Export, TOF-Kalibrierung).",
+                ),
                 num(&mut d.sf_fwhm, 0.0..=1.0).speed(0.01),
             );
         });
 
         ui.add_space(8.0);
-        egui::CollapsingHeader::new("Stored in the file, not used").show(ui, |ui| {
-            let unused = "Kept in the settings file; this version does not use it.";
+        egui::CollapsingHeader::new(t(
+            "Stored in the file, not used",
+            "In der Datei gespeichert, nicht verwendet",
+        ))
+        .id_salt("Stored in the file, not used")
+        .show(ui, |ui| {
+            let unused = t(
+                "Kept in the settings file; this version does not use it.",
+                "In der Einstellungsdatei behalten; diese Version verwendet es nicht.",
+            );
             // RE of 3.3 (docs/reverse-engineering/algorithms.md §4b.4): only saved and shown there too.
-            let dead = "Kept in the settings file; 3.3 does not use it either.";
+            let dead = t(
+                "Kept in the settings file; 3.3 does not use it either.",
+                "In der Einstellungsdatei behalten; auch 3.3 verwendet es nicht.",
+            );
             egui::Grid::new("stored").num_columns(2).show(ui, |ui| {
                 for (name, key, v) in [
                     (
-                        "Spectrum filter: peak start",
+                        t("Spectrum filter: peak start", "Spektrumfilter: Peakbeginn"),
                         "SF_PEAK_THRESHOLD_BEGIN",
                         &mut d.sf_peak_threshold_begin,
                     ),
                     (
-                        "Spectrum filter: peak end",
+                        t("Spectrum filter: peak end", "Spektrumfilter: Peakende"),
                         "SF_PEAK_THRESHOLD_END",
                         &mut d.sf_peak_threshold_end,
                     ),
                     (
-                        "Spectrum filter: baseline deviation",
+                        t(
+                            "Spectrum filter: baseline deviation",
+                            "Spektrumfilter: Basislinienabweichung",
+                        ),
                         "SF_MAX_BASE_DEV",
                         &mut d.sf_max_base_dev,
                     ),
@@ -593,17 +735,20 @@ impl Settings {
                 }
                 let stored: [(&str, &str, &mut f64); 3] = [
                     (
-                        "Peak baseline deviation",
+                        t("Peak baseline deviation", "Peak-Basislinienabweichung"),
                         "AN_MAX_BASE_DEV",
                         &mut d.an_max_base_dev,
                     ),
                     (
-                        "Quant ion minimum distance",
+                        t(
+                            "Quant ion minimum distance",
+                            "Mindestabstand der Quant-Ionen",
+                        ),
                         "QUANT_MIN_DIST_IONS",
                         &mut d.quant_min_dist_ions,
                     ),
                     (
-                        "Quant quality cutoff",
+                        t("Quant quality cutoff", "Quant-Qualitätsschwelle"),
                         "QUANT_QUALITY_CUTOFF",
                         &mut d.quant_quality_cutoff,
                     ),
@@ -613,21 +758,21 @@ impl Settings {
                 }
                 row(
                     ui,
-                    "Search resolution",
+                    t("Search resolution", "Suchauflösung"),
                     "LS_RESOLUTION",
                     unused,
                     num(&mut d.ls_resolution, -1e9..=1e9),
                 );
                 row(
                     ui,
-                    "Use scaled library",
+                    t("Use scaled library", "Skalierte Bibliothek verwenden"),
                     "LS_USE_SCALED_LIB",
                     dead,
                     egui::Checkbox::without_text(&mut d.ls_use_scaled_lib),
                 );
                 row(
                     ui,
-                    "Quant ions",
+                    t("Quant ions", "Quant-Ionen"),
                     "QUANT_ION_NUMBER",
                     unused,
                     egui::DragValue::new(&mut d.quant_ion_number).range(0..=10_000),
@@ -648,7 +793,7 @@ const ANY: RangeInclusive<f64> = -1e9..=1e9;
 fn explain(hint: &str, key: &str) -> String {
     match key {
         "" => hint.to_owned(),
-        _ => format!("{hint}\nOld key: {key}"),
+        _ => tf!("{hint}\nOld key: {key}", "{hint}\nAlter Schlüssel: {key}"),
     }
 }
 
@@ -663,17 +808,22 @@ pub(crate) fn row(ui: &mut egui::Ui, name: &str, key: &str, hint: &str, field: i
 /// The deconvolution width row: Auto with the scans it gives in the shown run, or a set width.
 fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) {
     let hint = explain(
-        &format!(
+        &tf!(
             "Width in scans of the matched filter over the apex histogram. Auto: {AUTO_WIDTH_S} s at \
              each run's scan rate, at least 1 scan, at most 100 and a tenth of the run (3.3 always used 1). A width from a loaded or \
-             imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one)."
+             imported 3.3 file is a set one; Save writes Auto as the width of the shown run (1 without one).",
+            "Breite in Scans des Matched-Filters über dem Apex-Histogramm. Auto: {AUTO_WIDTH_S} s bei \
+             der Scanrate jedes Laufs, mindestens 1 Scan, höchstens 100 und ein Zehntel des Laufs (3.3 nahm immer 1). Eine Breite \
+             aus einer geladenen oder importierten 3.3-Datei ist fest gesetzt; Speichern schreibt Auto als Breite des gezeigten Laufs (1 ohne Lauf)."
         ),
         "AN_DECONVOLUTION_WIDTH",
     );
-    let label = ui.label("Deconvolution width").on_hover_text(&hint);
+    let label = ui
+        .label(t("Deconvolution width", "Dekonvolutionsbreite"))
+        .on_hover_text(&hint);
     ui.horizontal(|ui| {
         let mut auto = width.is_none();
-        let check = ui.checkbox(&mut auto, "Auto");
+        let check = ui.checkbox(&mut auto, t("Auto", "Auto"));
         if check.labelled_by(label.id).on_hover_text(&hint).changed() {
             // A set width starts from the automatic one.
             *width = (!auto).then(|| auto_width(times.unwrap_or_default()));
@@ -681,8 +831,15 @@ fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) 
         match width {
             Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),
             None => match times {
-                Some(t) => ui.label(format!("{} scans in the shown run", auto_width(t))),
-                None => ui.weak(format!("{AUTO_WIDTH_S} s of each run")),
+                Some(s) => ui.label(tf!(
+                    "{} scans in the shown run",
+                    "{} Scans im gezeigten Lauf",
+                    auto_width(s)
+                )),
+                None => ui.weak(tf!(
+                    "{AUTO_WIDTH_S} s of each run",
+                    "{AUTO_WIDTH_S} s jedes Laufs"
+                )),
             },
         }
         .on_hover_text(&hint);
@@ -702,7 +859,11 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
     ui.add_space(4.0);
     let list_name = ui.horizontal(|ui| {
         let list_name = ui.label(name).on_hover_text(hint);
-        if ui.small_button("+").on_hover_text("Add a range").clicked() {
+        if ui
+            .small_button("+")
+            .on_hover_text(t("Add a range", "Einen Bereich hinzufügen"))
+            .clicked()
+        {
             list.push((0.0, 0.0));
         }
         list_name.id
@@ -711,7 +872,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
     let mut remove = None;
     for (i, (lo, hi)) in list.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            let from = ui.label("from");
+            let from = ui.label(t("from", "von"));
             ui.add(
                 egui::DragValue::new(lo)
                     .range(0.0..=100_000.0)
@@ -720,7 +881,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             .labelled_by(list_name)
             .labelled_by(from.id)
             .on_hover_text(hint);
-            let to = ui.label("to");
+            let to = ui.label(t("to", "bis"));
             ui.add(
                 egui::DragValue::new(hi)
                     .range(0.0..=100_000.0)
@@ -731,7 +892,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             .on_hover_text(hint);
             if ui
                 .small_button("×")
-                .on_hover_text("Remove this range")
+                .on_hover_text(t("Remove this range", "Diesen Bereich entfernen"))
                 .clicked()
             {
                 remove = Some(i);

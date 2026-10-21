@@ -133,8 +133,9 @@ from grouping, not from size jumps.
 **The No Tofu Rule.** Every non-ASCII symbol in a UI string must have a glyph in the bundled fonts;
 `every_ui_symbol_has_a_glyph` in `ui_tests.rs` enforces it.
 
-**The Translatable Label Rule.** Labels are whole, short English phrases; a German translation is
-planned, so no sentence is assembled from fragments.
+**The Translatable Label Rule.** Labels are whole, short phrases written as an English/German pair
+(`lang::t`, `lang::tf!`); no sentence is assembled from fragments. `every_ui_text_is_translated` and
+`no_control_covers_another_in_german` enforce it. A window whose title is translated keeps an English id.
 
 ## Layout
 

@@ -1,5 +1,6 @@
 //! Natural isotope calculator window: formula in, M+0, M+1, … out.
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::isotope::{IsotopeTable, parse_formula};
@@ -26,7 +27,8 @@ impl Default for Isotopes {
 impl Isotopes {
     pub fn window(&mut self, ctx: &egui::Context) {
         let mut open = self.open;
-        egui::Window::new("Natural isotopes")
+        egui::Window::new(t("Natural isotopes", "Natürliche Isotope"))
+            .id(egui::Id::unique("Natural isotopes"))
             .tool_window(ctx, 5, [340.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui));
@@ -35,32 +37,43 @@ impl Isotopes {
 
     fn contents(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let label = ui.label("Formula");
+            let label = ui.label(t("Formula", "Summenformel"));
             ui.text_edit_singleline(&mut self.formula)
                 .labelled_by(label.id)
-                .on_hover_text(
+                .on_hover_text(t(
                     "Molecular formula, e.g. C6H12O6 or C3H9NSi (element symbols with counts)",
-                );
-            let label = ui.label("Ions");
+                    "Summenformel, z. B. C6H12O6 oder C3H9NSi (Elementsymbole mit Anzahl)",
+                ));
+            let label = ui.label(t("Ions", "Ionen"));
             ui.add(egui::DragValue::new(&mut self.len).range(1..=50))
                 .labelled_by(label.id)
-                .on_hover_text("How many ions are shown: M+0 up to M+(n−1)");
+                .on_hover_text(t(
+                    "How many ions are shown: M+0 up to M+(n−1)",
+                    "Wie viele Ionen angezeigt werden: M+0 bis M+(n−1)",
+                ));
         });
         match parse_formula(self.formula.trim()).and_then(|f| self.table.pattern(&f, self.len)) {
             Err(e) => {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             Ok(p) => {
-                ui.label(format!(
+                ui.label(tf!(
                     "Nominal mass {}, exact mass {:.4}",
-                    p.nominal_mass, p.monoisotopic_mass
+                    "Nominale Masse {}, exakte Masse {:.4}",
+                    p.nominal_mass,
+                    p.monoisotopic_mass
                 ));
                 egui::Grid::new("isotope pattern")
                     .striped(true)
                     .show(ui, |ui| {
-                        for (i, h) in ["Ion", "m/z", "Abundance (%)", "Relative to largest (%)"]
-                            .into_iter()
-                            .enumerate()
+                        for (i, h) in [
+                            t("Ion", "Ion"),
+                            "m/z",
+                            t("Abundance (%)", "Häufigkeit (%)"),
+                            t("Relative to largest (%)", "Relativ zum größten (%)"),
+                        ]
+                        .into_iter()
+                        .enumerate()
                         {
                             // Numbers are right-aligned, so their headers are too.
                             match i {

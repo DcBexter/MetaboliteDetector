@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::deconv::Component;
@@ -194,7 +195,7 @@ impl Calibration {
     /// once it is valid, see `apply_edits`.
     fn add_point(&mut self) {
         if self.rows.is_empty() {
-            self.source = "entered by hand".into();
+            self.source = t("entered by hand", "von Hand eingegeben").into();
         }
         self.rows.push(Row {
             name: String::new(),
@@ -222,7 +223,10 @@ impl Calibration {
                 applied: std::mem::take(&mut self.applied),
                 error: self.error.take(),
             };
-            self.set(RiCalibration::identity(), "retention time only".into());
+            self.set(
+                RiCalibration::identity(),
+                t("retention time only", "nur Retentionszeit").into(),
+            );
             self.saved = Some(saved);
         } else if let Some(s) = self.saved.take() {
             (self.cal, self.source, self.rows) = (s.cal, s.source, s.rows);
@@ -238,7 +242,8 @@ impl Calibration {
         lib: Option<&Library>,
     ) {
         if let Some((source, rx)) = &self.job
-            && let Some(result) = crate::poll_job(rx, "RI calibration").map(|r| r.and_then(|x| x))
+            && let Some(result) = crate::poll_job(rx, t("RI calibration", "RI-Kalibrierung"))
+                .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(cal) => self.set(cal, source.clone()),
@@ -247,7 +252,8 @@ impl Calibration {
             self.job = None;
         }
         if let Some((source, rx)) = &self.mix_job
-            && let Some(result) = crate::poll_job(rx, "calibration mix").map(|r| r.and_then(|x| x))
+            && let Some(result) = crate::poll_job(rx, t("calibration mix", "Kalibriermischung"))
+                .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(rows) => self.set_rows(rows, source.clone()),
@@ -256,7 +262,8 @@ impl Calibration {
             self.mix_job = None;
         }
         let mut open = self.open;
-        egui::Window::new("RI calibration")
+        egui::Window::new(t("RI calibration", "RI-Kalibrierung"))
+            .id(egui::Id::unique("RI calibration"))
             .tool_window(ctx, 1, [380.0, 420.0])
             .open(&mut open)
             .show(ctx, |ui| {
@@ -282,66 +289,94 @@ impl Calibration {
         let was = self.rt_only;
         ui.checkbox(
             &mut self.rt_only,
-            "Use retention time for alignment (not recommended)",
+            t(
+                "Use retention time for alignment (not recommended)",
+                "Retentionszeit zum Abgleich verwenden (nicht empfohlen)",
+            ),
         )
-        .on_hover_text(
+        .on_hover_text(t(
             "Only if you have no n-alkane mix. Alignment and identification by retention time \
              are not reproducible and the results cannot be compared between instruments and labs.",
-        );
+            "Nur ohne n-Alkan-Mischung. Abgleich und Identifizierung über die Retentionszeit sind \
+             nicht reproduzierbar, und die Ergebnisse lassen sich nicht zwischen Geräten und Laboren vergleichen.",
+        ));
         if self.rt_only != was {
             self.set_rt_only(self.rt_only);
         }
         if self.rt_only {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                "Retention times are compared directly. Library entries need a retention time; \
-                 components get no retention index.",
+                t(
+                    "Retention times are compared directly. Library entries need a retention time; \
+                     components get no retention index.",
+                    "Retentionszeiten werden direkt verglichen. Bibliothekseinträge brauchen eine \
+                     Retentionszeit; Komponenten erhalten keinen Retentionsindex.",
+                ),
             );
             return;
         }
         egui::Grid::new("alkane settings").show(ui, |ui| {
-            let label = ui.label("Marker ion m/z");
+            let label = ui.label(t("Marker ion m/z", "Marker-Ion m/z"));
             ui.add(egui::DragValue::new(&mut self.mz).range(1.0..=2000.0))
                 .labelled_by(label.id)
-                .on_hover_text("The ion whose peaks mark the alkanes, e.g. 57 for n-alkanes");
+                .on_hover_text(t(
+                    "The ion whose peaks mark the alkanes, e.g. 57 for n-alkanes",
+                    "Das Ion, dessen Peaks die Alkane markieren, z. B. 57 für n-Alkane",
+                ));
             ui.end_row();
-            let label = ui.label("Alkanes C");
+            let label = ui.label(t("Alkanes C", "Alkane C"));
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut self.first).range(1..=self.last))
                     .labelled_by(label.id)
-                    .on_hover_text("Carbon number of the first alkane in the mix");
-                let to = ui.label("to C");
+                    .on_hover_text(t(
+                        "Carbon number of the first alkane in the mix",
+                        "Kohlenstoffzahl des ersten Alkans der Mischung",
+                    ));
+                let to = ui.label(t("to C", "bis C"));
                 ui.add(egui::DragValue::new(&mut self.last).range(self.first..=100))
                     .labelled_by(to.id)
-                    .on_hover_text("Carbon number of the last alkane in the mix");
+                    .on_hover_text(t(
+                        "Carbon number of the last alkane in the mix",
+                        "Kohlenstoffzahl des letzten Alkans der Mischung",
+                    ));
             });
             ui.end_row();
         });
         // The matched detector's settings for the marker peaks.
         crate::guided::advanced(ui, "alkane filter", |ui| {
             egui::Grid::new("alkane filter").show(ui, |ui| {
-            let label = ui.label("Filter width (scans)");
+            let label = ui.label(t("Filter width (scans)", "Filterbreite (Scans)"));
             ui.add(egui::DragValue::new(&mut self.density).range(1..=1000))
                 .labelled_by(label.id)
-                .on_hover_text(
+                .on_hover_text(t(
                     "Peak width the filter is tuned to (sigma about width / 4 scans); match it to the alkane peaks",
-                );
+                    "Peakbreite, auf die der Filter abgestimmt ist (Sigma etwa Breite / 4 Scans); an die Alkan-Peaks anpassen",
+                ));
             ui.end_row();
-            let label = ui.label("Threshold");
+            let label = ui.label(t("Threshold", "Schwelle"));
             ui.add(egui::DragValue::new(&mut self.threshold).range(0..=i32::MAX))
                 .labelled_by(label.id)
-                .on_hover_text("Peaks are kept where the filtered marker-ion trace rises above this value (not the raw intensity)");
+                .on_hover_text(t(
+                    "Peaks are kept where the filtered marker-ion trace rises above this value (not the raw intensity)",
+                    "Peaks bleiben, wo die gefilterte Marker-Ion-Spur diesen Wert übersteigt (nicht die Rohintensität)",
+                ));
             ui.end_row();
             });
         });
         ui.horizontal(|ui| {
             if run.is_none() {
-                ui.weak("Open a run to find the alkanes in it.");
+                ui.weak(t(
+                    "Open a run to find the alkanes in it.",
+                    "Einen Lauf öffnen, um die Alkane darin zu finden.",
+                ));
             }
             if let Some(run) = run
                 && ui
-                    .add_enabled(self.job.is_none(), egui::Button::new(format!("Find alkanes in {}", run.name)))
-                    .on_hover_text("The highest peaks of the marker ion, in time order, become C first … C last")
+                    .add_enabled(self.job.is_none(), egui::Button::new(tf!("Find alkanes in {}", "Alkane in {} finden", run.name)))
+                    .on_hover_text(t(
+                        "The highest peaks of the marker ion, in time order, become C first … C last",
+                        "Die höchsten Peaks des Marker-Ions werden in zeitlicher Reihenfolge zu C erstes … C letztes",
+                    ))
                     .clicked()
             {
                 let (data, mz, density, threshold) = (run.data.clone(), self.mz, self.density, self.threshold);
@@ -356,7 +391,7 @@ impl Calibration {
             if self.job.is_some() {
                 ui.spinner();
             }
-            if ui.button("Load .calib…").clicked()
+            if ui.button(t("Load .calib…", ".calib laden…")).clicked()
                 && let Some(path) = calib_dialog().pick_file()
             {
                 match RiCalibration::read_calib(&path) {
@@ -365,13 +400,13 @@ impl Calibration {
                 }
             }
             if let Some(cal) = &self.cal {
-                if ui.button("Save .calib…").clicked()
+                if ui.button(t("Save .calib…", ".calib speichern…")).clicked()
                     && let Some(path) = calib_dialog().save_file()
                     && let Err(e) = std::fs::write(&path, cal.to_calib())
                 {
                     self.error = Some(format!("{}: {e}", path.display()));
                 }
-                if ui.button("Clear").clicked() {
+                if ui.button(t("Clear", "Leeren")).clicked() {
                     self.clear();
                 }
             }
@@ -384,17 +419,26 @@ impl Calibration {
         let Some(lib) = lib.filter(|_| !self.rt_only) else {
             return;
         };
-        ui.collapsing("Calibration mix from the library", |ui| {
+        egui::CollapsingHeader::new(t(
+            "Calibration mix from the library",
+            "Kalibriermischung aus der Bibliothek",
+        ))
+        .id_salt("Calibration mix from the library")
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let add = ui.label("Add");
+                let add = ui.label(t("Add", "Hinzufügen"));
                 ui.text_edit_singleline(&mut self.mix_filter)
                     .labelled_by(add.id)
-                    .on_hover_text(
+                    .on_hover_text(t(
                         "Part of a library compound name; only compounds with an RI are offered",
-                    );
+                        "Teil eines Substanznamens der Bibliothek; nur Substanzen mit RI werden angeboten",
+                    ));
             });
             if self.mix.is_empty() && self.mix_filter.is_empty() {
-                ui.weak("Type a name to pick the substances of your calibration mix.");
+                ui.weak(t(
+                    "Type a name to pick the substances of your calibration mix.",
+                    "Einen Namen eingeben, um die Substanzen Ihrer Kalibriermischung zu wählen.",
+                ));
             }
             let filter = self.mix_filter.to_lowercase();
             if !filter.is_empty() {
@@ -424,14 +468,16 @@ impl Calibration {
             let Some(run) = run else {
                 return;
             };
-            let button = egui::Button::new(format!("Find the mix in {}", run.name));
+            let button = egui::Button::new(tf!("Find the mix in {}", "Mischung in {} finden", run.name));
             let searching = self.mix_job.is_some();
             if ui
                 .add_enabled(!self.mix.is_empty() && !searching, button)
-                .on_hover_text(
+                .on_hover_text(t(
                     "Going through the mix by RI, each substance takes the next component in time \
                      order that the library search finds for it",
-                )
+                    "Die Mischung wird nach RI durchgegangen; jede Substanz erhält die nächste Komponente \
+                     in zeitlicher Reihenfolge, die die Bibliothekssuche für sie findet",
+                ))
                 .clicked()
             {
                 let mix = (lib.compounds.iter())
@@ -443,7 +489,12 @@ impl Calibration {
                     run.data.clone(),
                     lib.settings.clone(),
                 );
-                let source = format!("{}, {} mix substances", run.name, self.mix.len());
+                let source = tf!(
+                    "{}, {} mix substances",
+                    "{}, {} Substanzen der Mischung",
+                    run.name,
+                    self.mix.len()
+                );
                 let job = spawn(ui.ctx(), move || {
                     Ok(find_mix(mix, &comps, &data.scan_times_s, &s))
                 });
@@ -452,7 +503,7 @@ impl Calibration {
             if searching {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Searching the mix…");
+                    ui.label(t("Searching the mix…", "Mischung wird gesucht…"));
                 });
             }
         });
@@ -464,14 +515,16 @@ impl Calibration {
             return;
         }
         if self.rows.is_empty() {
-            ui.label(
+            ui.label(t(
                 "Not calibrated: components have no RI, the library search uses the spectrum only.",
-            );
+                "Nicht kalibriert: Komponenten haben keinen RI, die Bibliothekssuche nutzt nur das Spektrum.",
+            ));
             self.add_point_button(ui);
             return;
         }
-        ui.label(format!(
+        ui.label(tf!(
             "{} of {} points from {}",
+            "{} von {} Punkten aus {}",
             self.cal.as_ref().map_or(0, |c| c.points().len()),
             self.rows.len(),
             self.source
@@ -483,15 +536,18 @@ impl Calibration {
                 egui::Grid::new("calibration points")
                     .striped(true)
                     .show(ui, |ui| {
-                        let use_ = ui.strong("Use");
-                        ui.strong("Substance");
-                        let rt = ui.strong("RT (min)");
+                        let use_ = ui.strong(t("Use", "Verwenden"));
+                        ui.strong(t("Substance", "Substanz"));
+                        let rt = ui.strong(t("RT (min)", "RT (min)"));
                         let ri = ui.strong("RI");
                         ui.end_row();
                         for r in &mut self.rows {
                             ui.checkbox(&mut r.used, "")
                                 .labelled_by(use_.id)
-                                .on_hover_text("Use this point for the calibration");
+                                .on_hover_text(t(
+                                    "Use this point for the calibration",
+                                    "Diesen Punkt für die Kalibrierung verwenden",
+                                ));
                             // A mix substance that was not found has no time yet: red until it gets one.
                             let name = egui::RichText::new(&r.name);
                             let found = r.used || r.rt_min > 0.0;
@@ -501,23 +557,30 @@ impl Calibration {
                             };
                             let label = ui.label(text);
                             if !found {
-                                label.on_hover_text(
+                                label.on_hover_text(t(
                                     "Not found in the run: enter its time or leave it unused",
-                                );
+                                    "Im Lauf nicht gefunden: Zeit eingeben oder ungenutzt lassen",
+                                ));
                             }
-                            let t = egui::DragValue::new(&mut r.rt_min)
+                            let time = egui::DragValue::new(&mut r.rt_min)
                                 .speed(0.001)
                                 .range(0.0..=f64::MAX)
                                 .fixed_decimals(3);
-                            let t = ui
-                                .add(t)
+                            let time = ui
+                                .add(time)
                                 .labelled_by(rt.id)
-                                .on_hover_text("Retention time of the substance in this run, in minutes");
+                                .on_hover_text(t(
+                                    "Retention time of the substance in this run, in minutes",
+                                    "Retentionszeit der Substanz in diesem Lauf, in Minuten",
+                                ));
                             let n = ui
                                 .add(egui::DragValue::new(&mut r.ri).fixed_decimals(1))
                                 .labelled_by(ri.id)
-                                .on_hover_text("Retention index of the substance (100 per carbon for n-alkanes)");
-                            busy |= [t, n].iter().any(|x| x.dragged() || x.has_focus());
+                                .on_hover_text(t(
+                                    "Retention index of the substance (100 per carbon for n-alkanes)",
+                                    "Retentionsindex der Substanz (100 je Kohlenstoff bei n-Alkanen)",
+                                ));
+                            busy |= [time, n].iter().any(|x| x.dragged() || x.has_focus());
                             ui.end_row();
                         }
                     });
@@ -530,11 +593,13 @@ impl Calibration {
 
     fn add_point_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button("Add point")
-            .on_hover_text(
+            .button(t("Add point", "Punkt hinzufügen"))
+            .on_hover_text(t(
                 "A new line for a marker you know (e.g. FAMEs): its time in this run and its RI. \
                  At least two points with rising times and RIs make a calibration.",
-            )
+                "Eine neue Zeile für einen bekannten Marker (z. B. FAMEs): seine Zeit in diesem Lauf \
+                 und sein RI. Mindestens zwei Punkte mit steigenden Zeiten und RIs ergeben eine Kalibrierung.",
+            ))
             .clicked()
         {
             self.add_point();
@@ -547,7 +612,7 @@ impl Calibration {
             return;
         }
         ui.separator();
-        ui.strong("Calibration per run");
+        ui.strong(t("Calibration per run", "Kalibrierung je Lauf"));
         egui::Grid::new("run calibrations")
             .striped(true)
             .show(ui, |ui| {
@@ -555,20 +620,24 @@ impl Calibration {
                     ui.label(&run.name);
                     let own = self.own.get(&run.path).cloned();
                     ui.label(match &own {
-                        Some(c) => format!("own, {} points", c.points().len()),
-                        None => "table above".into(),
+                        Some(c) => tf!("own, {} points", "eigene, {} Punkte", c.points().len()),
+                        None => t("table above", "Tabelle oben").into(),
                     });
                     ui.horizontal(|ui| {
                         if let Some(cal) = &self.cal
-                            && ui.small_button("Use table").clicked()
+                            && ui
+                                .small_button(t("Use table", "Tabelle verwenden"))
+                                .clicked()
                         {
                             self.own.insert(run.path.clone(), cal.clone());
                         }
-                        if own.is_some() && ui.small_button("Reset").clicked() {
+                        if own.is_some() && ui.small_button(t("Reset", "Zurücksetzen")).clicked() {
                             self.own.remove(&run.path);
                         }
                         if let Some(cal) = own.as_ref().or(self.cal.as_ref())
-                            && ui.small_button("Save .calib…").clicked()
+                            && ui
+                                .small_button(t("Save .calib…", ".calib speichern…"))
+                                .clicked()
                             && let Some(path) = calib_dialog()
                                 .set_file_name(format!("{}.calib", run.name))
                                 .save_file()
@@ -589,17 +658,20 @@ impl Calibration {
         }
         ui.separator();
         let Some(lib) = lib else {
-            ui.label("Open a library to correct RT shifts with a reference substance.");
+            ui.label(t(
+                "Open a library to correct RT shifts with a reference substance.",
+                "Eine Bibliothek öffnen, um RT-Verschiebungen mit einer Referenzsubstanz zu korrigieren.",
+            ));
             return;
         };
         let rt_only = self.rt_only;
         ui.horizontal(|ui| {
-            let reference = ui.label("Reference substance");
-            let shown = self.reference.as_deref().unwrap_or("None");
+            let reference = ui.label(t("Reference substance", "Referenzsubstanz"));
+            let shown = self.reference.as_deref().unwrap_or(t("None", "Keine"));
             egui::ComboBox::from_id_salt("reference")
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.reference, None, "None");
+                    ui.selectable_value(&mut self.reference, None, t("None", "Keine"));
                     // Only compounds with a library RI (a time in RT-only mode) can anchor the shift.
                     for c in lib.compounds.iter().filter(|c| anchor(rt_only, c) >= 0.0) {
                         let label = format!("{} ({:.1})", c.name, anchor(rt_only, c));
@@ -608,8 +680,11 @@ impl Calibration {
                 })
             .response
             .labelled_by(reference.id)
-            .on_hover_text("A substance found in every run; its position there corrects the retention-time shift of the run");
-            let label = ui.label("Cutoff");
+            .on_hover_text(t(
+                "A substance found in every run; its position there corrects the retention-time shift of the run",
+                "Eine Substanz, die in jedem Lauf gefunden wird; ihre Lage dort korrigiert die Retentionszeit-Verschiebung des Laufs",
+            ));
+            let label = ui.label(t("Cutoff", "Grenzwert"));
             let edit = ui
                 .add(
                     egui::DragValue::new(&mut self.cutoff_edit)
@@ -617,9 +692,10 @@ impl Calibration {
                         .speed(0.01),
                 )
                 .labelled_by(label.id)
-                .on_hover_text(
+                .on_hover_text(t(
                     "Lowest match score (0–1) at which the reference counts as found in a run",
-                );
+                    "Niedrigster Treffer-Score (0–1), ab dem die Referenz in einem Lauf als gefunden gilt",
+                ));
             if !edit.dragged() {
                 self.ref_cutoff = self.cutoff_edit;
             }
@@ -628,15 +704,19 @@ impl Calibration {
             return;
         }
         egui::Grid::new("shifts").striped(true).show(ui, |ui| {
-            ui.strong("Run");
-            ui.strong("RT shift (s)");
+            ui.strong(t("Run", "Lauf"));
+            ui.strong(t("RT shift (s)", "RT-Verschiebung (s)"));
             ui.end_row();
             for run in runs {
                 ui.label(&run.name);
                 let shift = match (&run.ident, &run.ident_job) {
-                    (_, Some(_)) | (None, None) => "searching…".into(),
+                    (_, Some(_)) | (None, None) => t("searching…", "wird gesucht…").into(),
                     (Some((_, _, Some(c))), None) => format!("{:+.2}", c.shift_s),
-                    (Some(_), None) => "reference not found, unshifted".into(),
+                    (Some(_), None) => t(
+                        "reference not found, unshifted",
+                        "Referenz nicht gefunden, unverschoben",
+                    )
+                    .into(),
                 };
                 ui.label(shift);
                 ui.end_row();
@@ -690,7 +770,7 @@ fn anchor(rt_only: bool, c: &LibraryCompound) -> f64 {
 }
 
 fn calib_dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new().add_filter("RI calibration", &["calib"])
+    rfd::FileDialog::new().add_filter(t("RI calibration", "RI-Kalibrierung"), &["calib"])
 }
 
 #[cfg(test)]

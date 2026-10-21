@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::lang::{self, tf};
 use crate::layout::ToolWindow;
 use crate::settings::row;
 use eframe::egui;
@@ -269,14 +270,29 @@ fn samples_row(
     paths: &[PathBuf],
     note: &mut String,
 ) {
-    let hint = "Load a CSV, TSV or semicolon table with a column of run file names and a column \
-                with the replicate group (e.g. samples.txt: CDF_FILE, TIME_POINT). It wins over \
-                the pattern for the runs it names; other runs keep the pattern's group.";
-    ui.label("Replicate groups from table").on_hover_text(hint);
+    let hint = lang::t(
+        "Load a CSV, TSV or semicolon table with a column of run file names and a column \
+         with the replicate group (e.g. samples.txt: CDF_FILE, TIME_POINT). It wins over \
+         the pattern for the runs it names; other runs keep the pattern's group.",
+        "Eine CSV-, TSV- oder Semikolon-Tabelle mit einer Spalte der Lauf-Dateinamen und einer \
+         Spalte der Replikatgruppe laden (z. B. samples.txt: CDF_FILE, TIME_POINT). Sie hat Vorrang \
+         vor dem Muster für die Läufe, die sie nennt; andere Läufe behalten die Gruppe des Musters.",
+    );
+    ui.label(lang::t(
+        "Replicate groups from table",
+        "Replikatgruppen aus Tabelle",
+    ))
+    .on_hover_text(hint);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Table…").on_hover_text(hint).clicked()
+        if ui
+            .button(lang::t("Table…", "Tabelle…"))
+            .on_hover_text(hint)
+            .clicked()
             && let Some(p) = rfd::FileDialog::new()
-                .add_filter("Sample table", &["txt", "tsv", "csv"])
+                .add_filter(
+                    lang::t("Sample table", "Probentabelle"),
+                    &["txt", "tsv", "csv"],
+                )
                 .pick_file()
         {
             match std::fs::read_to_string(&p)
@@ -303,17 +319,25 @@ fn samples_row(
         let cols = [
             (
                 "File column",
-                "Column with the run file names.",
+                lang::t("File column", "Dateispalte"),
+                lang::t(
+                    "Column with the run file names.",
+                    "Spalte mit den Lauf-Dateinamen.",
+                ),
                 &mut s.file,
             ),
             (
                 "Group column",
-                "Column with the replicate group.",
+                lang::t("Group column", "Gruppenspalte"),
+                lang::t(
+                    "Column with the replicate group.",
+                    "Spalte mit der Replikatgruppe.",
+                ),
                 &mut s.group,
             ),
         ];
-        for (label, hover, col) in cols {
-            egui::ComboBox::from_label(label)
+        for (id, label, hover, col) in cols {
+            egui::ComboBox::new(id, label)
                 .selected_text(&s.table.columns[*col])
                 .show_ui(ui, |ui| {
                     for (i, c) in s.table.columns.iter().enumerate() {
@@ -334,12 +358,19 @@ fn samples_row(
                 let found = (paths.iter())
                     .filter(|p| groups.contains_key(&run_key(&p.to_string_lossy())))
                     .count();
-                ui.label(format!("{found} of {} runs in the table", paths.len()));
+                let n = paths.len();
+                ui.label(tf!(
+                    "{found} of {n} runs in the table",
+                    "{found} von {n} Läufen in der Tabelle"
+                ));
             }
         }
         if ui
-            .button("Remove")
-            .on_hover_text("Forget the table; the groups come from the pattern again.")
+            .button(lang::t("Remove", "Entfernen"))
+            .on_hover_text(lang::t(
+                "Forget the table; the groups come from the pattern again.",
+                "Die Tabelle verwerfen; die Gruppen kommen wieder aus dem Muster.",
+            ))
             .clicked()
         {
             (*samples, *groups) = (None, SampleGroups::new());
@@ -353,9 +384,9 @@ fn samples_row(
 fn hint_text(from_table: Option<&String>, has_pattern: bool, has_table: bool) -> &str {
     match (from_table, has_pattern, has_table) {
         (Some(g), ..) => g,
-        (None, true, _) => "pattern",
-        (None, false, true) => "own group",
-        (None, false, false) => "all runs",
+        (None, true, _) => lang::t("pattern", "Muster"),
+        (None, false, true) => lang::t("own group", "eigene Gruppe"),
+        (None, false, false) => lang::t("all runs", "alle Läufe"),
     }
 }
 
@@ -368,64 +399,79 @@ fn manual_groups_row(
     has_pattern: bool,
     paths: &[PathBuf],
 ) {
-    let hint = "Set the replicate group of single runs by hand. It wins over the table and the \
-                pattern; an empty field leaves the run to them.";
-    ui.label("Group per run").on_hover_text(hint);
-    egui::CollapsingHeader::new(format!(
-        "{} of {} runs set",
-        paths
-            .iter()
-            .filter(|p| manual.contains_key(&path_key(p)))
-            .count(),
-        paths.len()
-    ))
-    .id_salt("manual groups")
-    .show(ui, |ui| {
-        if ui
-            .add_enabled(!manual.is_empty(), egui::Button::new("Clear all"))
-            .clicked()
-        {
-            manual.clear();
-        }
-        let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
-        egui::ScrollArea::vertical()
-            .id_salt("manual groups list")
-            .max_height(200.0)
-            .show_rows(ui, height, paths.len(), |ui, rows| {
-                for path in &paths[rows] {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    let key = path_key(path);
-                    let mut text = manual.get(&key).cloned().unwrap_or_default();
-                    ui.horizontal(|ui| {
-                        let label = ui.label(name.as_ref());
-                        let edit = egui::TextEdit::singleline(&mut text)
-                            .desired_width(100.0)
-                            .hint_text(hint_text(
-                                table.get(&run_key(&name)),
-                                has_pattern,
-                                !table.is_empty(),
-                            ));
-                        if ui.add(edit).labelled_by(label.id).changed() {
-                            if text.trim().is_empty() {
-                                manual.remove(&key);
-                            } else {
-                                manual.insert(key, text);
+    let hint = lang::t(
+        "Set the replicate group of single runs by hand. It wins over the table and the \
+         pattern; an empty field leaves the run to them.",
+        "Die Replikatgruppe einzelner Läufe von Hand setzen. Sie hat Vorrang vor Tabelle und \
+         Muster; ein leeres Feld überlässt den Lauf ihnen.",
+    );
+    ui.label(lang::t("Group per run", "Gruppe pro Lauf"))
+        .on_hover_text(hint);
+    let set = (paths.iter())
+        .filter(|p| manual.contains_key(&path_key(p)))
+        .count();
+    let n = paths.len();
+    egui::CollapsingHeader::new(tf!("{set} of {n} runs set", "{set} von {n} Läufen gesetzt"))
+        .id_salt("manual groups")
+        .show(ui, |ui| {
+            if ui
+                .add_enabled(
+                    !manual.is_empty(),
+                    egui::Button::new(lang::t("Clear all", "Alle leeren")),
+                )
+                .clicked()
+            {
+                manual.clear();
+            }
+            let height = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+            egui::ScrollArea::vertical()
+                .id_salt("manual groups list")
+                .max_height(200.0)
+                .show_rows(ui, height, paths.len(), |ui, rows| {
+                    for path in &paths[rows] {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        let key = path_key(path);
+                        let mut text = manual.get(&key).cloned().unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            let label = ui.label(name.as_ref());
+                            let edit = egui::TextEdit::singleline(&mut text)
+                                .desired_width(100.0)
+                                .hint_text(hint_text(
+                                    table.get(&run_key(&name)),
+                                    has_pattern,
+                                    !table.is_empty(),
+                                ));
+                            if ui.add(edit).labelled_by(label.id).changed() {
+                                if text.trim().is_empty() {
+                                    manual.remove(&key);
+                                } else {
+                                    manual.insert(key, text);
+                                }
                             }
-                        }
-                    });
-                }
-            });
-    });
+                        });
+                    }
+                });
+        });
     ui.end_row();
 }
 
 /// "Save components as .cmp": off, next to each run, or into a chosen folder.
 fn save_cmp_row(ui: &mut egui::Ui, target: &mut Option<md_core::batch::CmpTarget>) {
     use md_core::batch::CmpTarget;
-    let hint = "Also save the components of each run as run.cmp, with the RI of the search, \
-                like the old Compound Detection Wizard. Saved runs load in \"Results of the \
-                active run\" and scan faster as batch input. Applies to the next scan.";
-    let name = ui.label("Save components as .cmp").on_hover_text(hint);
+    let hint = lang::t(
+        "Also save the components of each run as run.cmp, with the RI of the search, \
+         like the old Compound Detection Wizard. Saved runs load in \"Results of the \
+         active run\" and scan faster as batch input. Applies to the next scan.",
+        "Die Komponenten jedes Laufs zusätzlich als run.cmp speichern, mit dem RI der Suche, \
+         wie der alte Compound Detection Wizard. Gespeicherte Läufe laden in „Ergebnisse des \
+         aktiven Laufs“ und werden als Batch-Eingabe schneller durchsucht. Gilt ab dem nächsten Scan.",
+    );
+    let name = ui
+        .label(lang::t(
+            "Save components as .cmp",
+            "Komponenten als .cmp speichern",
+        ))
+        .on_hover_text(hint);
     ui.horizontal(|ui| {
         let mut on = target.is_some();
         if ui
@@ -438,15 +484,19 @@ fn save_cmp_row(ui: &mut egui::Ui, target: &mut Option<md_core::batch::CmpTarget
         }
         let Some(t) = target else { return };
         ui.label(match t {
-            CmpTarget::BesideRun => "next to each run".into(),
+            CmpTarget::BesideRun => lang::t("next to each run", "neben jedem Lauf").into(),
             CmpTarget::Dir(d) => d.display().to_string(),
         });
-        if ui.button("Folder…").clicked()
+        if ui.button(lang::t("Folder…", "Ordner…")).clicked()
             && let Some(d) = rfd::FileDialog::new().pick_folder()
         {
             *t = CmpTarget::Dir(d);
         }
-        if matches!(t, CmpTarget::Dir(_)) && ui.button("Next to runs").clicked() {
+        if matches!(t, CmpTarget::Dir(_))
+            && ui
+                .button(lang::t("Next to runs", "Neben die Läufe"))
+                .clicked()
+        {
             *t = CmpTarget::BesideRun;
         }
     });
@@ -532,7 +582,8 @@ impl Batch {
         let mut open = self.open;
         // As tall as the room below its spot (`tool_window` caps it), so the result table gets the
         // room the settings leave.
-        egui::Window::new("Batch quantification")
+        egui::Window::new(lang::t("Batch quantification", "Batch-Quantifizierung"))
+            .id(egui::Id::unique("Batch quantification"))
             .tool_window(ctx, 2, [900.0, 2000.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui, lib, cal, reference));
@@ -541,7 +592,7 @@ impl Batch {
 
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.frag_job
-            && let Some(r) = crate::poll_job(rx, "MID export")
+            && let Some(r) = crate::poll_job(rx, lang::t("MID export", "MID-Export"))
         {
             (self.note, self.frag_job) = (r.unwrap_or_else(|e| e), None);
         }
@@ -560,13 +611,15 @@ impl Batch {
                 });
                 (self.table, self.note) = (None, String::new());
             }
-            Ok(None) => self.note = "Cancelled.".into(),
+            Ok(None) => self.note = lang::t("Cancelled.", "Abgebrochen.").into(),
             Err(mpsc::TryRecvError::Empty) => {
                 // Keeps the progress bar moving.
                 ctx.request_repaint_after(Duration::from_millis(200));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => self.note = "Batch crashed.".into(),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.note = lang::t("Batch crashed.", "Batch abgestürzt.").into()
+            }
         }
         self.job = None;
     }
@@ -621,11 +674,19 @@ impl Batch {
         egui::Grid::new("batch settings").show(ui, |ui| {
             row(
                 ui,
-                "Replicate groups (regex on file name)",
+                lang::t(
+                    "Replicate groups (regex on file name)",
+                    "Replikatgruppen (Regex auf Dateinamen)",
+                ),
                 "",
-                "Group = first capture group, else the whole match. A file without a match is a \
-                 group of its own, so it passes any reproducibility filter. Empty: one group.",
-                egui::TextEdit::singleline(&mut s.replicates).hint_text(r"e.g. ^(.+)_\d+\.cdf$"),
+                lang::t(
+                    "Group = first capture group, else the whole match. A file without a match is a \
+                     group of its own, so it passes any reproducibility filter. Empty: one group.",
+                    "Gruppe = erste Erfassungsgruppe, sonst der ganze Treffer. Eine Datei ohne Treffer \
+                     ist eine eigene Gruppe und besteht so jeden Reproduzierbarkeitsfilter. Leer: eine Gruppe.",
+                ),
+                egui::TextEdit::singleline(&mut s.replicates)
+                    .hint_text(lang::t(r"e.g. ^(.+)_\d+\.cdf$", r"z. B. ^(.+)_\d+\.cdf$")),
             );
             samples_row(
                 ui,
@@ -643,18 +704,29 @@ impl Batch {
             );
             row(
                 ui,
-                "Min. reproducibility in a group",
+                lang::t(
+                    "Min. reproducibility in a group",
+                    "Min. Reproduzierbarkeit in einer Gruppe",
+                ),
                 "",
-                "Keep a substance only if some replicate group quantifies it in at least this share \
-                 of its runs.",
+                lang::t(
+                    "Keep a substance only if some replicate group quantifies it in at least this share \
+                     of its runs.",
+                    "Eine Substanz nur behalten, wenn eine Replikatgruppe sie in mindestens diesem Anteil \
+                     ihrer Läufe quantifiziert.",
+                ),
                 egui::Slider::new(&mut s.min_reproducibility, 0.0..=1.0),
             );
             row(
                 ui,
-                "Untargeted",
+                lang::t("Untargeted", "Ungezielt"),
                 "",
-                "Also list components without a library hit: they are pooled over all runs into \
-                 unknown substances. Applies to the next scan.",
+                lang::t(
+                    "Also list components without a library hit: they are pooled over all runs into \
+                     unknown substances. Applies to the next scan.",
+                    "Auch Komponenten ohne Bibliothekstreffer aufführen: Sie werden über alle Läufe zu \
+                     unbekannten Substanzen zusammengefasst. Gilt ab dem nächsten Scan.",
+                ),
                 egui::Checkbox::without_text(&mut self.options.untargeted),
             );
             save_cmp_row(ui, &mut self.options.save_cmp);
@@ -663,57 +735,86 @@ impl Batch {
             egui::Grid::new("batch advanced").show(ui, |ui| {
                 row(
                     ui,
-                    "Runs in memory at once",
+                    lang::t("Runs in memory at once", "Läufe gleichzeitig im Speicher"),
                     "",
-                    "How many files are read at the same time; each run is analysed in parallel anyway. \
-                     Fewer need less memory.",
+                    lang::t(
+                        "How many files are read at the same time; each run is analysed in parallel anyway. \
+                         Fewer need less memory.",
+                        "Wie viele Dateien gleichzeitig gelesen werden; jeder Lauf wird ohnehin parallel analysiert. \
+                         Weniger braucht weniger Speicher.",
+                    ),
                     egui::DragValue::new(&mut self.parallel).range(1..=64),
                 );
                 row(
                     ui,
-                    "Quant ions per substance",
+                    lang::t("Quant ions per substance", "Quant-Ionen pro Substanz"),
                     "QUANT_ION_NUMBER",
-                    "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
+                    lang::t(
+                        "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
+                        "Wie viele Ionen jeder Substanz integriert und summiert werden. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
+                    ),
                     egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
                 );
                 row(
                     ui,
-                    "Min. distance of quant ions",
+                    lang::t("Min. distance of quant ions", "Min. Abstand der Quant-Ionen"),
                     "QUANT_MIN_DIST_IONS",
-                    "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
+                    lang::t(
+                        "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
+                        "Quant-Ionen einer Substanz liegen möglichst mindestens so viele m/z auseinander. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
+                    ),
                     egui::DragValue::new(&mut s.quant.min_dist)
                         .range(0.0..=100.0)
                         .speed(0.1),
                 );
                 row(
                     ui,
-                    "Quant ion quality cut-off",
+                    lang::t("Quant ion quality cut-off", "Qualitätsschwelle der Quant-Ionen"),
                     "QUANT_QUALITY_CUTOFF",
-                    "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
+                    lang::t(
+                        "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
+                        "Ionen, deren Peak-Qualität darunter liegt (niedriger ist besser), werden zuerst gewählt. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
+                    ),
                     egui::DragValue::new(&mut s.quant.quality_cutoff)
                         .range(0.0..=100.0)
                         .speed(0.1),
                 );
                 row(
                     ui,
-                    "Min. quant ions found",
+                    lang::t("Min. quant ions found", "Min. gefundene Quant-Ionen"),
                     "",
-                    "A value counts only if at least this many of the substance's quant ions were found.",
+                    lang::t(
+                        "A value counts only if at least this many of the substance's quant ions were found.",
+                        "Ein Wert zählt nur, wenn mindestens so viele Quant-Ionen der Substanz gefunden wurden.",
+                    ),
                     egui::DragValue::new(&mut s.min_ions).range(1..=20),
                 );
                 row(
                     ui,
-                    "Min. signal-to-noise of an ion",
+                    lang::t(
+                        "Min. signal-to-noise of an ion",
+                        "Min. Signal-Rausch-Verhältnis eines Ions",
+                    ),
                     "",
-                    "An ion counts only if its peak has at least this signal-to-noise ratio (old \
-                     \"Req. S/N\").",
+                    lang::t(
+                        "An ion counts only if its peak has at least this signal-to-noise ratio (old \
+                         \"Req. S/N\").",
+                        "Ein Ion zählt nur, wenn sein Peak mindestens dieses Signal-Rausch-Verhältnis hat (alt \
+                         „Req. S/N“).",
+                    ),
                     egui::DragValue::new(&mut s.min_sn)
                         .range(0.0..=1e6)
                         .speed(0.1),
                 );
-                let hint = "A value counts only if the mean peak quality of its ions is at most this. \
-                            Off: no limit.";
-                let name = ui.label("Max. discrepancy index").on_hover_text(hint);
+                let hint = lang::t(
+                    "A value counts only if the mean peak quality of its ions is at most this. \
+                     Off: no limit.",
+                    "Ein Wert zählt nur, wenn die mittlere Peak-Qualität seiner Ionen höchstens so groß ist. \
+                     Aus: keine Grenze.",
+                );
+                let name = ui
+                    .label(lang::t("Max. discrepancy index", "Max. Diskrepanzindex"))
+                    .on_hover_text(hint);
                 let mut limit = s.max_discrepancy.is_finite();
                 ui.horizontal(|ui| {
                     ui.add(egui::Checkbox::without_text(&mut limit))
@@ -723,23 +824,36 @@ impl Batch {
                     ui.add_enabled(limit, egui::DragValue::new(&mut v).range(0.0..=1e6).speed(0.1))
                         .labelled_by(name.id)
                         .on_hover_text(hint)
-                        .on_disabled_hover_text("Tick the box to set a limit.");
+                        .on_disabled_hover_text(lang::t(
+                            "Tick the box to set a limit.",
+                            "Das Kästchen ankreuzen, um eine Grenze zu setzen.",
+                        ));
                     s.max_discrepancy = if limit { v } else { f32::INFINITY };
                 });
                 ui.end_row();
                 row(
                     ui,
-                    "Rescan missing ions",
+                    lang::t("Rescan missing ions", "Fehlende Ionen erneut suchen"),
                     "",
-                    "Search the ion traces again in the window of the RI difference around the expected \
-                     positions. Applies to the next scan, with the quant ions chosen now.",
+                    lang::t(
+                        "Search the ion traces again in the window of the RI difference around the expected \
+                         positions. Applies to the next scan, with the quant ions chosen now.",
+                        "Die Ionenspuren im Fenster der RI-Differenz um die erwarteten Positionen erneut \
+                         durchsuchen. Gilt ab dem nächsten Scan, mit den jetzt gewählten Quant-Ionen.",
+                    ),
                     egui::Checkbox::without_text(&mut self.options.rescan),
                 );
             });
             crate::settings::ranges(
                 ui,
-                "Ions avoided as quant ions",
-                "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
+                lang::t(
+                    "Ions avoided as quant ions",
+                    "Als Quant-Ionen gemiedene Ionen",
+                ),
+                lang::t(
+                    "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
+                    "Ionenbereiche (m/z von–bis), die nicht als Quant-Ionen gewählt werden, solange andere Ionen übrig sind. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.\nAlter Schlüssel: QUANT_EXCL_IONS",
+                ),
                 &mut s.quant.excluded,
             );
         });
@@ -763,15 +877,16 @@ impl Batch {
                 let d = job.done.load(Relaxed);
                 let text = match d >= job.total {
                     // Pooling and the rescan run after the last file.
-                    true => "pooling and rescanning…".into(),
-                    false => format!("{d} / {} runs", job.total),
+                    true => lang::t("pooling and rescanning…", "zusammenfassen und erneut suchen…")
+                        .into(),
+                    false => tf!("{d} / {} runs", "{d} / {} Läufe", job.total),
                 };
                 ui.add(
                     egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
                         .text(text)
                         .desired_width(300.0),
                 );
-                if ui.button("Cancel").clicked() {
+                if ui.button(lang::t("Cancel", "Abbrechen")).clicked() {
                     job.cancel.store(true, Relaxed);
                 }
             }
@@ -780,29 +895,34 @@ impl Batch {
                 // would be scaled differently, and the calibration is hidden meanwhile.
                 let ready = lib.filter(|l| !self.paths.is_empty() && self.library_ready(l));
                 if ui
-                    .add_enabled(ready.is_some(), egui::Button::new("Start"))
+                    .add_enabled(ready.is_some(), egui::Button::new(lang::t("Start", "Starten")))
                     .clicked()
                     && let Some(l) = ready
                 {
                     self.start(ui.ctx(), l, cal, reference);
                 }
                 match lib {
-                    Some(l) => ui.label(format!(
-                        "Library {}, {}",
-                        l.name,
-                        if cal.is_some() {
-                            "RI calibrated"
-                        } else {
-                            "no RI calibration"
-                        }
+                    Some(l) => ui.label(match cal.is_some() {
+                        true => tf!("Library {}, RI calibrated", "Bibliothek {}, RI kalibriert", l.name),
+                        false => tf!(
+                            "Library {}, no RI calibration",
+                            "Bibliothek {}, keine RI-Kalibrierung",
+                            l.name
+                        ),
+                    }),
+                    None => ui.label(lang::t(
+                        "Open a library first (File → Open library).",
+                        "Erst eine Bibliothek öffnen (Datei → Bibliothek öffnen).",
                     )),
-                    None => ui.label("Open a library first (File → Open library)."),
                 };
                 if lib.is_some_and(|l| !self.library_ready(l)) {
-                    ui.label("Library is being prepared for the new search or RT-only settings.");
+                    ui.label(lang::t(
+                        "Library is being prepared for the new search or RT-only settings.",
+                        "Die Bibliothek wird für die neuen Such- oder Nur-RT-Einstellungen vorbereitet.",
+                    ));
                 }
                 if self.paths.is_empty() {
-                    ui.label("Add runs first.");
+                    ui.label(lang::t("Add runs first.", "Läufe fehlen."));
                 }
                 ui.label(&self.note);
             }
@@ -861,22 +981,39 @@ impl Batch {
 
     pub fn runs_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("Add runs…").clicked()
+            if ui
+                .button(lang::t("Add runs…", "Läufe hinzufügen…"))
+                .clicked()
                 && let Some(p) = rfd::FileDialog::new()
                     .add_filter("NetCDF", &["cdf", "CDF", "nc"])
-                    .add_filter("Old MetaboliteDetector (.bin + .idx)", &["bin"])
-                    .add_filter("FastFlight raw data (MsData.FFT)", &["FFT", "fft"])
-                    .add_filter("Saved components (.cmp)", &["cmp", "CMP"])
+                    .add_filter(
+                        lang::t(
+                            "Old MetaboliteDetector (.bin + .idx)",
+                            "Alter MetaboliteDetector (.bin + .idx)",
+                        ),
+                        &["bin"],
+                    )
+                    .add_filter(
+                        lang::t(
+                            "FastFlight raw data (MsData.FFT)",
+                            "FastFlight-Rohdaten (MsData.FFT)",
+                        ),
+                        &["FFT", "fft"],
+                    )
+                    .add_filter(
+                        lang::t("Saved components (.cmp)", "Gespeicherte Komponenten (.cmp)"),
+                        &["cmp", "CMP"],
+                    )
                     .pick_files()
             {
                 self.paths.extend(p);
                 self.paths.sort();
                 self.paths.dedup();
             }
-            if ui.button("Clear").clicked() {
+            if ui.button(lang::t("Clear", "Leeren")).clicked() {
                 self.paths.clear();
             }
-            ui.label(format!("{} runs", self.paths.len()));
+            ui.label(tf!("{} runs", "{} Läufe", self.paths.len()));
         });
     }
 
@@ -890,8 +1027,9 @@ impl Batch {
             (self.shown, self.times, self.norm.edits) = (None, None, Edits::default());
         }
         ui.separator();
-        ui.label(format!(
+        ui.label(tf!(
             "{} runs scanned in {} against {}; {} unknown substances, {} ions added by the rescan",
+            "{} Läufe in {} gegen {} durchsucht; {} unbekannte Substanzen, {} Ionen durch die erneute Suche ergänzt",
             scan.runs.len(),
             crate::view::took(scan.took),
             scan.lib.name,
@@ -944,7 +1082,10 @@ impl Batch {
                         if self.frag_job.is_none()
                             && let Some(rx) = frag_button(ui, shown, scan)
                         {
-                            (self.note, self.frag_job) = ("Exporting MIDs…".into(), Some(rx));
+                            (self.note, self.frag_job) = (
+                                lang::t("Exporting MIDs…", "MIDs werden exportiert…").into(),
+                                Some(rx),
+                            );
                         }
                     });
                     view_controls(
@@ -970,7 +1111,7 @@ impl Batch {
             Some(Err(e)) => {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
-                    format!("Replicate pattern: {e}"),
+                    tf!("Replicate pattern: {e}", "Replikatmuster: {e}"),
                 );
             }
             None => {}
@@ -982,8 +1123,11 @@ impl Batch {
 /// substance's `FRAG` feature, written on a worker thread that sends back a note.
 fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiver<String>> {
     if !ui
-        .button("Export MIDs (FRAG)…")
-        .on_hover_text("Total ion counts and isotopomer shares of the fragments in each substance's FRAG feature, e.g. (174/8)(261/5).")
+        .button(lang::t("Export MIDs (FRAG)…", "MIDs exportieren (FRAG)…"))
+        .on_hover_text(lang::t(
+            "Total ion counts and isotopomer shares of the fragments in each substance's FRAG feature, e.g. (174/8)(261/5).",
+            "Gesamtionenzahlen und Isotopomer-Anteile der Fragmente im FRAG-Merkmal jeder Substanz, z. B. (174/8)(261/5).",
+        ))
         .clicked()
     {
         return None;
@@ -1010,8 +1154,8 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
             .collect();
         let e = frag_export(&shown_runs(&runs, &sources), &compounds);
         let mut note = match std::fs::write(&p, &e.csv) {
-            Ok(()) => format!("Saved {}", p.display()),
-            Err(err) => format!("Export failed: {err}"),
+            Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
+            Err(err) => tf!("Export failed: {err}", "Export fehlgeschlagen: {err}"),
         };
         for m in &e.errors {
             note += &format!("\n{m}");
@@ -1019,7 +1163,12 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
         match e.warnings.len() {
             0 => {}
             1 => note += &format!("\n{}", e.warnings[0]),
-            n => note += &format!("\n{n} substances have no fragment (FRAG) defined."),
+            n => {
+                note += &tf!(
+                    "\n{n} substances have no fragment (FRAG) defined.",
+                    "\nFür {n} Substanzen ist kein Fragment (FRAG) definiert."
+                )
+            }
         }
         note
     }))
@@ -1093,7 +1242,10 @@ fn scan_settings(scan: &Scan) -> Vec<(&'static str, String)> {
 /// next to it, and with `ex.ions` the raw integral of every quant ion. Returns a note after a
 /// save attempt.
 fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<String> {
-    if !ui.button("Export CSV…").clicked() {
+    if !ui
+        .button(lang::t("Export CSV…", "CSV exportieren…"))
+        .clicked()
+    {
         return None;
     }
     let p = rfd::FileDialog::new()
@@ -1102,7 +1254,7 @@ fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<String> {
         .save_file()?;
     Some(match save_results(&p, t, ex) {
         Ok(note) => note,
-        Err(e) => format!("Export failed: {e}"),
+        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     })
 }
 
@@ -1135,11 +1287,22 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
     } else {
         remove_stale(&group_stats_path(p))
     };
+    // (text columns for the German variant, name in the note, file)
+    let quant_ions = lang::t("quant ions", "Quant-Ionen");
     let mut results = vec![
-        ("replicate groups", t.write_groups_file(p).transpose()),
-        ("group statistics", group_stats.transpose()),
         (
-            "settings",
+            2,
+            lang::t("replicate groups", "Replikatgruppen"),
+            t.write_groups_file(p).transpose(),
+        ),
+        (
+            3,
+            lang::t("group statistics", "Gruppenstatistik"),
+            group_stats.transpose(),
+        ),
+        (
+            2,
+            lang::t("settings", "Einstellungen"),
             Some(
                 create(&sp)
                     .and_then(|f| ex.settings.write_csv(&ex.extra, f))
@@ -1148,32 +1311,32 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
         ),
     ];
     if !ex.ions {
-        results.push(("quant ions", remove_stale(&ions_path(p)).transpose()));
+        results.push((2, quant_ions, remove_stale(&ions_path(p)).transpose()));
     } else {
         let ip = ions_path(p);
         let runs: Vec<&RunResult> = (t.sources.iter())
             .filter_map(|i| ex.scan.runs.get(*i))
             .collect();
         let r = create(&ip).and_then(|f| t.write_ions_csv(&runs, ex.settings, f));
-        results.push(("quant ions", Some(r.map(|()| ip))));
+        results.push((2, quant_ions, Some(r.map(|()| ip))));
     }
     let mut saved = vec![p.display().to_string()];
     let mut failed = Vec::new();
-    for (what, r) in results {
-        let r = r.map(|r| {
-            r.and_then(|f| {
-                german(&f, if what == "group statistics" { 3 } else { 2 }, ex).map(|()| f)
-            })
-        });
+    for (cols, what, r) in results {
+        let r = r.map(|r| r.and_then(|f| german(&f, cols, ex).map(|()| f)));
         match r {
             Some(Ok(path)) => saved.push(path.display().to_string()),
             Some(Err(e)) => failed.push(format!("{what}: {e}")),
             None => {}
         }
     }
-    let mut text = format!("Saved {}", saved.join(", "));
+    let mut text = tf!("Saved {}", "Gespeichert: {}", saved.join(", "));
     if !failed.is_empty() {
-        text += &format!("; not saved: {}", failed.join("; "));
+        text += &tf!(
+            "; not saved: {}",
+            "; nicht gespeichert: {}",
+            failed.join("; ")
+        );
     }
     Ok(text)
 }
@@ -1215,7 +1378,14 @@ fn pool_mapping_button(
     times: Option<&[i64]>,
     note: &mut String,
 ) {
-    if n.kind != Kind::Pool || !ui.button("Export pool mapping…").clicked() {
+    if n.kind != Kind::Pool
+        || !ui
+            .button(lang::t(
+                "Export pool mapping…",
+                "Pool-Zuordnung exportieren…",
+            ))
+            .clicked()
+    {
         return;
     }
     let (base, times) = edited_runs(t, n, times);
@@ -1223,7 +1393,7 @@ fn pool_mapping_button(
         return;
     };
     let Some(mut path) = rfd::FileDialog::new()
-        .add_filter("Text", &["txt"])
+        .add_filter(lang::t("Text", "Text"), &["txt"])
         .set_file_name("pool_mapping.txt")
         .save_file()
     else {
@@ -1233,8 +1403,8 @@ fn pool_mapping_button(
         path.as_mut_os_string().push(".txt");
     }
     *note = match std::fs::write(&path, pool_mapping_text(&base, &p)) {
-        Ok(()) => format!("Saved {}", path.display()),
-        Err(e) => format!("Export failed: {e}"),
+        Ok(()) => tf!("Saved {}", "Gespeichert: {}", path.display()),
+        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     };
 }
 
@@ -1253,57 +1423,95 @@ fn view_controls(
     // Two rows: the window must not need more than the room beside the run list.
     ui.horizontal(|ui| {
         for (mode, title) in [
-            (Mode::Values, "Values"),
-            (Mode::Times, "Retention times (min)"),
-            (Mode::Groups, "Group statistics"),
+            (Mode::Values, lang::t("Values", "Werte")),
+            (
+                Mode::Times,
+                lang::t("Retention times (min)", "Retentionszeiten (min)"),
+            ),
+            (Mode::Groups, lang::t("Group statistics", "Gruppenstatistik")),
         ] {
             let locked = mode == Mode::Groups && z_scored;
             let r = ui
                 .add_enabled_ui(!locked, |ui| ui.selectable_value(&mut v.mode, mode, title))
                 .inner;
             if mode == Mode::Groups {
-                r.on_hover_text("Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.")
-                    .on_disabled_hover_text("Not with z-scores: a missing value cannot count as 0 there, and \"#\" (values above 0) means nothing. Turn the z-score off; the group statistics then use the normalised values, like the old program.");
+                r.on_hover_text(lang::t(
+                    "Per replicate group: mean, relative standard error (standard error / mean), hits (#) and the p-value of Student's t-test against the blank group.",
+                    "Pro Replikatgruppe: Mittelwert, relativer Standardfehler (Standardfehler / Mittelwert), Treffer (#) und der p-Wert des Student-t-Tests gegen die Blindwertgruppe.",
+                ))
+                .on_disabled_hover_text(lang::t(
+                    "Not with z-scores: a missing value cannot count as 0 there, and \"#\" (values above 0) means nothing. Turn the z-score off; the group statistics then use the normalised values, like the old program.",
+                    "Nicht mit z-Scores: Dort kann ein fehlender Wert nicht als 0 zählen, und „#“ (Werte über 0) sagt nichts aus. Den z-Score ausschalten; die Gruppenstatistik nutzt dann die normalisierten Werte, wie das alte Programm.",
+                ));
             }
         }
     });
     ui.horizontal(|ui| {
         ui.add_enabled(
             v.mode == Mode::Values,
-            egui::Checkbox::new(&mut v.totals, "Total sample intensities"),
+            egui::Checkbox::new(
+                &mut v.totals,
+                lang::t("Total sample intensities", "Probensummen"),
+            ),
         )
-        .on_hover_text(
+        .on_hover_text(lang::t(
             "Adds a first row with the sum of each run's values (a missing value counts as 0).",
-        )
-        .on_disabled_hover_text("Only in the Values view.");
+            "Fügt eine erste Zeile mit der Summe der Werte jedes Laufs hinzu (ein fehlender Wert zählt als 0).",
+        ))
+        .on_disabled_hover_text(lang::t(
+            "Only in the Values view.",
+            "Nur in der Ansicht Werte.",
+        ));
         ui.add_enabled(
             v.mode == Mode::Values,
-            egui::Checkbox::new(&mut v.ion_rows, "Quant ion lines"),
+            egui::Checkbox::new(
+                &mut v.ion_rows,
+                lang::t("Quant ion lines", "Quant-Ion-Zeilen"),
+            ),
         )
-        .on_hover_text("Adds a line under each substance for every quant ion, with its raw integral per run.")
-        .on_disabled_hover_text("Only in the Values view.");
-        ui.checkbox(&mut v.export_ions, "Export quant ions")
-            .on_hover_text("Also writes results.ions.csv with the raw integral of every quant ion.");
-        ui.checkbox(&mut v.excel_de, "Excel (German)").on_hover_text(
-            "Exports with semicolons and decimal commas, for a spreadsheet with German locale. Off: commas and decimal points; open those with locale English (USA) in the import dialog.",
-        );
+        .on_hover_text(lang::t(
+            "Adds a line under each substance for every quant ion, with its raw integral per run.",
+            "Fügt unter jeder Substanz eine Zeile pro Quant-Ion hinzu, mit seinem Rohintegral pro Lauf.",
+        ))
+        .on_disabled_hover_text(lang::t(
+            "Only in the Values view.",
+            "Nur in der Ansicht Werte.",
+        ));
+        ui.checkbox(
+            &mut v.export_ions,
+            lang::t("Export quant ions", "Quant-Ionen-Export"),
+        )
+        .on_hover_text(lang::t(
+            "Also writes results.ions.csv with the raw integral of every quant ion.",
+            "Schreibt zusätzlich results.ions.csv mit dem Rohintegral jedes Quant-Ions.",
+        ));
+        ui.checkbox(&mut v.excel_de, lang::t("Excel (German)", "Excel (deutsch)"))
+            .on_hover_text(lang::t(
+                "Exports with semicolons and decimal commas, for a spreadsheet with German locale. Off: commas and decimal points; open those with locale English (USA) in the import dialog.",
+                "Exportiert mit Semikolons und Dezimalkommas, für eine Tabellenkalkulation mit deutschem Gebietsschema. Aus: Kommas und Dezimalpunkte; diese im Importdialog mit dem Gebietsschema Englisch (USA) öffnen.",
+            ));
         if v.mode == Mode::Groups {
-            let blank = ui.label("Blank group");
+            let blank = ui.label(lang::t("Blank group", "Blindwertgruppe"));
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
                 .labelled_by(blank.id)
-                .on_hover_text(
+                .on_hover_text(lang::t(
                     "Replicate group of the blank runs; every other group gets a p-value against it.",
-                );
+                    "Replikatgruppe der Blindwertläufe; jede andere Gruppe bekommt einen p-Wert dagegen.",
+                ));
             if !groups.contains(&v.blanks.as_str()) {
-                ui.weak("no such group, so no p-values");
+                ui.weak(lang::t(
+                    "no such group, so no p-values",
+                    "keine solche Gruppe, daher keine p-Werte",
+                ));
             }
         }
         if !edits.is_empty()
             && ui
-                .button("Restore removed")
-                .on_hover_text(
+                .button(lang::t("Restore removed", "Entferntes wiederherstellen"))
+                .on_hover_text(lang::t(
                     "Brings back the removed runs and substances and the original order of the runs.",
-                )
+                    "Holt die entfernten Läufe und Substanzen und die ursprüngliche Reihenfolge der Läufe zurück.",
+                ))
                 .clicked()
         {
             edits.restore();
@@ -1345,7 +1553,12 @@ fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, Stri
             .map(|(r, g)| (r.clone(), group_label(g).to_string()))
             .collect();
     }
-    let stats = ["Mean", "Rel. Std. Err.", "#", "P (blank)"];
+    let stats = [
+        lang::t("Mean", "Mittelwert"),
+        lang::t("Rel. Std. Err.", "Rel. Std.-Fehler"),
+        "#",
+        lang::t("P (blank)", "P (Blindwert)"),
+    ];
     let per_group = if blank { 4 } else { 3 };
     (groups.iter())
         .flat_map(|g| {
@@ -1353,7 +1566,10 @@ fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, Stri
                 .iter()
                 .map(move |s| (s.to_string(), group_label(g).to_string()))
         })
-        .chain([("P (ANOVA)".to_string(), "all groups".to_string())])
+        .chain([(
+            "P (ANOVA)".to_string(),
+            lang::t("all groups", "alle Gruppen").to_string(),
+        )])
         .collect()
 }
 
@@ -1397,7 +1613,7 @@ fn run_buttons(ui: &mut egui::Ui, j: usize, n: usize) -> Option<Act> {
         if j > 0
             && ui
                 .small_button("‹")
-                .on_hover_text("Move run left")
+                .on_hover_text(lang::t("Move run left", "Lauf nach links"))
                 .clicked()
         {
             act = Some(Act::MoveRun(j, j - 1));
@@ -1405,14 +1621,17 @@ fn run_buttons(ui: &mut egui::Ui, j: usize, n: usize) -> Option<Act> {
         if j + 1 < n
             && ui
                 .small_button("›")
-                .on_hover_text("Move run right")
+                .on_hover_text(lang::t("Move run right", "Lauf nach rechts"))
                 .clicked()
         {
             act = Some(Act::MoveRun(j, j + 1));
         }
         if ui
             .small_button("×")
-            .on_hover_text("Remove this run from the results (Restore removed brings it back)")
+            .on_hover_text(lang::t(
+                "Remove this run from the results (Restore removed brings it back)",
+                "Diesen Lauf aus den Ergebnissen entfernen (Entferntes wiederherstellen holt ihn zurück)",
+            ))
             .clicked()
         {
             act = Some(Act::DropRun(j));
@@ -1439,7 +1658,10 @@ impl Detail<'_> {
     /// alternatives, like the old tooltip.
     fn hits_ui(&self, ui: &mut egui::Ui, t: &Table, col: usize, compound: usize) {
         let Some(f) = self.found(t, col, compound) else {
-            ui.label("Not found in this run.");
+            ui.label(lang::t(
+                "Not found in this run.",
+                "In diesem Lauf nicht gefunden.",
+            ));
             return;
         };
         let lib = &self.scan.lib.compounds;
@@ -1510,9 +1732,10 @@ impl Body<'_> {
         row.col(|ui| {
             if ui
                 .small_button("×")
-                .on_hover_text(
+                .on_hover_text(lang::t(
                     "Remove this substance from the results (Restore removed brings it back)",
-                )
+                    "Diese Substanz aus den Ergebnissen entfernen (Entferntes wiederherstellen holt sie zurück)",
+                ))
                 .clicked()
             {
                 act = Some(Act::DropRow(r.compound));
@@ -1547,7 +1770,7 @@ impl Body<'_> {
         let mass = self.t.rows[i].ions[k];
         row.col(|_| {});
         row.col(|ui| {
-            ui.weak(format!("    ion {mass}"));
+            ui.weak(tf!("    ion {mass}", "    Ion {mass}"));
         });
         row.col(|_| {});
         row.col(|_| {});
@@ -1573,17 +1796,35 @@ fn table_view(
     d: &Detail,
 ) -> Option<Act> {
     let what = match (v.mode, norm.kind, norm.z_score) {
-        (Mode::Times, ..) => "retention times of the hits in minutes",
-        (Mode::Groups, ..) => "per replicate group; a missing value counts as 0",
-        (_, Kind::None, false) => "summed quant ion integrals",
-        (_, _, false) => "normalised quant ion integrals",
-        (_, Kind::None, true) => "z-scores of the summed integrals",
-        (_, _, true) => "z-scores of the normalised integrals",
+        (Mode::Times, ..) => lang::t(
+            "retention times of the hits in minutes",
+            "Retentionszeiten der Treffer in Minuten",
+        ),
+        (Mode::Groups, ..) => lang::t(
+            "per replicate group; a missing value counts as 0",
+            "pro Replikatgruppe; ein fehlender Wert zählt als 0",
+        ),
+        (_, Kind::None, false) => lang::t(
+            "summed quant ion integrals",
+            "summierte Integrale der Quant-Ionen",
+        ),
+        (_, _, false) => lang::t(
+            "normalised quant ion integrals",
+            "normalisierte Integrale der Quant-Ionen",
+        ),
+        (_, Kind::None, true) => lang::t(
+            "z-scores of the summed integrals",
+            "z-Scores der summierten Integrale",
+        ),
+        (_, _, true) => lang::t(
+            "z-scores of the normalised integrals",
+            "z-Scores der normalisierten Integrale",
+        ),
     };
-    ui.label(format!(
-        "{} substances × {} runs; values are {what}",
-        t.rows.len(),
-        t.runs.len()
+    let (rows, runs) = (t.rows.len(), t.runs.len());
+    ui.label(tf!(
+        "{rows} substances × {runs} runs; values are {what}",
+        "{rows} Substanzen × {runs} Läufe; Werte sind {what}"
     ));
     let groups = group_names(t);
     let blank = v.mode == Mode::Groups && groups.contains(&v.blanks.as_str());
@@ -1616,7 +1857,11 @@ fn table_view(
                 .columns(Column::auto().at_least(70.0), heads.len())
                 .header(54.0, |mut h| {
                     h.col(|_| {});
-                    for title in ["Substance", "RT (min)", "Quant ions"] {
+                    for title in [
+                        lang::t("Substance", "Substanz"),
+                        "RT (min)",
+                        lang::t("Quant ions", "Quant-Ionen"),
+                    ] {
                         h.col(|ui| {
                             ui.strong(title);
                         });
@@ -1646,7 +1891,10 @@ fn table_view(
 fn total_row(row: &mut egui_extras::TableRow, totals: &[f64]) {
     row.col(|_| {});
     row.col(|ui| {
-        ui.strong("Total sample intensity");
+        ui.strong(lang::t(
+            "Total sample intensity",
+            "Gesamtintensität der Probe",
+        ));
     });
     row.col(|_| {});
     row.col(|_| {});
@@ -1659,26 +1907,29 @@ fn total_row(row: &mut egui_extras::TableRow, totals: &[f64]) {
 
 fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
     ui.horizontal(|ui| {
-        ui.label("Normalise by");
+        ui.label(lang::t("Normalise by", "Normieren nach"));
         for (kind, title) in [
-            (Kind::None, "nothing"),
-            (Kind::InternalStandard, "internal standard"),
-            (Kind::TotalSignal, "total signal"),
-            (Kind::Pool, "pool"),
+            (Kind::None, lang::t("nothing", "nichts")),
+            (
+                Kind::InternalStandard,
+                lang::t("internal standard", "internem Standard"),
+            ),
+            (Kind::TotalSignal, lang::t("total signal", "Gesamtsignal")),
+            (Kind::Pool, lang::t("pool", "Pool")),
         ] {
             ui.selectable_value(&mut n.kind, kind, title);
         }
-        ui.checkbox(&mut n.z_score, "z-score");
+        ui.checkbox(&mut n.z_score, lang::t("z-score", "z-Score"));
     });
     match n.kind {
         Kind::InternalStandard => {
             ui.horizontal(|ui| {
-                let label = ui.label("Internal standard");
+                let label = ui.label(lang::t("Internal standard", "Interner Standard"));
                 let name = |c: Option<usize>| {
                     t.rows
                         .iter()
                         .find(|r| Some(r.compound) == c)
-                        .map_or("choose…", |r| r.name.as_str())
+                        .map_or(lang::t("choose…", "wählen…"), |r| r.name.as_str())
                 };
                 egui::ComboBox::from_id_salt("norm standard")
                     .selected_text(name(n.standard))
@@ -1693,16 +1944,22 @@ fn norm_controls(ui: &mut egui::Ui, n: &mut Norm, t: &Table) {
         }
         Kind::Pool => {
             ui.horizontal(|ui| {
-                let group = ui.label("Pool runs are the replicate group");
+                let group = ui.label(lang::t(
+                    "Pool runs are the replicate group",
+                    "Pool-Läufe sind die Replikatgruppe",
+                ));
                 ui.add(egui::TextEdit::singleline(&mut n.pool_group).desired_width(80.0))
                     .labelled_by(group.id);
                 let nearest = ui.add(egui::DragValue::new(&mut n.pool_nearest).range(1..=99));
-                let label = ui.label("nearest pool runs");
+                let label = ui.label(lang::t("nearest pool runs", "nächste Pool-Läufe"));
                 nearest.labelled_by(label.id);
-                ui.checkbox(&mut n.pool_median, "median");
+                ui.checkbox(&mut n.pool_median, lang::t("median", "Median"));
             })
             .response
-            .on_hover_text("Each run is divided by the mean or median of the nearest pool runs in time (file date). Pool runs keep their raw values.");
+            .on_hover_text(lang::t(
+                "Each run is divided by the mean or median of the nearest pool runs in time (file date). Pool runs keep their raw values.",
+                "Jeder Lauf wird durch Mittelwert oder Median der zeitlich nächsten Pool-Läufe (Dateidatum) geteilt. Pool-Läufe behalten ihre Rohwerte.",
+            ));
         }
         Kind::None | Kind::TotalSignal => {}
     }
@@ -1762,12 +2019,16 @@ fn pool_notes(
     }
     let (_, missing) = times.get_or_insert_with(|| run_times(t, runs));
     if *missing > 0 {
-        ui.label(format!(
-            "No file date for {missing} runs; they count as time 0."
+        ui.label(tf!(
+            "No file date for {missing} runs; they count as time 0.",
+            "Kein Dateidatum für {missing} Läufe; sie zählen als Zeitpunkt 0."
         ));
     }
     if !t.groups.contains(&n.pool_group) {
-        ui.label("No run is in the pool group: every normalised value is empty.");
+        ui.label(lang::t(
+            "No run is in the pool group: every normalised value is empty.",
+            "Kein Lauf ist in der Pool-Gruppe: Jeder normalisierte Wert ist leer.",
+        ));
     }
 }
 

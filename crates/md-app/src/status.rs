@@ -2,6 +2,7 @@
 
 use eframe::egui;
 
+use crate::lang::{t, tf};
 use crate::{App, Run};
 
 impl App {
@@ -10,16 +11,27 @@ impl App {
             if !self.loading.is_empty() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("Loading {} file(s)…", self.loading.len()));
+                    ui.label(tf!(
+                        "Loading {} file(s)…",
+                        "Lade {} Datei(en)…",
+                        self.loading.len()
+                    ));
                 });
             } else if self.runs.iter().any(|r| r.analysis.busy()) {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Re-analysing with the new settings…");
+                    ui.label(t(
+                        "Re-analysing with the new settings…",
+                        "Neu analysieren mit den neuen Einstellungen…",
+                    ));
                 });
             } else if let Some(e) = self.error.clone() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                    if ui
+                        .small_button("×")
+                        .on_hover_text(t("Dismiss", "Ausblenden"))
+                        .clicked()
+                    {
                         self.error = None;
                     }
                     let text = egui::RichText::new(&e).color(ui.visuals().error_fg_color);
@@ -37,7 +49,12 @@ impl App {
                     status = format!("{n} — {status}");
                 }
                 ui.horizontal(|ui| {
-                    if note.is_some() && ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                    if note.is_some()
+                        && ui
+                            .small_button("×")
+                            .on_hover_text(t("Dismiss", "Ausblenden"))
+                            .clicked()
+                    {
                         self.results.set_note(String::new());
                     }
                     let label = egui::Label::new(&status)
@@ -47,7 +64,7 @@ impl App {
                         .on_hover_text(format!("{status}\n{}", r.path.display()));
                 });
             } else {
-                ui.label("No runs open.");
+                ui.label(t("No runs open.", "Keine Läufe geöffnet."));
             }
         });
     }
@@ -59,16 +76,22 @@ impl App {
 
     fn run_status(&self, r: &Run) -> String {
         let shown = match r.component {
-            Some(k) => format!(
+            Some(k) => tf!(
                 "component {} of {} ({} ions)",
+                "Komponente {} von {} ({} Ionen)",
                 k + 1,
                 r.components.len(),
                 r.components[k].spectrum.len()
             ),
-            None => format!("{} components (click a dot)", r.components.len()),
+            None => tf!(
+                "{} components (click a dot)",
+                "{} Komponenten (einen Punkt anklicken)",
+                r.components.len()
+            ),
         };
-        format!(
+        tf!(
             "{} — {} scans — scan {} at {:.3} {}{} (←/→ scan, ↑/↓ component) — {shown} — {}",
+            "{} — {} Scans — Scan {} bei {:.3} {}{} (←/→ Scan, ↑/↓ Komponente) — {shown} — {}",
             r.name,
             r.data.scan_count(),
             r.scan + 1,

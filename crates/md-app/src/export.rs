@@ -8,6 +8,7 @@ use eframe::egui;
 use md_core::csv::{write_columns, write_tsv};
 use md_core::spectrum::{Normalization, normalize};
 
+use crate::lang::{t, tf};
 use crate::plot_export::{self, Area};
 use crate::{App, Run, Trace};
 
@@ -26,7 +27,11 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (String, Vec<f64>, Vec<
         Some(k) => {
             let s = &run.components[k].spectrum;
             (
-                format!("Component {} (deconvoluted)", k + 1),
+                tf!(
+                    "Component {} (deconvoluted)",
+                    "Komponente {} (dekonvolutiert)",
+                    k + 1
+                ),
                 s.iter().map(|(m, _)| f64::from(*m)).collect(),
                 s.iter().map(|(_, h)| f64::from(*h)).collect(),
             )
@@ -72,7 +77,7 @@ pub(crate) fn crop(
     let size = egui::vec2(shot.width() as f32, shot.height() as f32) / ppp;
     let rect = rect.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
     if rect.width() < 1.0 || rect.height() < 1.0 {
-        return Err("nothing to export: the plot is not visible".into());
+        return Err(not_visible().into());
     }
     Ok(shot.region(&rect, Some(ppp)))
 }
@@ -99,7 +104,8 @@ impl App {
     /// Shown chromatogram of the active run: header and columns, time first and then the traces the
     /// plots draw.
     fn chromatogram_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
-        let run = self.runs.get(self.active).ok_or("no run open")?;
+        let run = self.runs.get(self.active).ok_or(no_run())?;
+        // The header is CSV, so it stays English.
         let mut header = vec![format!("Retention time ({})", self.view.unit.label())];
         let mut columns = vec![run.minutes.iter().map(|m| self.view.time(*m)).collect()];
         // The plots show the derivative when it is on, so the file does too.
@@ -117,7 +123,11 @@ impl App {
         if self.trace != Trace::Tic {
             if run.sic_for != Some((self.mz, self.tolerance)) || run.sic.len() != run.minutes.len()
             {
-                return Err("the SIC is still being computed, try again in a moment".into());
+                return Err(t(
+                    "the SIC is still being computed, try again in a moment",
+                    "das SIC wird noch berechnet, gleich noch einmal versuchen",
+                )
+                .into());
             }
             header.push(self.derivative_label(format!("SIC m/z {} ± {}", self.mz, self.tolerance)));
             columns.push(shape(&run.sic));
@@ -126,7 +136,7 @@ impl App {
     }
 
     fn spectrum_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
-        let run = self.runs.get(self.active).ok_or("no run open")?;
+        let run = self.runs.get(self.active).ok_or(no_run())?;
         let (_, mz, y) = shown_spectrum(run, self.export.norm);
         let y_name = match self.export.norm {
             Normalization::None => "Intensity".to_owned(),
@@ -141,11 +151,22 @@ impl App {
             return;
         };
         let mut result = None;
-        for (what, area, chromatogram) in [
-            ("chromatogram", self.export.chromatograms, true),
-            ("spectrum", self.export.spectrum, false),
+        // `what` names the file, so it stays English.
+        for (what, label, area, chromatogram) in [
+            (
+                "chromatogram",
+                t("Export chromatogram", "Chromatogramm exportieren"),
+                self.export.chromatograms,
+                true,
+            ),
+            (
+                "spectrum",
+                t("Export spectrum", "Spektrum exportieren"),
+                self.export.spectrum,
+                false,
+            ),
         ] {
-            ui.menu_button(format!("Export {what}"), |ui| {
+            ui.menu_button(label, |ui| {
                 // Built only while the menu is open.
                 let table = if chromatogram {
                     self.chromatogram_table()
@@ -157,8 +178,11 @@ impl App {
                         let hdr: Vec<&str> = header.iter().map(String::as_str).collect();
                         let cols: Vec<&[f64]> = columns.iter().map(Vec::as_slice).collect();
                         if ui
-                            .button("As CSV…")
-                            .on_hover_text("Save the plotted values as a table")
+                            .button(t("As CSV…", "Als CSV…"))
+                            .on_hover_text(t(
+                                "Save the plotted values as a table",
+                                "Die gezeigten Werte als Tabelle speichern",
+                            ))
                             .clicked()
                             && let Some(p) = rfd::FileDialog::new()
                                 .add_filter("CSV", &["csv"])
@@ -169,8 +193,11 @@ impl App {
                             ui.close();
                         }
                         if ui
-                            .button("Copy data")
-                            .on_hover_text("Copy the plotted values as tab-separated text")
+                            .button(t("Copy data", "Daten kopieren"))
+                            .on_hover_text(t(
+                                "Copy the plotted values as tab-separated text",
+                                "Die gezeigten Werte als Text mit Tabulatoren kopieren",
+                            ))
                             .clicked()
                         {
                             let mut text = Vec::new();
@@ -205,14 +232,35 @@ impl App {
     }
 }
 
+pub(crate) fn not_visible() -> &'static str {
+    t(
+        "nothing to export: the plot is not visible",
+        "nichts zu exportieren: die Grafik ist nicht sichtbar",
+    )
+}
+
+fn no_run() -> &'static str {
+    t("no run open", "kein Lauf geöffnet")
+}
+
 /// Normalisation picker above the spectrum plot.
 pub fn norm_picker(ui: &mut egui::Ui, norm: &mut Normalization) {
     ui.horizontal_wrapped(|ui| {
-        ui.label("Normalise spectrum:");
+        ui.label(t("Normalise spectrum:", "Normierung:"));
         for n in Normalization::ALL {
-            ui.selectable_value(norm, n, n.label());
+            ui.selectable_value(norm, n, norm_label(n));
         }
     });
+}
+
+/// `Normalization::label` is English for the CSV header; this is the on-screen name.
+fn norm_label(n: Normalization) -> &'static str {
+    match n {
+        Normalization::None => t("None", "Keine"),
+        Normalization::BasePeak => t("Base peak", "Basispeak"),
+        Normalization::Unit => t("Unit", "Einheit"),
+        Normalization::Relative => t("Relative", "Relativ"),
+    }
 }
 
 #[cfg(test)]

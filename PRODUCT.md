@@ -52,8 +52,9 @@ that hundreds of runs stay interactive.
   isotope calculator, exports. Remaining parity work is owned by the issues in the feature inventory.
 - **Performance:** loading and analysis never block the UI; plots draw proportional to pixels, not
   data (`md_core::decimate`).
-- **UI language:** English now. A German translation is planned later, so labels stay short,
-  complete strings (no sentence assembled from fragments) to keep them translatable.
+- **UI language:** English and German (S8, #257): the system language decides, switchable in Help
+  and Settings. Labels stay short, complete strings (no sentence assembled from fragments), each
+  written as an English/German pair (`lang::t`, `lang::tf!`). CSV headers and file formats stay English.
 - **Setting names:** each setting shows a plain-language name; the old 3.3 key (e.g.
   `AN_PEAK_THRESHOLD_BEGIN`) stays reachable on hover so 3.3 users and settings files still match.
 - **Explanations everywhere:** every button, field and setting carries a short hover explanation of

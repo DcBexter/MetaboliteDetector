@@ -10,6 +10,7 @@ use eframe::egui;
 use semver::Version;
 
 use crate::jobs::{poll_job, spawn};
+use crate::lang::{t, tf};
 use crate::layout::ToolWindow;
 use release::{Config, Kind, Release};
 
@@ -117,16 +118,28 @@ impl Updater {
 
     pub fn menu(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button("Check for updates…")
-            .on_hover_text("Look for a newer release on GitHub")
+            .button(t("Check for updates…", "Nach Updates suchen…"))
+            .on_hover_text(t(
+                "Look for a newer release on GitHub",
+                "Auf GitHub nach einer neueren Version suchen",
+            ))
             .clicked()
         {
             self.open = true;
             self.check(ui.ctx(), true);
         }
         if ui
-            .checkbox(&mut self.config.auto, "Check for updates at start")
-            .on_hover_text("At most once a day; nothing is installed without your click")
+            .checkbox(
+                &mut self.config.auto,
+                t(
+                    "Check for updates at start",
+                    "Beim Start nach Updates suchen",
+                ),
+            )
+            .on_hover_text(t(
+                "At most once a day; nothing is installed without your click",
+                "Höchstens einmal am Tag; ohne Ihren Klick wird nichts installiert",
+            ))
             .changed()
         {
             self.save();
@@ -137,7 +150,7 @@ impl Updater {
         match &self.state {
             State::Checking { rx, manual } => {
                 let manual = *manual;
-                let Some(result) = poll_job(rx, "The update check") else {
+                let Some(result) = poll_job(rx, t("The update check", "Die Update-Suche")) else {
                     return;
                 };
                 self.state = match result.and_then(|r| r) {
@@ -151,12 +164,13 @@ impl Updater {
                     Err(_) => State::Idle,
                 };
             }
-            State::Installing(_, rx) => match poll_job(rx, "The update").map(|r| r.and_then(|r| r))
-            {
-                Some(Ok(())) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                Some(Err(e)) => self.state = State::Failed(e),
-                None => {}
-            },
+            State::Installing(_, rx) => {
+                match poll_job(rx, t("The update", "Das Update")).map(|r| r.and_then(|r| r)) {
+                    Some(Ok(())) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Some(Err(e)) => self.state = State::Failed(e),
+                    None => {}
+                }
+            }
             _ => {}
         }
     }
@@ -164,7 +178,7 @@ impl Updater {
     pub fn window(&mut self, ctx: &egui::Context) {
         self.poll(ctx);
         let mut open = self.open;
-        egui::Window::new("Updates")
+        egui::Window::new(t("Updates", "Updates"))
             .tool_window(ctx, 12, [340.0, 240.0])
             .open(&mut open)
             .show(ctx, |ui| self.contents(ui));
@@ -173,47 +187,80 @@ impl Updater {
     }
 
     fn contents(&mut self, ui: &mut egui::Ui) {
-        ui.label(format!("Installed version: {}", env!("CARGO_PKG_VERSION")));
+        ui.label(tf!(
+            "Installed version: {}",
+            "Installierte Version: {}",
+            env!("CARGO_PKG_VERSION")
+        ));
         let mut install = None;
         match &self.state {
             State::Idle => {}
             State::Checking { .. } => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Looking for a newer release…");
+                    ui.label(t(
+                        "Looking for a newer release…",
+                        "Suche nach einer neueren Version…",
+                    ));
                 });
             }
             State::UpToDate => {
-                ui.label("This is the newest version.");
+                ui.label(t(
+                    "This is the newest version.",
+                    "Dies ist die neueste Version.",
+                ));
             }
             State::Available(r) => {
-                ui.strong(format!("Version {} is available.", r.version));
-                ui.hyperlink_to("Release notes and downloads", &r.page);
-                ui.label(
+                ui.strong(tf!(
+                    "Version {} is available.",
+                    "Version {} ist verfügbar.",
+                    r.version
+                ));
+                ui.hyperlink_to(
+                    t(
+                        "Release notes and downloads",
+                        "Versionshinweise und Downloads",
+                    ),
+                    &r.page,
+                );
+                ui.label(t(
                     "Installing downloads the update, verifies its checksum and restarts \
                      MetaboliteDetector. Unsaved results are lost.",
-                );
+                    "Die Installation lädt das Update herunter, prüft seine Prüfsumme und \
+                     startet MetaboliteDetector neu. Nicht gespeicherte Ergebnisse gehen verloren.",
+                ));
                 let exe = std::env::current_exe().ok();
                 let kind = exe.as_deref().and_then(install_kind);
                 // A debug build would overwrite cargo's own binaries.
                 let blocked = if cfg!(debug_assertions) {
-                    Some("This is a debug build: install the release by hand.")
+                    Some(t(
+                        "This is a debug build: install the release by hand.",
+                        "Dies ist ein Debug-Build: die Version von Hand installieren.",
+                    ))
                 } else if kind.is_none() {
-                    Some(
+                    Some(t(
                         "No automatic install on this platform: download it from the release page.",
-                    )
+                        "Keine automatische Installation auf dieser Plattform: \
+                         von der Release-Seite herunterladen.",
+                    ))
                 } else {
                     None
                 };
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(blocked.is_none(), egui::Button::new("Download and install"))
+                        .add_enabled(
+                            blocked.is_none(),
+                            egui::Button::new(t(
+                                "Download and install",
+                                "Herunterladen und installieren",
+                            )),
+                        )
                         .clicked()
                         && let (Some(exe), Some(kind)) = (exe, kind)
                     {
                         install = Some((r.clone(), kind, exe));
                     }
-                    if ui.button("Later").clicked() {
+                    if ui.button(t("Later", "Später")).clicked() {
                         self.open = false;
                     }
                 });
@@ -224,16 +271,19 @@ impl Updater {
             State::Installing(version, _) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("Downloading and installing {version}…"));
+                    ui.label(tf!(
+                        "Downloading and installing {version}…",
+                        "{version} wird heruntergeladen und installiert…"
+                    ));
                 });
             }
             State::Failed(e) => {
                 ui.colored_label(ui.visuals().error_fg_color, e);
-                ui.hyperlink_to("Releases page", RELEASES_PAGE);
+                ui.hyperlink_to(t("Releases page", "Release-Seite"), RELEASES_PAGE);
             }
         }
         if matches!(self.state, State::Idle | State::UpToDate | State::Failed(_))
-            && ui.button("Check again").clicked()
+            && ui.button(t("Check again", "Erneut suchen")).clicked()
         {
             self.check(ui.ctx(), true);
         }
