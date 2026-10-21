@@ -87,7 +87,8 @@ impl Chromatogram {
     /// Old `setBaselineCorrectionEnabled`: on, every intensity of a scan loses that scan's mean
     /// (`DataProvider::baselineCorrection`); off restores them. The TIC stays the uncorrected one.
     pub fn set_baseline_correction(&mut self, on: bool) {
-        if on == self.baseline.corrected {
+        let means = self.baseline.means.len();
+        if on == self.baseline.corrected || (means != 0 && means != self.scan_count()) {
             return;
         }
         let sign = if on { -1.0 } else { 1.0 };

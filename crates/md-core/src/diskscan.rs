@@ -161,7 +161,12 @@ fn read_index(
             let _tic = r.f64()?;
             let (rt_ms, n, data_type) = (r.f64()?, r.u32()? as usize, r.u32()?);
             // Per-scan BaselineStatistics (mean, sd, msd, nf, n); `getSignal` reads `(int) mean`.
-            let mean = r.f64()? as i32 as f32;
+            let mean = r.f64()?;
+            // A real baseline is far smaller; this keeps the correction exact in f32 (below 2^24).
+            if mean.is_nan() || mean.abs() >= 16_777_216.0 {
+                return corrupt(format!("scan {scan} has baseline mean {mean}"));
+            }
+            let mean = mean as i32 as f32;
             r.take(4 * 8)?;
             Ok(Entry {
                 scan,
@@ -328,6 +333,13 @@ mod tests {
         assert!(cdf.baseline.means.is_empty());
         cdf.set_baseline_correction(true);
         assert_eq!(cdf.spectrum(0).1, &[10.0][..]);
+        // A NaN or huge mean is a corrupt index, not a baseline.
+        for bad in [f64::NAN, 1e9] {
+            let mut bad_idx = idx.clone();
+            let e = bad_idx.len() - 84;
+            bad_idx[e + 44..e + 52].copy_from_slice(&bad.to_le_bytes());
+            assert!(parse(&bad_idx, &bin).is_err(), "mean {bad}");
+        }
     }
 
     #[test]
