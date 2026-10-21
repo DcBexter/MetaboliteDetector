@@ -70,7 +70,7 @@ impl App {
                     self.results.export_csv(run, self.ri.for_run(run), cutoff);
                 }
             }
-            Action::AddToLibrary => self.add_component_to_library(ctx),
+            Action::AddToLibrary => self.add_component_to_library(),
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::Manual => ctx.open_url(egui::OpenUrl::new_tab(MANUAL)),
         }

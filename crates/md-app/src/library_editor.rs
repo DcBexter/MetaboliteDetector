@@ -310,7 +310,7 @@ impl LibraryEditor {
                 .clicked()
                 && let Some(src) = src
             {
-                self.start_add(ui.ctx(), src);
+                self.start_add(src);
             }
             if ui
                 .add_enabled(source.is_some(), egui::Button::new("Copy RTs…"))
@@ -567,12 +567,12 @@ impl App {
             quant: self.settings.applied.quant(),
             search: self.settings.applied.search(),
         };
-        self.editor.start_add(ctx, &src);
+        self.editor.start_add(&src);
         self.editor.start_rt_copy(ctx, &src);
     }
 
     /// Ctrl+L: opens the editor and "Add component" for the selected component of the active run.
-    pub fn add_component_to_library(&mut self, ctx: &egui::Context) {
+    pub fn add_component_to_library(&mut self) {
         let Some(run) = self.runs.get(self.active) else {
             return;
         };
@@ -584,7 +584,7 @@ impl App {
         };
         if source.component().is_some() {
             self.editor.open = true;
-            self.editor.start_add(ctx, &source);
+            self.editor.start_add(&source);
         }
     }
 
