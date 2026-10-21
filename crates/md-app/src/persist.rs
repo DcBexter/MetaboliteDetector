@@ -22,7 +22,7 @@ use md_core::peaks::Detector;
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
 use crate::App;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t};
 
 /// Storage key of our lines in `app.ron`.
 pub const KEY: &str = "metabolite-detector";
@@ -381,16 +381,16 @@ fn reg_entries(text: &str) -> Vec<Entry> {
 }
 
 /// The old app's settings and where they came from, if it ever ran here.
-fn old_entries() -> Option<(String, Vec<Entry>)> {
+fn old_entries() -> Option<(Msg, Vec<Entry>)> {
     registry().or_else(|| {
         let path = xdg()?.join("TU-Braunschweig/MetaboliteDetector.conf");
         let text = read_capped(&path)?;
-        Some((path.display().to_string(), ini_entries(&text)))
+        Some((path.display().to_string().into(), ini_entries(&text)))
     })
 }
 
 #[cfg(windows)]
-fn registry() -> Option<(String, Vec<Entry>)> {
+fn registry() -> Option<(Msg, Vec<Entry>)> {
     use std::os::windows::process::CommandExt;
     // CREATE_NO_WINDOW: no console flashes up next to the app.
     let out = std::process::Command::new("reg")
@@ -403,14 +403,14 @@ fn registry() -> Option<(String, Vec<Entry>)> {
     let text = String::from_utf8_lossy(&out.stdout);
     (out.status.success()).then(|| {
         (
-            tf!("the registry ({REG_ROOT})", "der Registry ({REG_ROOT})"),
+            msg!("the registry ({REG_ROOT})", "der Registry ({REG_ROOT})"),
             reg_entries(&text),
         )
     })
 }
 
 #[cfg(not(windows))]
-fn registry() -> Option<(String, Vec<Entry>)> {
+fn registry() -> Option<(Msg, Vec<Entry>)> {
     None
 }
 
@@ -628,7 +628,7 @@ fn write_atomic(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// What [`guard`] tells the user.
-type Note = Result<String, String>;
+type Note = Result<Msg, Msg>;
 
 /// Before eframe reads `app.ron`. A good file is copied to `app.ron.bak`. A damaged one (eframe
 /// drops it and would write over it) is replaced by that copy; without one it becomes the backup.
@@ -650,14 +650,14 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
         return (Some(file), None);
     }
     let bak = file.with_extension("ron.bak");
-    let lost = t(
+    let lost = msg!(
         "The saved settings could not be read.",
         "Die gespeicherten Einstellungen konnten nicht gelesen werden.",
     );
     // eframe gets another name, so nothing is written over `app.ron`.
     let aside = |e: std::io::Error| {
         let other = file.with_extension("ron.new");
-        let msg = tf!(
+        let msg = msg!(
             "{lost} It could not be kept aside ({e}), so this session saves to {} instead.",
             "{lost} Sie konnten nicht beiseitegelegt werden ({e}), daher speichert diese Sitzung stattdessen in {}.",
             other.display()
@@ -689,11 +689,10 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
     }
     let kept = match std::fs::read(&bak).ok().filter(|b| parse(b).is_some()) {
         Some(good) => write_atomic(&file, &good).map(|()| {
-            t(
+            msg!(
                 "The last good copy is used.",
-                "Die letzte gute Kopie wird verwendet.",
+                "Die letzte gute Kopie wird verwendet."
             )
-            .to_owned()
         }),
         // Gone already: the other window got there first.
         None => std::fs::rename(&file, &bak)
@@ -703,7 +702,7 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
                     .ok_or(e)
             })
             .map(|()| {
-                tf!(
+                msg!(
                     "The defaults are used; the old file is kept as {} until the next start.",
                     "Die Standardwerte werden verwendet; die alte Datei bleibt bis zum nächsten Start als {} erhalten.",
                     bak.display()
@@ -711,7 +710,10 @@ fn guard_after(file: Option<PathBuf>, pause: impl FnOnce()) -> (Option<PathBuf>,
             }),
     };
     match kept {
-        Ok(what) => (Some(file.clone()), Some(Err(format!("{lost} {what}")))),
+        Ok(what) => (
+            Some(file.clone()),
+            Some(Err(msg!("{lost} {what}", "{lost} {what}"))),
+        ),
         Err(e) => aside(e),
     }
 }
@@ -733,7 +735,7 @@ pub fn restore(
         Some(text) => {
             let bad = apply(app, ctx, own_entries(&text));
             (!bad.is_empty()).then(|| {
-                Err(tf!(
+                Err(msg!(
                     "Saved values could not be read and use their defaults: {}.",
                     "Gespeicherte Werte konnten nicht gelesen werden und nutzen ihre Standardwerte: {}.",
                     bad.join(", ")
@@ -744,14 +746,14 @@ pub fn restore(
         None if guarded.is_some() => None,
         None => old_entries().map(|(source, entries)| {
             let bad = apply(app, ctx, entries);
-            let done = tf!(
+            let done = msg!(
                 "Imported the settings of MetaboliteDetector 3.3 from {source}.",
                 "Die Einstellungen von MetaboliteDetector 3.3 aus {source} übernommen."
             );
             if bad.is_empty() {
                 Ok(done)
             } else {
-                Err(tf!(
+                Err(msg!(
                     "{done} These keep their defaults: {}.",
                     "{done} Diese behalten ihre Standardwerte: {}.",
                     bad.join(", ")

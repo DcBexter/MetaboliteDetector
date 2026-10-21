@@ -8,8 +8,7 @@ use eframe::egui;
 use md_core::csv::{write_columns, write_tsv};
 use md_core::spectrum::{Normalization, normalize};
 
-use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::plot_export::{self, Area};
 use crate::{App, Run, Trace};
 
@@ -53,7 +52,7 @@ pub fn shown_spectrum(run: &Run, norm: Normalization) -> (String, Vec<f64>, Vec<
 pub(crate) fn write_file(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<std::fs::File>) -> std::io::Result<()>,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
@@ -65,7 +64,7 @@ pub(crate) fn write_file(
     };
     run().map_err(|e| {
         std::fs::remove_file(&part).ok();
-        format!("{}: {e}", path.display())
+        format!("{}: {e}", path.display()).into()
     })
 }
 
@@ -74,11 +73,11 @@ pub(crate) fn crop(
     shot: &egui::ColorImage,
     rect: egui::Rect,
     ppp: f32,
-) -> Result<egui::ColorImage, String> {
+) -> Result<egui::ColorImage, Msg> {
     let size = egui::vec2(shot.width() as f32, shot.height() as f32) / ppp;
     let rect = rect.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
     if rect.width() < 1.0 || rect.height() < 1.0 {
-        return Err(not_visible().into());
+        return Err(not_visible());
     }
     Ok(shot.region(&rect, Some(ppp)))
 }
@@ -88,7 +87,7 @@ pub(crate) fn write_png(
     shot: &egui::ColorImage,
     rect: egui::Rect,
     ppp: f32,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     let img = crop(shot, rect, ppp)?;
     write_file(path, |w| {
         let mut enc = png::Encoder::new(&mut *w, img.width() as u32, img.height() as u32);
@@ -104,8 +103,8 @@ pub(crate) fn write_png(
 impl App {
     /// Shown chromatogram of the active run: header and columns, time first and then the traces the
     /// plots draw.
-    fn chromatogram_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
-        let run = self.runs.get(self.active).ok_or(no_run())?;
+    fn chromatogram_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), Msg> {
+        let run = self.runs.get(self.active).ok_or_else(no_run)?;
         // The header is CSV, so it stays English.
         let mut header = vec![format!("Retention time ({})", self.view.unit.label())];
         let mut columns = vec![run.minutes.iter().map(|m| self.view.time(*m)).collect()];
@@ -124,11 +123,10 @@ impl App {
         if self.trace != Trace::Tic {
             if run.sic_for != Some((self.mz, self.tolerance)) || run.sic.len() != run.minutes.len()
             {
-                return Err(t(
+                return Err(msg!(
                     "the SIC is still being computed, try again in a moment",
-                    "das SIC wird noch berechnet, gleich noch einmal versuchen",
-                )
-                .into());
+                    "das SIC wird noch berechnet, gleich noch einmal versuchen"
+                ));
             }
             header.push(self.derivative_label(format!("SIC m/z {} ± {}", self.mz, self.tolerance)));
             columns.push(shape(&run.sic));
@@ -136,8 +134,8 @@ impl App {
         Ok((header, columns))
     }
 
-    fn spectrum_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), String> {
-        let run = self.runs.get(self.active).ok_or(no_run())?;
+    fn spectrum_table(&self) -> Result<(Vec<String>, Vec<Vec<f64>>), Msg> {
+        let run = self.runs.get(self.active).ok_or_else(no_run)?;
         let (_, mz, y) = shown_spectrum(run, self.export.norm);
         let y_name = match self.export.norm {
             Normalization::None => "Intensity".to_owned(),
@@ -206,14 +204,14 @@ impl App {
                                 Ok(()) => ui
                                     .ctx()
                                     .copy_text(String::from_utf8_lossy(&text).into_owned()),
-                                Err(e) => result = Some(Err(e.to_string())),
+                                Err(e) => result = Some(Err(e.to_string().into())),
                             }
                             ui.close();
                         }
                     }
                     // The pictures do not need the numbers, only the table entries do.
                     Err(e) => {
-                        ui.label(errors::text(e));
+                        ui.label(&**e);
                     }
                 }
                 ui.separator();
@@ -233,15 +231,15 @@ impl App {
     }
 }
 
-pub(crate) fn not_visible() -> &'static str {
-    t(
+pub(crate) fn not_visible() -> Msg {
+    msg!(
         "nothing to export: the plot is not visible",
-        "nichts zu exportieren: die Grafik ist nicht sichtbar",
+        "nichts zu exportieren: die Grafik ist nicht sichtbar"
     )
 }
 
-fn no_run() -> &'static str {
-    t("no run open", "kein Lauf geöffnet")
+fn no_run() -> Msg {
+    msg!("no run open", "kein Lauf geöffnet")
 }
 
 /// Normalisation picker above the spectrum plot.

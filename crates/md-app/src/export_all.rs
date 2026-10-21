@@ -10,8 +10,7 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::centroid::{CentroidSettings, ExportKind, reduce};
 
-use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use crate::{App, poll_job, spawn};
 
@@ -19,7 +18,7 @@ struct Job {
     total: usize,
     done: Arc<AtomicUsize>,
     cancel: Arc<AtomicBool>,
-    rx: mpsc::Receiver<Vec<String>>,
+    rx: mpsc::Receiver<Vec<Msg>>,
 }
 
 #[derive(Default)]
@@ -31,8 +30,8 @@ pub struct ExportAll {
     dir: Option<PathBuf>,
     job: Option<Job>,
     /// One line per failed file, or the summary of the last export.
-    note: String,
-    errors: Vec<String>,
+    note: Msg,
+    errors: Vec<Msg>,
 }
 
 /// Writes each run as `<name><suffix>.cdf` in `dir`, the name the single-run export proposes. A
@@ -44,13 +43,13 @@ fn export_runs(
     s: &CentroidSettings,
     done: &AtomicUsize,
     cancel: &AtomicBool,
-) -> Vec<String> {
+) -> Vec<Msg> {
     let (mut errors, mut used) = (Vec::new(), HashSet::new());
     // Quitting mid-write leaves `<file>.cdf.tmp` behind (the writer renames it when done): clear them and say so.
     for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let n = f.file_name().to_string_lossy().into_owned();
         if n.to_lowercase().ends_with(".cdf.tmp") && std::fs::remove_file(f.path()).is_ok() {
-            errors.push(tf!(
+            errors.push(msg!(
                 "{n}: leftover of an interrupted export, removed",
                 "{n}: Rest eines abgebrochenen Exports, entfernt"
             ));
@@ -71,7 +70,7 @@ fn export_runs(
         let path = dir.join(&file);
         // The single-run dialog asks before replacing; here a file in the folder (maybe a source run) is kept.
         if path.exists() {
-            errors.push(tf!(
+            errors.push(msg!(
                 "{file}: already exists, skipped",
                 "{file}: existiert bereits, übersprungen"
             ));
@@ -84,7 +83,7 @@ fn export_runs(
             md_core::andi::write_with_tic(&path, &reduce(data, kind, s), &data.tic())
         };
         if let Err(e) = result {
-            errors.push(format!("{file}: {e}"));
+            errors.push(format!("{file}: {e}").into());
         }
         done.fetch_add(1, Relaxed);
     }
@@ -95,18 +94,18 @@ impl App {
     pub fn export_all_window(&mut self, ctx: &egui::Context) {
         let e = &mut self.export_all;
         if let Some(job) = &e.job {
-            match poll_job(&job.rx, t("NetCDF export", "Der NetCDF-Export")) {
+            match poll_job(&job.rx, || t("NetCDF export", "Der NetCDF-Export").into()) {
                 Some(r) => {
                     let (done, total) = (job.done.load(Relaxed), job.total);
                     e.errors = r.unwrap_or_else(|m| vec![m]);
                     let failed = e.errors.len();
                     e.note = if job.cancel.load(Relaxed) && done < total {
-                        tf!(
+                        msg!(
                             "Cancelled: {done} of {total} runs done, {failed} failed.",
                             "Abgebrochen: {done} von {total} Läufen fertig, {failed} fehlgeschlagen."
                         )
                     } else {
-                        tf!(
+                        msg!(
                             "{done} of {total} runs done, {failed} failed.",
                             "{done} von {total} Läufen fertig, {failed} fehlgeschlagen."
                         )
@@ -209,7 +208,7 @@ impl App {
                     let rx = spawn(ui.ctx(), move || {
                         export_runs(&picked, &dir, kind, &s, &d, &c)
                     });
-                    (e.note, e.errors) = (String::new(), Vec::new());
+                    (e.note, e.errors) = (Msg::default(), Vec::new());
                     e.job = Some(Job {
                         total,
                         done,
@@ -220,11 +219,11 @@ impl App {
             }
         }
         if !e.note.is_empty() {
-            ui.label(&e.note);
+            ui.label(&*e.note);
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for line in &e.errors {
-                ui.colored_label(ui.visuals().error_fg_color, errors::text(line));
+                ui.colored_label(ui.visuals().error_fg_color, &**line);
             }
         });
     }

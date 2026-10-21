@@ -7,7 +7,7 @@ use semver::Version;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg};
 
 /// A published release newer than the running app.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,17 +21,19 @@ pub struct Release {
 
 /// The newest release above `current` in the GitHub releases JSON; drafts are skipped,
 /// pre-releases count (every release so far is one).
-pub fn newest(json: &str, current: &Version) -> Result<Option<Release>, String> {
+pub fn newest(json: &str, current: &Version) -> Result<Option<Release>, Msg> {
     let list: Value = serde_json::from_str(json).map_err(|e| {
-        tf!(
+        msg!(
             "Unreadable release list: {e}",
             "Unlesbare Versionsliste: {e}"
         )
     })?;
-    let list = list.as_array().ok_or(t(
-        "Unexpected release list from GitHub",
-        "Unerwartete Versionsliste von GitHub",
-    ))?;
+    let list = list.as_array().ok_or_else(|| {
+        msg!(
+            "Unexpected release list from GitHub",
+            "Unerwartete Versionsliste von GitHub"
+        )
+    })?;
     Ok(list
         .iter()
         .filter(|r| r["draft"].as_bool() == Some(false))
@@ -72,8 +74,8 @@ pub fn expected_sum<'a>(sums: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// Accepts `data` only if `SHA256SUMS.txt` of the same release lists `name` with its exact hash.
-pub fn verify(data: &[u8], sums: &str, name: &str) -> Result<(), String> {
-    let expected = expected_sum(sums, name).ok_or(tf!(
+pub fn verify(data: &[u8], sums: &str, name: &str) -> Result<(), Msg> {
+    let expected = expected_sum(sums, name).ok_or(msg!(
         "SHA256SUMS.txt does not list {name}",
         "SHA256SUMS.txt führt {name} nicht auf"
     ))?;
@@ -84,7 +86,7 @@ pub fn verify(data: &[u8], sums: &str, name: &str) -> Result<(), String> {
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
-        Err(tf!(
+        Err(msg!(
             "The checksum of {name} does not match; nothing was installed.",
             "Die Prüfsumme von {name} stimmt nicht; nichts wurde installiert."
         ))

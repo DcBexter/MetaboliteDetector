@@ -203,7 +203,7 @@ fn every_ui_text_is_translated() {
     );
 }
 
-/// S8: an error shown in red is a fixed text or goes through `errors::text`, which translates what
+/// S8: an error shown in red is a fixed text, a stored `Msg` (`&**e`) or goes through `errors::text`, which translates what
 /// `md-core` says (#339). `text` is the hit list of the batch table, not an error.
 #[test]
 fn error_labels_translate_core_messages() {
@@ -230,7 +230,7 @@ fn error_labels_translate_core_messages() {
         ] {
             for (at, _) in text.match_indices(key) {
                 let arg = text[at + key.len()..].trim_start();
-                let ok = ["errors::text(", "t(", "tf!(", "lang::t(", "text)"]
+                let ok = ["errors::text(", "t(", "tf!(", "lang::t(", "text)", "&**"]
                     .iter()
                     .any(|p| arg.starts_with(p));
                 if !ok {

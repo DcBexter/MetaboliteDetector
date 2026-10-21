@@ -4,6 +4,8 @@ use std::sync::mpsc;
 
 use eframe::egui;
 
+use crate::lang::{Msg, tf};
+
 /// Runs `job` on its own thread and wakes the UI when it is done, so the window never freezes.
 pub fn spawn<T: Send + 'static>(
     ctx: &egui::Context,
@@ -27,14 +29,14 @@ pub fn spawn<T: Send + 'static>(
 
 /// Polls a job from `spawn`: `None` while it runs, `Err` when its thread panicked (the sender is
 /// dropped unsent), so callers can report it and not wait or restart forever.
-pub fn poll_job<T>(rx: &mpsc::Receiver<T>, what: &str) -> Option<Result<T, String>> {
+pub fn poll_job<T>(rx: &mpsc::Receiver<T>, what: impl Fn() -> String) -> Option<Result<T, Msg>> {
     match rx.try_recv() {
         Ok(v) => Some(Ok(v)),
         Err(mpsc::TryRecvError::Empty) => None,
-        Err(mpsc::TryRecvError::Disconnected) => Some(Err(crate::lang::tf!(
-            "{what} crashed",
-            "{what} ist abgestürzt"
-        ))),
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(Msg::new(|| {
+            let what = what();
+            tf!("{what} crashed", "{what} ist abgestürzt")
+        }))),
     }
 }
 
@@ -50,12 +52,12 @@ mod tests {
         let rx = spawn(&ctx, || -> u8 { panic!("boom") });
         let started = Instant::now();
         let result = loop {
-            if let Some(r) = poll_job(&rx, "test job") {
+            if let Some(r) = poll_job(&rx, || "test job".into()) {
                 break r;
             }
             assert!(started.elapsed().as_secs() < 10, "job never finished");
             std::thread::yield_now();
         };
-        assert_eq!(result, Err("test job crashed".to_string()));
+        assert_eq!(result.unwrap_err().to_string(), "test job crashed");
     }
 }

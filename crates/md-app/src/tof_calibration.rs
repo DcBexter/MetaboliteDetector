@@ -12,7 +12,7 @@ use md_core::decimate;
 use md_core::tof::{TofCalibration, TofError, peak_bin};
 
 use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use crate::{poll_job, spawn};
 
@@ -33,13 +33,13 @@ pub struct TofWindow {
     run: Option<Summed>,
     xs: Vec<f64>,
     ys: Vec<f64>,
-    job: Option<mpsc::Receiver<Result<Summed, String>>>,
+    job: Option<mpsc::Receiver<Result<Summed, Msg>>>,
     rows: Vec<Row>,
     degree: usize,
     /// Bins around a click searched for the peak.
     reach: f32,
-    note: Option<String>,
-    error: Option<String>,
+    note: Option<Msg>,
+    error: Option<Msg>,
 }
 
 impl Default for TofWindow {
@@ -64,7 +64,8 @@ impl TofWindow {
     pub fn window(&mut self, ctx: &egui::Context, fwhm: f64) {
         if let Some(rx) = &self.job
             && let Some(result) =
-                poll_job(rx, t("FastFlight import", "FastFlight-Import")).map(|r| r.and_then(|x| x))
+                poll_job(rx, || t("FastFlight import", "FastFlight-Import").into())
+                    .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(run) => self.set_run(run),
@@ -91,7 +92,7 @@ impl TofWindow {
         if let Some(e) = &self.error {
             let mut clear = false;
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
+                ui.colored_label(ui.visuals().error_fg_color, &**e);
                 clear = ui.small_button(t("Clear", "Leeren")).clicked();
             });
             if clear {
@@ -99,7 +100,7 @@ impl TofWindow {
             }
         }
         if let Some(n) = &self.note {
-            ui.label(n);
+            ui.label(&**n);
         }
         if self.job.is_some() {
             ui.horizontal(|ui| {
@@ -141,7 +142,7 @@ impl TofWindow {
                 self.job = Some(spawn(&ctx, move || {
                     md_core::fastflight::bin_spectrum(&path)
                         .map(|s| (path, s))
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string().into())
                 }));
             }
             if ui
@@ -185,12 +186,11 @@ impl TofWindow {
                     })
                     .collect();
                 self.note = Some(match self.rows.is_empty() {
-                    true => t(
+                    true => msg!(
                         "The file lists no reference ions; add them from the run.",
-                        "Die Datei enthält keine Referenzionen; fügen Sie sie aus dem Lauf hinzu.",
-                    )
-                    .into(),
-                    false => tf!(
+                        "Die Datei enthält keine Referenzionen; fügen Sie sie aus dem Lauf hinzu."
+                    ),
+                    false => msg!(
                         "{} reference ions loaded",
                         "{} Referenzionen geladen",
                         self.rows.len()
@@ -198,7 +198,7 @@ impl TofWindow {
                 });
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+            Err(e) => self.error = Some(format!("{}: {e}", path.display()).into()),
         }
     }
 
@@ -249,13 +249,10 @@ impl TofWindow {
                     used: true,
                 }),
                 None => {
-                    self.note = Some(
-                        t(
-                            "No peak within reach of the click",
-                            "Kein Peak in Reichweite des Klicks",
-                        )
-                        .into(),
-                    )
+                    self.note = Some(msg!(
+                        "No peak within reach of the click",
+                        "Kein Peak in Reichweite des Klicks"
+                    ))
                 }
             }
         }
@@ -392,8 +389,8 @@ impl TofWindow {
                 .map(|r| (r.bin as f32, r.mz))
                 .collect();
             match c.write(&path, &pairs) {
-                Ok(()) => self.note = Some(tf!("Saved {}", "Gespeichert: {}", path.display())),
-                Err(e) => self.error = Some(e.to_string()),
+                Ok(()) => self.note = Some(msg!("Saved {}", "Gespeichert: {}", path.display())),
+                Err(e) => self.error = Some(e.to_string().into()),
             }
         }
     }

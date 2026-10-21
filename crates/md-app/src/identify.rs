@@ -215,14 +215,14 @@ impl App {
     pub fn update_nist(&mut self, ctx: &egui::Context) {
         let wanted = self.settings.applied.search();
         if let Some(rx) = &self.nist.job
-            && let Some(result) = poll_job(rx, t("NIST library", "NIST-Bibliothek"))
+            && let Some(result) = poll_job(rx, || t("NIST library", "NIST-Bibliothek").into())
         {
             match result {
                 Ok(Ok(lib)) => {
                     self.nist.lib = Some(lib);
                     self.nist.failed = None;
                 }
-                Ok(Err(e)) => self.error = Some(e),
+                Ok(Err(e)) => self.error = Some(e.into()),
                 Err(e) => {
                     self.error = Some(e);
                     self.nist.failed = Some(wanted.clone());
@@ -289,11 +289,11 @@ impl App {
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.library_job
-            && let Some(result) = poll_job(rx, t("library search", "Bibliothekssuche"))
+            && let Some(result) = poll_job(rx, || t("library search", "Bibliothekssuche").into())
         {
             match result {
                 Ok(Ok(lib)) => self.library = Some(lib),
-                Ok(Err(e)) => self.error = Some(e),
+                Ok(Err(e)) => self.error = Some(e.into()),
                 Err(e) => {
                     self.error = Some(e);
                     self.library_failed = Some(self.wanted_search());
@@ -332,7 +332,7 @@ impl App {
                     && k.2 == reference
             };
             if let Some((k, rx)) = &run.ident_job
-                && let Some(result) = poll_job(rx, &{
+                && let Some(result) = poll_job(rx, || {
                     let name = &run.name;
                     tf!("{name}: identification", "{name}: Identifizierung")
                 })

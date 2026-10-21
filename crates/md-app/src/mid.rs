@@ -8,7 +8,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, Plot};
@@ -49,7 +49,7 @@ struct Done {
     /// The old program's text exports: the MIDs, and for the per-run methods the statistics.
     text: String,
     stats_text: Option<String>,
-    errors: Vec<String>,
+    errors: Vec<Msg>,
     /// Runs that loaded and were scanned.
     scanned: usize,
     took: Duration,
@@ -128,7 +128,7 @@ struct Job {
     done: Arc<AtomicUsize>,
     cancel: Arc<AtomicBool>,
     started: Instant,
-    rx: mpsc::Receiver<Result<Done, String>>,
+    rx: mpsc::Receiver<Result<Done, Msg>>,
 }
 
 pub struct MidWindow {
@@ -148,7 +148,7 @@ pub struct MidWindow {
     table: IsotopeTable,
     job: Option<Job>,
     result: Option<Done>,
-    note: String,
+    note: Msg,
 }
 
 impl Default for MidWindow {
@@ -167,7 +167,7 @@ impl Default for MidWindow {
             table: IsotopeTable::standard(),
             job: None,
             result: None,
-            note: String::new(),
+            note: Msg::default(),
         }
     }
 }
@@ -196,14 +196,14 @@ impl MidWindow {
     fn poll(&mut self, ctx: &egui::Context) {
         let Some(job) = &self.job else { return };
         match job.rx.try_recv() {
-            Ok(Ok(done)) => (self.result, self.note) = (Some(done), String::new()),
+            Ok(Ok(done)) => (self.result, self.note) = (Some(done), Msg::default()),
             Ok(Err(e)) => self.note = e,
             Err(mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(Duration::from_millis(200));
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.note = t("MID determination crashed.", "MID-Bestimmung abgestürzt.").into()
+                self.note = msg!("MID determination crashed.", "MID-Bestimmung abgestürzt.")
             }
         }
         self.job = None;
@@ -271,11 +271,10 @@ impl MidWindow {
             let started = Instant::now();
             let mids_lib = mid_library(&l.compounds);
             if mids_lib.is_empty() {
-                return Err(t(
+                return Err(msg!(
                     "No substance of the library has a fragment with sum formula (MID fragments in the library editor).",
-                    "Keine Substanz der Bibliothek hat ein Fragment mit Summenformel (MID-Fragmente im Bibliothekseditor).",
-                )
-                .into());
+                    "Keine Substanz der Bibliothek hat ein Fragment mit Summenformel (MID-Fragmente im Bibliothekseditor)."
+                ));
             }
             // The shift reference is an index into the scanned library, which keeps only
             // substances with fragments.
@@ -285,7 +284,7 @@ impl MidWindow {
                 true => PreparedLibrary::new_rt_only(&mids_lib, &l.settings),
                 false => PreparedLibrary::new(&mids_lib, &l.settings),
             };
-            let cancelled = || t("Cancelled.", "Abgebrochen.").to_owned();
+            let cancelled = || msg!("Cancelled.", "Abgebrochen.");
             let (mut runs, mut errors) =
                 scan_runs(&paths, &prepared, &s, 4, &d, &c).ok_or_else(cancelled)?;
             // The quant ions are the fragment ions, so the rescan fills those that were not deconvoluted.
@@ -300,8 +299,9 @@ impl MidWindow {
             )
             .ok_or_else(cancelled)?;
             errors.extend(more.errors);
+            let mut errors: Vec<Msg> = errors.into_iter().map(Msg::from).collect();
             if let Some((n, _)) = shift_ref.filter(|_| s.shift.is_none()) {
-                errors.push(tf!(
+                errors.push(msg!(
                     "RT shift reference {n} is not a substance with MID fragments; scanned without RT shift.",
                     "RT-Verschiebungsreferenz {n} ist keine Substanz mit MID-Fragmenten; ohne RT-Verschiebung gescannt."
                 ));
@@ -433,7 +433,7 @@ impl MidWindow {
             }
         });
         if !self.note.is_empty() {
-            ui.label(errors::text(&self.note));
+            ui.label(&*self.note);
         }
     }
 
@@ -581,7 +581,7 @@ fn runs(ui: &mut egui::Ui, title: &str, paths: &mut Vec<PathBuf>) {
 
 /// Substances, fragments and per column the MID ± CI of each isotopomer and R², with a bar chart.
 /// shortcut: every substance header is laid out each frame; fine for hundreds of substances.
-fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
+fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut Msg) {
     ui.horizontal_wrapped(|ui| {
         let took = crate::view::took(r.took);
         ui.label(match r.mids.compounds.len() {
@@ -597,16 +597,16 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
         let mids = [
             t("Export MIDs…", "MIDs exportieren…"),
             t("Copy MIDs", "MIDs kopieren"),
-            t("Copied the MIDs.", "MIDs kopiert."),
         ];
-        export_buttons(ui, mids, "mids.txt", &r.text, note);
+        let copied = msg!("Copied the MIDs.", "MIDs kopiert.");
+        export_buttons(ui, mids, copied, "mids.txt", &r.text, note);
         if let Some(text) = &r.stats_text {
             let stats = [
                 t("Export statistics…", "Statistik exportieren…"),
                 t("Copy statistics", "Statistik kopieren"),
-                t("Copied the statistics.", "Statistik kopiert."),
             ];
-            export_buttons(ui, stats, "mid-statistics.txt", text, note);
+            let copied = msg!("Copied the statistics.", "Statistik kopiert.");
+            export_buttons(ui, stats, copied, "mid-statistics.txt", text, note);
         }
     });
     let error = ui.visuals().error_fg_color;
@@ -619,7 +619,10 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
             ),
         );
     }
-    for e in r.errors.iter().chain(&r.mids.errors) {
+    for e in &r.errors {
+        ui.colored_label(error, &**e);
+    }
+    for e in &r.mids.errors {
         ui.colored_label(error, errors::text(e));
     }
     let mut mv = None;
@@ -675,10 +678,17 @@ fn result_view(ui: &mut egui::Ui, r: &mut Done, note: &mut String) {
     }
 }
 
-/// "Export …" and "Copy …" of one of the old program's text exports; `labels` are
-/// `[export button, copy button, note after copying]`.
-fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, note: &mut String) {
-    let [export, copy, copied] = labels;
+/// "Export …" and "Copy …" of one of the old program's text exports; `labels` are `[export button, copy button]`,
+/// `copied` the note after copying.
+fn export_buttons(
+    ui: &mut egui::Ui,
+    labels: [&str; 2],
+    copied: Msg,
+    file: &str,
+    text: &str,
+    note: &mut Msg,
+) {
+    let [export, copy] = labels;
     if ui.button(export).clicked()
         && let Some(p) = rfd::FileDialog::new()
             .add_filter(t("Text", "Text"), &["txt", "tsv"])
@@ -686,8 +696,8 @@ fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, 
             .save_file()
     {
         *note = match std::fs::write(&p, text) {
-            Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
-            Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
+            Ok(()) => msg!("Saved {}", "Gespeichert: {}", p.display()),
+            Err(e) => msg!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
         };
     }
     if ui
@@ -699,7 +709,7 @@ fn export_buttons(ui: &mut egui::Ui, labels: [&str; 3], file: &str, text: &str, 
         .clicked()
     {
         ui.ctx().copy_text(text.to_owned());
-        *note = copied.to_owned();
+        *note = copied;
     }
 }
 
@@ -812,8 +822,8 @@ fn fragment_plot(
 ) {
     let n = f.isotopomers;
     let fits = columns.iter().zip(&f.fits);
-    // Per series: name and per isotopomer the value and its error.
-    let mut series: Vec<(&str, Vec<_>)> = fits
+    // Per series: key for the plot (hidden series stay hidden in another language), name and per isotopomer the value and its error.
+    let mut series: Vec<(&str, &str, Vec<_>)> = fits
         .map(|(c, fit)| {
             let v = (0..n).map(|k| match fit {
                 Some(x) => (
@@ -822,11 +832,12 @@ fn fragment_plot(
                 ),
                 None => (f64::NAN, None),
             });
-            (c.as_str(), v.collect())
+            (c.as_str(), c.as_str(), v.collect())
         })
         .collect();
     if !stats.is_empty() {
         series.push((
+            "Mean ± StdErr",
             t("Mean ± StdErr", "Mittelwert ± Std.-Fehler"),
             stats.iter().map(|s| (s.0, Some(s.1))).collect(),
         ));
@@ -850,12 +861,16 @@ fn fragment_plot(
         })
         .show(ui, |p| {
             let mut errors = Vec::new();
-            for (j, (name, values)) in series.iter().enumerate() {
+            for (j, (key, name, values)) in series.iter().enumerate() {
                 let x = |k: usize| k as f64 - 0.4 + width * (j as f64 + 0.5);
                 let bars = (values.iter().enumerate())
                     .filter(|(_, v)| v.0.is_finite())
                     .map(|(k, v)| Bar::new(x(k), v.0).width(width * 0.9).name(format!("M{k}")));
-                p.bar_chart(BarChart::new(*name, bars.collect()).color(crate::color(j)));
+                p.bar_chart(
+                    BarChart::new(*name, bars.collect())
+                        .id(*key)
+                        .color(crate::color(j)),
+                );
                 for (k, (v, e)) in values.iter().enumerate() {
                     if let Some(e) = e.filter(|e| e.is_finite() && v.is_finite()) {
                         errors.push(

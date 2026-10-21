@@ -299,7 +299,9 @@ impl App {
                     );
                     md_core::andi::write_with_tic(&path, &reduced, &r.data.tic())
                 };
-                self.error = result.err().map(|e| format!("{}: {e}", path.display()));
+                self.error = result
+                    .err()
+                    .map(|e| format!("{}: {e}", path.display()).into());
                 ui.close();
             }
         }

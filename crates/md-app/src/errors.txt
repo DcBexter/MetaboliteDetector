@@ -162,3 +162,5 @@ PCA needs at least two runs	Die PCA braucht mindestens zwei Läufe
 PCA needs at least one substance with a value in every run and some spread	Die PCA braucht mindestens eine Substanz mit einem Wert in jedem Lauf und etwas Streuung
 # The .mdlib header, after the `expected ...` texts above that this would also match.
 expected `{}`	`{}` erwartet
+# loading.rs (the window itself)
+no scans	keine Scans

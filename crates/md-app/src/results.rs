@@ -12,9 +12,8 @@ use md_core::search::Identification;
 use std::sync::{Arc, Weak};
 
 use crate::Run;
-use crate::errors;
 use crate::identify::Library;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 
 /// A column of the list in the app's spelling; the CSV keeps the old program's
 /// (`md_core::results::write_csv`).
@@ -119,7 +118,7 @@ pub struct Results {
     sort: Option<(Col, bool)>,
     /// Library compound whose components are listed.
     looked_up: Option<usize>,
-    note: String,
+    note: Msg,
     cache: Option<(Stamp, Vec<Row>)>,
 }
 
@@ -200,7 +199,7 @@ impl Results {
             selected = self.found_list(ui, run, lib, cutoff);
         }
         if !self.note.is_empty() {
-            ui.label(errors::text(&self.note));
+            ui.label(&*self.note);
         }
 
         let mut order: Vec<usize> = (0..rows.len())
@@ -287,12 +286,12 @@ impl Results {
             self.note = match &result {
                 Ok(n) => {
                     let p = p.display();
-                    tf!(
+                    msg!(
                         "Loaded {n} components from {p}",
                         "{n} Komponenten aus {p} geladen"
                     )
                 }
-                Err(e) => tf!("Load failed: {e}", "Laden fehlgeschlagen: {e}"),
+                Err(e) => msg!("Load failed: {e}", "Laden fehlgeschlagen: {e}"),
             };
             return result.is_ok();
         }
@@ -303,7 +302,7 @@ impl Results {
         &self.note
     }
 
-    pub fn set_note(&mut self, note: String) {
+    pub fn set_note(&mut self, note: Msg) {
         self.note = note;
     }
 
@@ -313,15 +312,15 @@ impl Results {
             self.note = match save_components(run, &p, cal) {
                 Ok(n) => {
                     let p = p.display();
-                    tf!(
+                    msg!(
                         "Saved {n} components to {p}",
                         "{n} Komponenten in {p} gespeichert"
                     )
                 }
-                Err(e) => tf!("Save failed: {e}", "Speichern fehlgeschlagen: {e}"),
+                Err(e) => msg!("Save failed: {e}", "Speichern fehlgeschlagen: {e}"),
             };
         } else {
-            self.note.clear();
+            self.note = Msg::default();
         }
     }
 
@@ -658,13 +657,13 @@ fn load_components(run: &mut Run, path: &std::path::Path) -> Result<usize, Strin
 }
 
 /// Asks for a file and writes the table; returns the note to show.
-fn export(run: &str, rows: &[ResultRow]) -> String {
+fn export(run: &str, rows: &[ResultRow]) -> Msg {
     let Some(p) = rfd::FileDialog::new()
         .add_filter("CSV", &["csv"])
         .set_file_name(format!("{run}-results.csv"))
         .save_file()
     else {
-        return String::new();
+        return Msg::default();
     };
     match std::fs::File::create(&p)
         .map(std::io::BufWriter::new)
@@ -672,9 +671,9 @@ fn export(run: &str, rows: &[ResultRow]) -> String {
     {
         Ok(()) => {
             let p = p.display();
-            tf!("Saved {p}", "{p} gespeichert")
+            msg!("Saved {p}", "{p} gespeichert")
         }
-        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
+        Err(e) => msg!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     }
 }
 

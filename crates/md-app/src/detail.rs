@@ -8,7 +8,7 @@ use md_core::library::LibraryCompound;
 use md_core::search::LibraryHit;
 use md_core::spectrum::Normalization;
 
-use crate::lang::{t, tf};
+use crate::lang::{Msg, t, tf};
 use crate::{Run, Trace, export, identify};
 
 /// Old split plot: the found spectrum alone, found above and library mirrored below, or their difference.
@@ -64,17 +64,22 @@ pub fn charts(mode: Mode, c: &Comparison, library: &str) -> Vec<BarChart> {
     };
     match mode {
         Mode::Normal => Vec::new(),
+        // The ids are not the names: egui_plot hides a curve by its id, which must not change with the language (#341).
         Mode::Split => vec![
-            BarChart::new(t("Found", "Gefunden"), bars(c.found.clone())),
+            BarChart::new(t("Found", "Gefunden"), bars(c.found.clone())).id("found"),
             BarChart::new(
                 tf!("Library: {library}", "Bibliothek: {library}"),
                 bars(c.library.iter().map(|v| -v).collect()),
-            ),
+            )
+            .id("library"),
         ],
-        Mode::Difference => vec![BarChart::new(
-            t("Found − library", "Gefunden − Bibliothek"),
-            bars(c.difference()),
-        )],
+        Mode::Difference => vec![
+            BarChart::new(
+                t("Found − library", "Gefunden − Bibliothek"),
+                bars(c.difference()),
+            )
+            .id("difference"),
+        ],
     }
 }
 
@@ -85,7 +90,7 @@ pub fn controls(
     title: &str,
     cmp: Option<&(Comparison, &LibraryCompound)>,
     file_stem: &str,
-) -> Option<String> {
+) -> Option<Msg> {
     let mut error = None;
     // On its own line: beside a long title the buttons are squeezed and push the controls wider.
     ui.strong(title);
@@ -350,6 +355,28 @@ mod tests {
 
     use super::*;
     use crate::results::tests::run;
+
+    #[test]
+    fn chart_ids_do_not_depend_on_the_language() {
+        use egui_plot::PlotItem;
+        let c = Comparison {
+            mz: vec![73.0],
+            found: vec![1.0],
+            library: vec![1.0],
+        };
+        let ids = |lang| {
+            crate::lang::set(lang);
+            [Mode::Split, Mode::Difference]
+                .into_iter()
+                .flat_map(|m| charts(m, &c, "lib"))
+                .map(|chart| PlotItem::id(&chart))
+                .collect::<Vec<_>>()
+        };
+        let en = ids(crate::lang::Lang::En);
+        assert_eq!(en.len(), 3);
+        assert_eq!(en, ids(crate::lang::Lang::De));
+        crate::lang::set(crate::lang::Lang::En);
+    }
 
     #[test]
     fn panel_and_comparison_follow_the_selected_component() {

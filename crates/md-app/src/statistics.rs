@@ -2,7 +2,7 @@
 //! the user sees. The numbers come from `md_core::stats`.
 
 use crate::errors;
-use crate::lang::{self, tf};
+use crate::lang::{self, Msg, msg, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -54,7 +54,7 @@ pub struct Statistics {
     pc: [usize; 2],
     cache: Option<Cache>,
     pca: Option<(u64, bool, Result<Pca, String>)>,
-    note: String,
+    note: Msg,
 }
 
 /// Comparison of the table generation `0` with the groups and options in `1`.
@@ -78,7 +78,7 @@ impl Default for Statistics {
             pc: [0, 1],
             cache: None,
             pca: None,
-            note: String::new(),
+            note: Msg::default(),
         }
     }
 }
@@ -243,7 +243,7 @@ fn filter_row(ui: &mut egui::Ui, t: &Table, p_max: &mut f64, sort_by_p: &mut boo
 }
 
 /// Count of the shown rows and the CSV button; returns the note to show after a save.
-fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) -> Option<String> {
+fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) -> Option<Msg> {
     let mut note = None;
     ui.horizontal(|ui| {
         let n = shown.len();
@@ -261,8 +261,8 @@ fn export_row(ui: &mut egui::Ui, t: &Table, shown: &[&Biomarker], total: usize) 
         {
             let rows: Vec<Biomarker> = shown.iter().map(|r| (*r).clone()).collect();
             note = Some(match write_file(&p, |w| stats::write_csv(t, &rows, w)) {
-                Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
-                Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
+                Ok(()) => msg!("Saved {}", "Gespeichert: {}", p.display()),
+                Err(e) => msg!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
             });
         }
     });
@@ -479,7 +479,7 @@ impl Statistics {
             }
         }
         if !self.note.is_empty() {
-            ui.label(&self.note);
+            ui.label(&*self.note);
         }
     }
 
@@ -767,8 +767,11 @@ fn variance_plot(ui: &mut egui::Ui, p: &Pca) {
         .x_axis_label(lang::t("Component", "Komponente"))
         .y_axis_label(lang::t("Explained variance (%)", "Erklärte Varianz (%)"))
         .show(ui, |plot| {
-            plot.bar_chart(BarChart::new(lang::t("single", "einzeln"), bars).color(color(0)));
-            plot.line(Line::new(lang::t("cumulative", "kumuliert"), cumulative).color(color(1)));
+            // Fixed ids: a curve hidden in the legend stays hidden after a language switch (#341).
+            let single = BarChart::new(lang::t("single", "einzeln"), bars);
+            plot.bar_chart(single.id("single").color(color(0)));
+            let sum = Line::new(lang::t("cumulative", "kumuliert"), cumulative);
+            plot.line(sum.id("cumulative").color(color(1)));
         });
 }
 
