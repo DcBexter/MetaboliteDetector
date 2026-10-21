@@ -201,7 +201,7 @@ fn scan_and_save(
     s: &ScanSettings,
     cmp: Option<&Path>,
 ) -> Result<(Scanned, Option<String>), TooLarge> {
-    let mut traces = IonTraces::new(&c)?;
+    let mut traces = IonTraces::new(&c, s.peaks.fwhm)?;
     // The ion-major copy and the times are all the rest needs; dropping the spectra now halves the
     // peak memory per run.
     let times = c.scan_times_s.clone();
@@ -1339,7 +1339,7 @@ NUM PEAKS: 1
         let direct = scan_chromatogram(run.clone(), &prepared, &s).unwrap();
         assert_eq!(direct.found.len(), 2);
 
-        let mut traces = IonTraces::new(&run).unwrap();
+        let mut traces = IonTraces::new(&run, 0.5).unwrap();
         let peaks = traces.detect_peaks(&s.peaks);
         let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
         let masses: Vec<u32> = peaks
@@ -1413,7 +1413,7 @@ NUM PEAKS: 1
         let saved: Vec<PathBuf> = runs.iter().map(|p| p.with_extension("cmp")).collect();
 
         // The saved components are those of the deconvolution, with the RI of the search.
-        let mut traces = IonTraces::new(&run).unwrap();
+        let mut traces = IonTraces::new(&run, 0.5).unwrap();
         let peaks = traces.detect_all_peaks(&s.peaks);
         let comps = deconvolute(&traces, &peaks, &run.scan_times_s, &s.deconv);
         let (loaded, _, _) =
