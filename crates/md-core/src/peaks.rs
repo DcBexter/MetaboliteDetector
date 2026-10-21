@@ -594,7 +594,7 @@ pub const NOISE_FACTOR: f64 = 1.0;
 
 /// Index of the highest value, starting from `start`: a later index wins only with a strictly
 /// higher value (strict `>`, like the old code).
-fn argmax(w: &[f32], start: usize) -> usize {
+fn argmax<T: PartialOrd>(w: &[T], start: usize) -> usize {
     (0..w.len()).fold(start, |m, k| if w[k] > w[m] { k } else { m })
 }
 
@@ -690,7 +690,7 @@ pub fn reorder_peaks(
     struct Profile {
         peaks: Vec<usize>,
         last_row: usize,
-        apex: u32,
+        sum: Summed,
         /// insertIonProfile puts the profile into bins `lo..hi`.
         lo: usize,
         hi: usize,
@@ -721,7 +721,7 @@ pub fn reorder_peaks(
                     p.row as usize == n && (traces.mz[last] - traces.mz[n]).abs() <= ion_dist
                 })
             })
-            .min_by_key(|j| p.apex_scan.abs_diff(profiles[*j].apex));
+            .min_by_key(|j| p.apex_scan.abs_diff(profiles[*j].sum.apex()));
         match winner {
             None => {
                 // insertIonProfile: the new profile sits in bins [b - dist, b + dist).
@@ -732,22 +732,22 @@ pub fn reorder_peaks(
                 profiles.push(Profile {
                     peaks: vec![k],
                     last_row: p.row as usize,
-                    apex: summed_apex(traces, peaks, &[k], None).0,
+                    sum: Summed::new(traces, &p),
                     lo,
                     hi,
                 });
             }
-            Some(j) if p.first_scan < profiles[j].apex && profiles[j].apex < p.last_scan => {
+            Some(j) if (p.first_scan + 1..p.last_scan).contains(&profiles[j].sum.apex()) => {
                 let w = &mut profiles[j];
                 w.peaks.push(k);
                 w.last_row = p.row as usize;
-                w.apex = summed_apex(traces, peaks, &w.peaks, None).0;
+                w.sum.add(traces, &p);
             }
             Some(_) => {}
         }
     }
     for w in profiles.iter().filter(|w| w.peaks.len() >= 2) {
-        let (apex, precise) = summed_apex(traces, peaks, &w.peaks, Some(number_bins));
+        let (apex, precise) = (w.sum.apex(), w.sum.precise_apex(number_bins));
         for k in &w.peaks {
             let q = &mut peaks[*k];
             if (q.first_scan..=q.last_scan).contains(&apex) {
@@ -758,26 +758,49 @@ pub fn reorder_peaks(
     }
 }
 
-/// Apex and precise apex of the old summed `Peak(list)` (§4.3): the members' intensities added
-/// per scan over their joint range. The precise apex only with `bins` (the fit is the costly part).
-fn summed_apex(
-    traces: &IonTraces,
-    peaks: &[Peak],
-    members: &[usize],
-    bins: Option<u32>,
-) -> (u32, Option<f32>) {
-    let first = members.iter().map(|k| peaks[*k].first_scan).min().unwrap();
-    let last = members.iter().map(|k| peaks[*k].last_scan).max().unwrap();
-    let mut sum = vec![0.0f32; (last - first + 1) as usize];
-    for p in members.iter().map(|k| &peaks[*k]) {
+/// The old summed `Peak(list)` of a profile (§4.3): the members' intensities added per scan over
+/// their joint range, kept as a running f64 sum so a join costs one member, not the whole profile.
+struct Summed {
+    first: u32,
+    sum: Vec<f64>,
+    apex: usize,
+}
+
+impl Summed {
+    fn new(traces: &IonTraces, p: &Peak) -> Self {
+        let mut s = Self {
+            first: p.first_scan,
+            sum: Vec::new(),
+            apex: 0,
+        };
+        s.add(traces, p);
+        s
+    }
+
+    fn add(&mut self, traces: &IonTraces, p: &Peak) {
+        if p.first_scan < self.first {
+            let grow = (self.first - p.first_scan) as usize;
+            self.sum.splice(0..0, std::iter::repeat_n(0.0, grow));
+            self.first = p.first_scan;
+        }
+        let end = (p.last_scan - self.first + 1) as usize;
+        if self.sum.len() < end {
+            self.sum.resize(end, 0.0);
+        }
         let trace = traces.trace(p.row as usize);
         for sc in p.first_scan..=p.last_scan {
-            sum[(sc - first) as usize] += trace[sc as usize];
+            self.sum[(sc - self.first) as usize] += f64::from(trace[sc as usize]);
         }
+        self.apex = argmax(&self.sum, 0);
     }
-    let apex = argmax(&sum, 0);
-    let precise = bins.and_then(|b| precise_apex(&sum, first as usize, apex, b));
-    (first + apex as u32, precise)
+
+    fn apex(&self) -> u32 {
+        self.first + self.apex as u32
+    }
+
+    fn precise_apex(&self, bins: u32) -> Option<f32> {
+        precise_apex(&self.sum, self.first as usize, self.apex, bins)
+    }
 }
 
 /// Kernel of the old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): a negative second
@@ -899,14 +922,14 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
 /// scan) like the old program and truncated to `1 / bins` scan after adding half a bin. `None` at
 /// the peak edge or for a vertex ≥ 1 scan from the apex. The fit is the old one bit for bit
 /// ([`crate::quadfit`]), so half-bin ties and flat tops land where the old program puts them.
-fn precise_apex(v: &[f32], first: usize, apex: usize, bins: u32) -> Option<f32> {
+fn precise_apex<T: Copy + Into<f64>>(v: &[T], first: usize, apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
     }
     let scan = (first + apex) as f64;
     let bins = bins as f64;
     let x = [-1.0, 0.0, 1.0].map(|k| bins * (scan + k));
-    let y = [0, 1, 2].map(|k| v[apex - 1 + k] as f64);
+    let y = [0, 1, 2].map(|k| v[apex - 1 + k].into());
     let c = crate::quadfit::quadratic(x, y);
     let q = c[1] / (c[2] * -2.0) + 0.5;
     // C's `(int)q`; outside the int range (or NaN) x86 gives INT_MIN, never within a scan.
