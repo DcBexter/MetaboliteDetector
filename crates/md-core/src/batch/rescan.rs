@@ -353,20 +353,21 @@ mod tests {
 
     #[test]
     fn calibrated_runs_rank_peaks_by_ri() {
-        // 10 RI/s up to 30 s, then 1 RI/s. Expected RI 300 (30 s): the peak at 40 s (RI 310) is
-        // nearer in RI than the one at 28 s (RI 280), though farther in seconds.
-        let cal = RiCalibration::new([(0.0, 0.0), (30.0, 300.0), (60.0, 330.0)]).unwrap();
-        let c = run(80, &[73.0], &[(0, 28.0, 50000.0), (0, 40.0, 50000.0)]);
+        // 1 RI/s up to 30 s, then 10 RI/s. Expected RI 30 (30 s): the peak at 20 s (RI 20) is
+        // nearer in RI than the one at 32 s (RI 50), though farther in seconds and from the window's
+        // middle.
+        let cal = RiCalibration::new([(0.0, 0.0), (30.0, 30.0), (60.0, 330.0)]).unwrap();
+        let c = run(80, &[73.0], &[(0, 20.0, 50000.0), (0, 32.0, 50000.0)]);
         let todo = Todo {
             compound: 0,
             ions: vec![73],
-            from_s: 20.0,
-            to_s: 50.0,
-            expected: 300.0,
+            from_s: 15.0,
+            to_s: 45.0,
+            expected: 30.0,
             calibration: Some(cal),
         };
         let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
-        assert!((out[0].2 - 40.0).abs() <= 1.0, "{}", out[0].2);
+        assert!((out[0].2 - 20.0).abs() <= 1.0, "{}", out[0].2);
     }
 
     #[test]

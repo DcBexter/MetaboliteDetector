@@ -83,8 +83,11 @@ So the order is filter, match, reproducibility, rescan. The rescan comes last an
   the kept peaks (`Peak::getValues`) and prints `INFORMATION: Found additional peak areas without deconvolution`.
 - Port (`batch/rescan.rs`): per missing ion it deconvolutes that ion's window peaks on their own and takes the
   fit of the peak nearest to the mean (in RI on a calibrated run), the higher one on a tie, else the next
-  nearest with a fit, else the raw sum of the nearest peak. It ranks by the peak's apex, not the component's
-  apex, and keeps one peak in the raw sum where the old code keeps one per exact ion value. So with ΔRI 20 and
+  nearest with a fit, else the raw sum of the nearest peak. Deviations: it ranks by the peak's apex, not the
+  component's apex; a tie goes to the higher raw apex value, not the component's ion intensity; the raw sum
+  takes the peak nearest in RI (calibrated) or RT, not in scans, and one peak where the old code keeps one per
+  exact ion value; on a calibrated run it always ranks in RI, while the old code falls back to RT for a pair
+  with an RI < 0. So with ΔRI 20 and
   no RI calibration, Glycine 3TMS (313 s) gets the m/z 177 peak at 321 s in the example runs, as in 3.3: its
   own `DefaultPeakDetector` finds no other m/z 177 peak in 302.9..323.1 s (`old-md-3.3.tsv`, runs 7235eg04,
   20 and 32).
