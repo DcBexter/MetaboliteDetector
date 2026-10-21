@@ -109,6 +109,9 @@ impl AddDialog {
             self.data.scan_times_s[self.comp.apex_scan as usize] / 60.0,
             self.ri.map_or("unknown".into(), |r| format!("{r:.1}")),
         ));
+        if self.ions.is_empty() {
+            ui.label("This component has no ion peaks (the old program saved it without), so no quantification ions are chosen.");
+        }
         if self.confirm {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
@@ -125,15 +128,23 @@ impl AddDialog {
         }
     }
 
+    /// Needs a name; exchanging the quant ions of an entry for none would only delete them.
+    fn can_apply(&self, exists: bool) -> bool {
+        let no_ions = exists && self.choice == Choice::QuantIons && self.ions.is_empty();
+        !self.name.trim().is_empty() && !no_ions
+    }
+
     /// OK (asks first for an existing name) and Cancel; returns (apply, cancel).
     fn buttons(&mut self, ui: &mut egui::Ui, exists: bool) -> (bool, bool) {
         let (mut apply, mut cancel) = (false, false);
         ui.horizontal(|ui| {
-            let ready = !self.name.trim().is_empty();
+            let ready = self.can_apply(exists);
             let label = if self.confirm { "Yes" } else { "OK" };
             let ok = ui
                 .add_enabled(ready, egui::Button::new(label))
-                .on_disabled_hover_text("Needs a name.");
+                .on_disabled_hover_text(
+                    "Needs a name, and ion peaks to exchange the quantification ions.",
+                );
             if ok.clicked() {
                 if exists && !self.confirm {
                     self.confirm = true;
@@ -368,5 +379,28 @@ mod tests {
                 signal_to_noise: 12.0
             }]
         );
+    }
+
+    /// A component the old program saved without peaks gives no ions; the dialog says so and does
+    /// not offer to exchange the quant ions of an entry for none.
+    #[test]
+    fn a_component_without_peaks_has_no_ions_and_cannot_exchange_them() {
+        let mut run = crate::results::tests::run();
+        run.components[1].peaks.clear();
+        run.component = Some(1);
+        let src = Source {
+            run: &run,
+            ri: None,
+            quant: QuantSettings::default(),
+            search: SearchSettings::default(),
+        };
+        let mut ed = LibraryEditor::default();
+        ed.start_add(&src);
+        let d = ed.add.as_mut().expect("dialog");
+        assert!(d.ions.is_empty());
+        d.choice = Choice::QuantIons;
+        assert!(!d.can_apply(true));
+        d.choice = Choice::Replace;
+        assert!(d.can_apply(true));
     }
 }
