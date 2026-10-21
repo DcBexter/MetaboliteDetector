@@ -284,7 +284,7 @@ impl App {
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
-        self.tof.window(ctx);
+        self.tof.window(ctx, self.settings.applied.sf_fwhm);
         self.info_window(ctx);
         self.library_editor(ctx);
         self.updater.window(ctx);
