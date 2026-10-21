@@ -27,6 +27,7 @@ pub mod settings;
 pub mod spectrum;
 pub mod stats;
 pub mod tof;
+pub mod view;
 
 /// Reads a run by extension: the old MetaboliteDetector cache (`.bin` + `.idx`), FastFlight raw
 /// data (`MsData.FFT`, calibrated by the `.mzcalib` next to it), else ANDI-MS NetCDF.
