@@ -1301,7 +1301,7 @@ fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
-    german(p, 3, ex)?;
+    german(p, 1, ex)?;
     let sp = settings_path(p);
     let group_stats = if ex.group_stats {
         t.write_group_stats_file(p, Some(ex.blank))
@@ -1317,7 +1317,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
             t.write_groups_file(p).transpose(),
         ),
         (
-            3,
+            1,
             msg!("group statistics", "Gruppenstatistik"),
             group_stats.transpose(),
         ),
@@ -1518,6 +1518,13 @@ fn view_controls(
                 "Exports with semicolons and decimal commas, for a spreadsheet with German locale. Off: commas and decimal points; open those with locale English (USA) in the import dialog.",
                 "Exportiert mit Semikolons und Dezimalkommas, für eine Tabellenkalkulation mit deutschem Gebietsschema. Aus: Kommas und Dezimalpunkte; diese im Importdialog mit dem Gebietsschema Englisch (USA) öffnen.",
             ));
+        if v.excel_de && groups.iter().any(|g| md_core::csv::is_zero_name(g)) {
+            // No CSV encoding keeps `01` text on a plain open; only the import option does.
+            ui.weak(lang::t(
+                "A group like 01 opens as the number 1 unless you tick \"Quoted field as text\" in the import dialog.",
+                "Eine Gruppe wie 01 öffnet sich als Zahl 1, außer im Importdialog ist \"Feld in Anführungszeichen als Text\" angehakt.",
+            ));
+        }
         if v.mode == Mode::Groups {
             let blank = ui.label(lang::t("Blank group", "Blindwertgruppe"));
             ui.add(egui::TextEdit::singleline(&mut v.blanks).desired_width(80.0))
