@@ -860,10 +860,10 @@ fn bin_to_whole_masses(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>) {
 
 /// `Compound::getCentroidCompound` of the old program for a compound without FWHM list. Points whose
 /// neighbours are at most 0.01 apart form one profile peak (rising to the apex, then falling to the
-/// valley). Its mass is the intensity-weighted mean of the points at or above half the group maximum,
-/// its intensity their sum and its FWHM their count; a lone point stays as it is with FWHM 1.
-/// Returns masses, intensities and FWHMs.
-fn centroid(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
+/// valley). Its mass is the intensity-weighted mean of the points at or above `fwhm` (`SF_FWHM`)
+/// times the group maximum, its intensity their sum and its FWHM their count; a lone point stays as
+/// it is with FWHM 1. Returns masses, intensities and FWHMs.
+fn centroid(masses: &[f32], values: &[i32], fwhm: f64) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
     let n = masses.len().min(values.len());
     let (mut out_m, mut out_v, mut out_w) = (Vec::new(), Vec::new(), Vec::new());
     let mut i = 0;
@@ -873,7 +873,7 @@ fn centroid(masses: &[f32], values: &[i32]) -> (Vec<f32>, Vec<i32>, Vec<f64>) {
         let peak = if i == end {
             Some((masses[i], values[i], 1.0))
         } else {
-            weighted_peak(&masses[i..=end], &values[i..=end], max)
+            weighted_peak(&masses[i..=end], &values[i..=end], fwhm * max)
         };
         if let Some((m, v, w)) = peak {
             out_m.push(m);
@@ -911,11 +911,15 @@ fn group_end(masses: &[f32], values: &[i32], start: usize) -> (usize, f64) {
     (j, max)
 }
 
-/// Mass, intensity and FWHM of several points; the old code drops a peak without weight.
-fn weighted_peak(ms: &[f32], vs: &[i32], max: f64) -> Option<(f32, i32, f64)> {
-    let half = max / 2.0;
+/// Mass, intensity and FWHM of the points at or above the intensity `threshold`; the old code drops
+/// a peak without weight.
+fn weighted_peak(ms: &[f32], vs: &[i32], threshold: f64) -> Option<(f32, i32, f64)> {
     let (mut weighted, mut sum, mut width) = (0.0_f64, 0.0_f64, 0.0_f64);
-    for (&m, &v) in ms.iter().zip(vs).filter(|&(_, &v)| f64::from(v) >= half) {
+    for (&m, &v) in ms
+        .iter()
+        .zip(vs)
+        .filter(|&(_, &v)| f64::from(v) >= threshold)
+    {
         weighted += f64::from(m * v as f32);
         sum += f64::from(v);
         width += 1.0;
@@ -925,8 +929,9 @@ fn weighted_peak(ms: &[f32], vs: &[i32], max: f64) -> Option<(f32, i32, f64)> {
 
 /// Writes compounds as the old program does for `kind`, byte for byte. Unlike [`write_msl`] this is for
 /// other programs (AMDIS): it rounds RT, RI and quantification ions to four decimals, so reading it
-/// back is not exact, and a `;` inside a feature value starts a new `KEY:` line.
-pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
+/// back is not exact, and a `;` inside a feature value starts a new `KEY:` line. `fwhm` is `SF_FWHM`
+/// of the centroiding.
+pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType, fwhm: f64) -> String {
     // A line break inside a value would start a new record on import.
     let one_line = |s: &str| s.replace(['\r', '\n'], " ");
     let mut s = String::new();
@@ -977,7 +982,7 @@ pub fn write_msl_as(compounds: &[LibraryCompound], kind: MslType) -> String {
                         .collect();
                     (sorted_m, sorted_v, f)
                 }
-                None => centroid(&sorted_m, &sorted_v),
+                None => centroid(&sorted_m, &sorted_v, fwhm),
             },
         };
         let (masses, values) = if kind == MslType::Nominal {
@@ -1706,7 +1711,7 @@ NUM PEAKS: 1
         let new = LibraryCompound::new("n");
         assert_eq!((new.spectrum.ri, new.spectrum.rt_ms), (-1.0, -1.0));
         // The export writes the unknown values the way the old program does.
-        let out = write_msl_as(&lib[..1], MslType::Profile);
+        let out = write_msl_as(&lib[..1], MslType::Profile, 0.5);
         assert!(
             out.contains(
                 "RI:-1.0000
@@ -1749,7 +1754,7 @@ RT:-1.0000
         c.features.insert("K".into(), "a;b".into());
         let head = "NAME:x\nRI:1200.5000\nRT:2.0000\nK: a\nK: b\nQUANTIFICATION:73.0000\t";
         let end = "\n\n\n\n";
-        let out = |c: &LibraryCompound, k| write_msl_as(std::slice::from_ref(c), k);
+        let out = |c: &LibraryCompound, k| write_msl_as(std::slice::from_ref(c), k, 0.5);
         assert_eq!(
             out(&c, MslType::Nominal),
             format!("{head}\nRESOLUTION:1.0000\nNUM PEAKS:2\n(  73 1000) ( 148    1) {end}")
@@ -1765,7 +1770,7 @@ RT:-1.0000
             out(&c, MslType::Fwhm),
             format!("{head}\nNUM PEAKS:2\n( 73.000000  0.501000) (147.500000  1.00   1) {end}")
         );
-        assert_eq!(write_msl_as(&[], MslType::Nominal), "\n\n");
+        assert_eq!(write_msl_as(&[], MslType::Nominal, 0.5), "\n\n");
     }
 
     /// The old program keeps peaks sorted by mass, whatever order the file has.
@@ -1785,7 +1790,7 @@ NUM PEAKS: 3
                 "( 50.000000 1000) ( 73.000000   20) (100.000000   10)",
             ),
         ] {
-            assert!(write_msl_as(&c, kind).contains(peaks), "{kind:?}");
+            assert!(write_msl_as(&c, kind, 0.5).contains(peaks), "{kind:?}");
         }
     }
 
@@ -1798,7 +1803,7 @@ NUM PEAKS: 3
                     NAME: c\nNUM PEAKS: 4\n(56.995 111) (57 1000) (57.004 333) (58 11)\n";
         let lib = parse_msl(text).unwrap();
         let peaks = |c: &LibraryCompound, k| {
-            let out = write_msl_as(std::slice::from_ref(c), k);
+            let out = write_msl_as(std::slice::from_ref(c), k, 0.5);
             out.split("NUM PEAKS:")
                 .nth(1)
                 .unwrap()

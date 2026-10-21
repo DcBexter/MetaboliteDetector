@@ -19,6 +19,9 @@ pub struct PeakSettings {
     pub number_bins: u32,
     /// Peak detection method; `Matched` ignores the three thresholds above.
     pub detector: Detector,
+    /// `SF_FWHM`: share of a peak's maximum a point must reach to count in its centroid
+    /// ([`IonTraces::new`] takes it; kept here so a change re-runs the analysis).
+    pub fwhm: f64,
 }
 
 /// "Peak detection method" of the old Calibration Setter window (algorithms.md §3.3). The old main
@@ -49,6 +52,7 @@ impl Default for PeakSettings {
             min_peak_height: 20.0,
             number_bins: 10,
             detector: Detector::Default,
+            fwhm: 0.5,
         }
     }
 }
@@ -184,8 +188,8 @@ fn centroid_part_end(m: &[f32], v: &[f32], start: usize) -> usize {
 
 /// The old `Spectrum::getCentroidSpectrum` of one scan (algorithms.md §4.1): points split at m/z
 /// gaps above 0.1 and at valleys (two falls, then two rises); each part gives the sum of its points
-/// of at least half its maximum, at their intensity-weighted m/z.
-fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
+/// of at least `fwhm` (`SF_FWHM`) times its maximum, at their intensity-weighted m/z.
+fn centroid_scan(m: &[f32], v: &[f32], fwhm: f64, out: &mut Vec<(f32, f32)>) {
     let mut i = 0;
     while i < m.len() {
         let start = i;
@@ -196,7 +200,7 @@ fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
         } else {
             let (mut num, mut sum) = (0.0f64, 0.0f64);
             for (x, y) in m[start..=i].iter().zip(&v[start..=i]) {
-                if *y as f64 >= 0.5 * max {
+                if *y as f64 >= fwhm * max {
                     sum += *y as f64;
                     num += (*y * *x) as f64;
                 }
@@ -219,7 +223,7 @@ fn centroid_scan(m: &[f32], v: &[f32], out: &mut Vec<(f32, f32)>) {
 /// points within 0.1 m/z, where centroiding keeps every point of non-negative integer intensity and m/z >= 0.
 /// shortcut: that skip keeps fractional intensities and m/z in [-0.5, 0), which centroiding rounds
 /// or drops (CDF intensities are integers); round both ways alike if such input matters.
-fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
+fn centroided(c: &Chromatogram, fwhm: f64) -> Option<Chromatogram> {
     let close = |s: usize| {
         let (m, _) = c.spectrum(s);
         m.windows(2).any(|p| (p[1] - p[0]) as f64 <= CENTROID_GAP)
@@ -232,7 +236,7 @@ fn centroided(c: &Chromatogram) -> Option<Chromatogram> {
         .map(|s| {
             let (m, i) = c.spectrum(s);
             let mut out = Vec::with_capacity(m.len());
-            centroid_scan(m, i, &mut out);
+            centroid_scan(m, i, fwhm, &mut out);
             out
         })
         .collect();
@@ -265,11 +269,12 @@ pub struct TooLarge {
 impl IonTraces {
     /// One trace per nominal mass of the centroided scans (`centroided`); centroids of one nominal
     /// mass in a scan are summed. A run with exact masses (FastFlight) gets [`Self::exact`].
-    pub fn new(c: &Chromatogram) -> Result<Self, TooLarge> {
+    /// `fwhm` is `SF_FWHM` ([`PeakSettings::fwhm`]).
+    pub fn new(c: &Chromatogram, fwhm: f64) -> Result<Self, TooLarge> {
         if c.exact_masses {
             return Self::exact(c);
         }
-        match centroided(c) {
+        match centroided(c, fwhm) {
             Some(cc) => Self::build(&cc, false),
             None => Self::build(c, false),
         }
@@ -1071,7 +1076,7 @@ mod tests {
             intensity: v.clone(),
             exact_masses: false,
         };
-        let mut t = IonTraces::new(&c).unwrap();
+        let mut t = IonTraces::new(&c, 0.5).unwrap();
         let s = PeakSettings {
             detector: Detector::MATCHED,
             ..PeakSettings::default()
@@ -1099,7 +1104,7 @@ mod tests {
             intensity: vec![1.0, 2.0, 4.0, 8.0],
             exact_masses: false,
         };
-        let t = IonTraces::new(&c).unwrap();
+        let t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
         assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
     }
@@ -1112,6 +1117,7 @@ mod tests {
         centroid_scan(
             &[147.047, 147.089, 148.047, 148.089, 149.0],
             &[16012.0, 15171.0, 140.0, 339.0, 7.0],
+            0.5,
             &mut out,
         );
         assert_eq!(out.len(), 3);
@@ -1120,8 +1126,16 @@ mod tests {
         // A valley (two falls, then two rises) splits points closer than 0.1.
         out.clear();
         let m: Vec<f32> = (0..7).map(|k| 100.0 + 0.01 * k as f32).collect();
-        centroid_scan(&m, &[5.0, 3.0, 1.0, 2.0, 4.0, 6.0, 1.0], &mut out);
+        centroid_scan(&m, &[5.0, 3.0, 1.0, 2.0, 4.0, 6.0, 1.0], 0.5, &mut out);
         assert_eq!(out.iter().map(|p| p.1).collect::<Vec<_>>(), vec![8.0, 10.0]);
+        // A higher SF_FWHM drops the smaller point of the pair: mass and intensity of the top alone.
+        out.clear();
+        centroid_scan(&[147.047, 147.089], &[16012.0, 15171.0], 0.99, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].0 - 147.047).abs() < 1e-4 && out[0].1 == 16012.0,
+            "{out:?}"
+        );
         // Close points of one nominal mass merge in the nominal traces; others stay as they are.
         let c = Chromatogram {
             scan_times_s: vec![0.0],
@@ -1130,7 +1144,7 @@ mod tests {
             intensity: vec![10.0, 2.0, 5.0],
             exact_masses: false,
         };
-        let t = IonTraces::new(&c).unwrap();
+        let t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!((t.trace(0), t.trace(1)), (&[10.0][..], &[5.0][..]));
     }
 
@@ -1166,7 +1180,7 @@ mod tests {
         assert_eq!(apexes(&q), vec![100, 103, 103]);
         // detectAllPeaks(true, 10, 0.05) reorders exact traces only.
         assert_eq!(t.detect_all_peaks(&PeakSettings::default()), p);
-        let mut nominal = IonTraces::new(&c).unwrap();
+        let mut nominal = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(
             nominal.detect_all_peaks(&PeakSettings::default()),
             nominal.detect_peaks(&PeakSettings::default())
@@ -1259,7 +1273,7 @@ mod tests {
             intensity: vec![1.0, 2.0, 3.0, 4.0, 5.0],
             exact_masses: false,
         };
-        assert_eq!(IonTraces::new(&c).unwrap().trace(0), &[3.0, 4.0][..]);
+        assert_eq!(IonTraces::new(&c, 0.5).unwrap().trace(0), &[3.0, 4.0][..]);
         let t = IonTraces::exact(&c).unwrap();
         assert_eq!(t.masses, vec![73, 73, 147]);
         assert_eq!(t.mz, vec![73.047, 73.089, 147.0]);
@@ -1271,7 +1285,7 @@ mod tests {
             exact_masses: true,
             ..c
         };
-        assert_eq!(IonTraces::new(&ff).unwrap().mz, t.mz);
+        assert_eq!(IonTraces::new(&ff, 0.5).unwrap().mz, t.mz);
     }
 
     #[test]
@@ -1286,7 +1300,7 @@ mod tests {
             intensity: (0..scans).flat_map(|s| [1.0, big[s] - 1.0, 5.0]).collect(),
             exact_masses: false,
         };
-        let mut t = IonTraces::new(&c).unwrap();
+        let mut t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
         assert_eq!(t.mz, vec![73.0, 147.0]);
         assert_eq!(t.trace(0), &big[..]);
@@ -1302,7 +1316,7 @@ mod tests {
             exact_masses: false,
         };
         assert!(
-            IonTraces::new(&empty)
+            IonTraces::new(&empty, 0.5)
                 .unwrap()
                 .detect_peaks(&PeakSettings::default())
                 .is_empty()
@@ -1323,7 +1337,7 @@ mod tests {
             exact_masses: false,
         };
         assert_eq!(
-            IonTraces::new(&c),
+            IonTraces::new(&c, 0.5),
             Err(TooLarge {
                 masses: 65_536,
                 scans
