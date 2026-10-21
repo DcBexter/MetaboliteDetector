@@ -12,8 +12,9 @@ use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
-use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width, deconvolute};
-use md_core::peaks::{Detector, IonTraces, Peak, PeakSettings};
+use md_core::analysis::{PeakPass, analyze_run};
+use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
+use md_core::peaks::{Detector, Peak, PeakSettings};
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
 use crate::{Run, spawn};
@@ -95,15 +96,10 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
-    let mut traces = IonTraces::new(data, key.0.fwhm).map_err(|e| e.to_string())?;
-    let peaks = traces.detect_all_peaks(&key.0);
-    let mut components = deconvolute(&traces, &peaks, &data.scan_times_s, &key.1);
-    components.sort_by_key(|k| k.apex_scan);
-    let masses = peaks
-        .iter()
-        .map(|p| traces.masses[p.row as usize])
-        .collect();
-    Ok((components, masses, peaks))
+    let mut a =
+        analyze_run(data, &key.0, &key.1, PeakPass::Reordered).map_err(|e| e.to_string())?;
+    a.components.sort_by_key(|k| k.apex_scan);
+    Ok((a.components, a.masses, a.peaks))
 }
 
 impl Settings {
