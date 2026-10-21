@@ -108,7 +108,7 @@ reference BLAS. Each was accepted only when it reproduced the oracle bit for bit
   sweep then changes nothing and the SVD is wrong; how the old program handles it was not
   determined. A zero at the block's end converges. The apex fit never builds the bad case: three
   distinct x give a full-rank Vandermonde matrix, and the small singular value lands at the end of
-  the block. `bins = 0` (all x zero) gives `d = [-√3, 0, 0]` with `e = 0`, which deflates at once
+  the block. `bins = 0` (all x zero) leaves only `d[0]` nonzero with `e = 0`, which deflates at once
   (the fit then returns no apex); the settings clamp bins to at least 1 anyway. A `debug_assert` in
   `bidiagonal_svd` guards the case, and a test runs the fit for 0 to 100 bins at scans up to 10¹².
 
