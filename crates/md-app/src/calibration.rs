@@ -7,8 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::deconv::Component;
@@ -32,19 +31,19 @@ struct Row {
 /// The calibration that RT-only alignment replaced.
 struct Saved {
     cal: Option<Arc<RiCalibration>>,
-    source: String,
+    source: Msg,
     rows: Vec<Row>,
     applied: Vec<Row>,
-    error: Option<String>,
+    error: Option<Msg>,
 }
 
-type RowsJob = (String, mpsc::Receiver<Result<Vec<Row>, String>>);
+type RowsJob = (Msg, mpsc::Receiver<Result<Vec<Row>, Msg>>);
 
 pub struct Calibration {
     /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
     pub cal: Option<Arc<RiCalibration>>,
     /// Where `cal` came from, shown in the window.
-    source: String,
+    source: Msg,
     pub open: bool,
     /// The table being edited and the state `cal` was last built from; an edit that is finished
     /// (no field dragged or focused) builds a new `cal`.
@@ -74,15 +73,15 @@ pub struct Calibration {
     /// Cutoff being edited; applied when the drag ends, so dragging does not search on every frame.
     cutoff_edit: f64,
     /// Running alkane search and the source it will set.
-    job: Option<(String, mpsc::Receiver<Result<RiCalibration, String>>)>,
-    error: Option<String>,
+    job: Option<(Msg, mpsc::Receiver<Result<RiCalibration, Msg>>)>,
+    error: Option<Msg>,
 }
 
 impl Default for Calibration {
     fn default() -> Self {
         Self {
             cal: None,
-            source: String::new(),
+            source: Msg::default(),
             open: false,
             rows: Vec::new(),
             applied: Vec::new(),
@@ -156,7 +155,7 @@ impl Calibration {
     }
 
     /// Also drops a running search, so its late result cannot replace this calibration.
-    fn set(&mut self, cal: RiCalibration, source: String) {
+    fn set(&mut self, cal: RiCalibration, source: Msg) {
         self.rows = (cal.points().iter())
             .map(|(t, ri)| Row {
                 name: String::new(),
@@ -171,7 +170,7 @@ impl Calibration {
     }
 
     /// Takes the table of a mix search; `cal` follows once the table is valid (see `apply_edits`).
-    fn set_rows(&mut self, rows: Vec<Row>, source: String) {
+    fn set_rows(&mut self, rows: Vec<Row>, source: Msg) {
         (self.rows, self.applied, self.source, self.error) = (rows, Vec::new(), source, None);
         (self.job, self.mix_job) = (None, None);
     }
@@ -187,7 +186,7 @@ impl Calibration {
             .map(|r| (r.rt_min * 60.0, r.ri));
         match RiCalibration::new(used) {
             Ok(cal) => (self.cal, self.error) = (Some(Arc::new(cal)), None),
-            Err(e) => self.error = Some(e.to_string()),
+            Err(e) => self.error = Some(e.to_string().into()),
         }
         self.applied = self.rows.clone();
     }
@@ -196,7 +195,7 @@ impl Calibration {
     /// once it is valid, see `apply_edits`.
     fn add_point(&mut self) {
         if self.rows.is_empty() {
-            self.source = t("entered by hand", "von Hand eingegeben").into();
+            self.source = msg!("entered by hand", "von Hand eingegeben");
         }
         self.rows.push(Row {
             name: String::new(),
@@ -226,7 +225,7 @@ impl Calibration {
             };
             self.set(
                 RiCalibration::identity(),
-                t("retention time only", "nur Retentionszeit").into(),
+                msg!("retention time only", "nur Retentionszeit"),
             );
             self.saved = Some(saved);
         } else if let Some(s) = self.saved.take() {
@@ -243,8 +242,9 @@ impl Calibration {
         lib: Option<&Library>,
     ) {
         if let Some((source, rx)) = &self.job
-            && let Some(result) = crate::poll_job(rx, t("RI calibration", "RI-Kalibrierung"))
-                .map(|r| r.and_then(|x| x))
+            && let Some(result) =
+                crate::poll_job(rx, || t("RI calibration", "RI-Kalibrierung").into())
+                    .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(cal) => self.set(cal, source.clone()),
@@ -253,8 +253,9 @@ impl Calibration {
             self.job = None;
         }
         if let Some((source, rx)) = &self.mix_job
-            && let Some(result) = crate::poll_job(rx, t("calibration mix", "Kalibriermischung"))
-                .map(|r| r.and_then(|x| x))
+            && let Some(result) =
+                crate::poll_job(rx, || t("calibration mix", "Kalibriermischung").into())
+                    .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(rows) => self.set_rows(rows, source.clone()),
@@ -280,7 +281,7 @@ impl Calibration {
     /// Why the last search, load or table edit failed.
     pub fn error_label(&self, ui: &mut egui::Ui) {
         if let Some(e) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
+            ui.colored_label(ui.visuals().error_fg_color, &**e);
         }
     }
 
@@ -382,10 +383,10 @@ impl Calibration {
             {
                 let (data, mz, density, threshold) = (run.data.clone(), self.mz, self.density, self.threshold);
                 let ris: Vec<f64> = (self.first..=self.last).map(|n| 100.0 * n as f64).collect();
-                let source = format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last);
+                let source = Msg::from(format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last));
                 let job = spawn(ui.ctx(), move || {
                     let peaks = marker_peaks(&data, mz, density, threshold);
-                    RiCalibration::new(series_points(&peaks, &ris)).map_err(|e| e.to_string())
+                    RiCalibration::new(series_points(&peaks, &ris)).map_err(|e| e.to_string().into())
                 });
                 self.job = Some((source, job));
             }
@@ -396,8 +397,8 @@ impl Calibration {
                 && let Some(path) = calib_dialog().pick_file()
             {
                 match RiCalibration::read_calib(&path) {
-                    Ok(cal) => self.set(cal, path.display().to_string()),
-                    Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+                    Ok(cal) => self.set(cal, path.display().to_string().into()),
+                    Err(e) => self.error = Some(format!("{}: {e}", path.display()).into()),
                 }
             }
             if let Some(cal) = &self.cal {
@@ -405,7 +406,7 @@ impl Calibration {
                     && let Some(path) = calib_dialog().save_file()
                     && let Err(e) = std::fs::write(&path, cal.to_calib())
                 {
-                    self.error = Some(format!("{}: {e}", path.display()));
+                    self.error = Some(format!("{}: {e}", path.display()).into());
                 }
                 if ui.button(t("Clear", "Leeren")).clicked() {
                     self.clear();
@@ -490,7 +491,7 @@ impl Calibration {
                     run.data.clone(),
                     lib.settings.clone(),
                 );
-                let source = tf!(
+                let source = msg!(
                     "{}, {} mix substances",
                     "{}, {} Substanzen der Mischung",
                     run.name,
@@ -644,7 +645,7 @@ impl Calibration {
                                 .save_file()
                             && let Err(e) = std::fs::write(&path, cal.to_calib())
                         {
-                            self.error = Some(format!("{}: {e}", path.display()));
+                            self.error = Some(format!("{}: {e}", path.display()).into());
                         }
                     });
                     ui.end_row();
@@ -804,10 +805,10 @@ mod tests {
         c.set(cal.clone(), "x.calib".into());
         let before = (c.cal.clone(), c.rows.clone());
         c.set_rt_only(true);
-        assert_eq!(c.source, "retention time only");
+        assert_eq!(&*c.source, "retention time only");
         c.set_rt_only(false);
         assert_eq!((c.cal.clone(), c.rows.clone()), before);
-        assert_eq!(c.source, "x.calib");
+        assert_eq!(&*c.source, "x.calib");
         assert_eq!(c.cal.as_deref(), Some(&cal));
     }
 
@@ -832,7 +833,7 @@ mod tests {
             c.apply_edits();
             assert_eq!(c.cal.is_some(), c.rows.len() > 1);
         }
-        assert_eq!(c.source, "entered by hand");
+        assert_eq!(&*c.source, "entered by hand");
         assert!(c.error.is_none());
         let cal = c.cal.as_ref().unwrap();
         for (rt, ri) in fames {
@@ -842,6 +843,24 @@ mod tests {
         c.rows[2].used = false;
         c.apply_edits();
         assert_eq!(c.cal.as_ref().unwrap().points().len(), 2);
+    }
+
+    #[test]
+    fn source_follows_a_language_switch() {
+        let mut c = Calibration::default();
+        c.add_point();
+        c.rows[0] = Row {
+            name: String::new(),
+            ri: 1000.0,
+            rt_min: 1.0,
+            used: true,
+        };
+        c.apply_edits();
+        let source = c.source.clone();
+        crate::lang::set(crate::lang::Lang::De);
+        assert_eq!(&*c.source, "von Hand eingegeben");
+        crate::lang::set(crate::lang::Lang::En);
+        assert_eq!(&*source, "entered by hand");
     }
 
     #[test]

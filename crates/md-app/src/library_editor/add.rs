@@ -284,14 +284,16 @@ impl LibraryEditor {
                 self.dirty = true;
                 self.select(Some(i));
             }
-            Err(e) => self.error = Some(e.to_string()),
+            Err(e) => self.error = Some(e.to_string().into()),
         }
     }
 
     fn rt_window(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.rt else { return };
         if let Some(rx) = &d.job
-            && let Some(r) = poll_job(rx, t("retention time search", "Retentionszeitsuche"))
+            && let Some(r) = poll_job(rx, || {
+                t("retention time search", "Retentionszeitsuche").into()
+            })
         {
             d.job = None;
             match r {
@@ -376,7 +378,7 @@ impl LibraryEditor {
             let plan = std::mem::take(&mut d.plan);
             match apply_rt_copy(&mut self.compounds, &plan) {
                 Ok(()) => self.dirty = true,
-                Err(e) => self.error = Some(e.to_string()),
+                Err(e) => self.error = Some(e.to_string().into()),
             }
             open = false;
         }

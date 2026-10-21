@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use crate::errors;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
@@ -67,7 +67,7 @@ pub struct Settings {
     draft: GcmsSettings,
     pub appearance: Appearance,
     pub open: bool,
-    note: Option<Result<String, String>>,
+    note: Option<Result<Msg, Msg>>,
 }
 
 type Analyzed = Result<(Vec<Component>, Vec<u32>, Vec<Peak>), String>;
@@ -114,7 +114,7 @@ impl Settings {
     }
 
     /// Opens the dialog with a message about the saved or imported settings.
-    pub fn show_note(&mut self, note: Result<String, String>) {
+    pub fn show_note(&mut self, note: Result<Msg, Msg>) {
         (self.note, self.open) = (Some(note), true);
     }
 
@@ -124,7 +124,7 @@ impl Settings {
 
     /// Collects finished analyses and starts one for every run whose components are stale.
     /// Returns the error of an analysis that failed (the run keeps its old components).
-    pub fn update_runs(&self, ctx: &egui::Context, runs: &mut [Run]) -> Option<String> {
+    pub fn update_runs(&self, ctx: &egui::Context, runs: &mut [Run]) -> Option<Msg> {
         let wanted = self.key();
         let correct = self.applied.baseline_correction;
         let mut error = None;
@@ -149,7 +149,7 @@ impl Settings {
                                 (run.component, run.ident, run.ident_job) = (None, None, None);
                                 run.rev += 1;
                             }
-                            Err(e) => error = Some(format!("{}: {e}", run.name)),
+                            Err(e) => error = Some(format!("{}: {e}", run.name).into()),
                         }
                         a.key = Some(key.clone());
                         a.job = None;
@@ -157,7 +157,7 @@ impl Settings {
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // Panicked: keep the old components and do not retry these settings.
-                        error = Some(tf!(
+                        error = Some(msg!(
                             "{}: analysis crashed",
                             "{}: Analyse abgestürzt",
                             run.name
@@ -331,17 +331,21 @@ impl Settings {
                 (file.an_deconvolution_width).get_or_insert_with(|| auto_width(times.unwrap_or_default()));
                 self.note = Some(
                     std::fs::write(&path, file.to_bytes())
-                        .map(|()| tf!("Saved {}", "Gespeichert: {}", path.display()))
-                        .map_err(|e| format!("{}: {e}", path.display())),
+                        .map(|()| msg!("Saved {}", "Gespeichert: {}", path.display()))
+                        .map_err(|e| format!("{}: {e}", path.display()).into()),
                 );
             }
         });
+        let error = ui.visuals().error_fg_color;
         match (&valid, &self.note) {
-            (Err(e), _) | (_, Some(Err(e))) => {
-                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
+            (Err(e), _) => {
+                ui.colored_label(error, errors::text(e));
+            }
+            (_, Some(Err(e))) => {
+                ui.colored_label(error, &**e);
             }
             (_, Some(Ok(m))) => {
-                ui.label(m);
+                ui.label(&**m);
             }
             _ => {}
         }
@@ -349,21 +353,22 @@ impl Settings {
 
     /// Reads an old settings file into the dialog and applies it. The file is untrusted:
     /// `from_bytes` checks size, checksum and values, and reading stops at `MAX_LEN`.
-    fn load(&mut self, path: &std::path::Path) -> Result<String, String> {
-        let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    fn load(&mut self, path: &std::path::Path) -> Result<Msg, Msg> {
+        let err = |e: &dyn std::fmt::Display| Msg::from(format!("{}: {e}", path.display()));
         let mut bytes = Vec::new();
         std::fs::File::open(path)
             .and_then(|f| f.take(MAX_LEN + 1).read_to_end(&mut bytes))
             .map_err(|e| err(&e))?;
         if bytes.len() as u64 > MAX_LEN {
-            return Err(err(&t(
-                "file too large for a settings file",
-                "Datei zu groß für eine Einstellungsdatei",
-            )));
+            return Err(msg!(
+                "{}: file too large for a settings file",
+                "{}: Datei zu groß für eine Einstellungsdatei",
+                path.display()
+            ));
         }
         self.draft = self.applied.from_bytes(&bytes).map_err(|e| err(&e))?;
         self.applied = self.draft.clone();
-        Ok(tf!("Loaded {}", "Geladen: {}", path.display()))
+        Ok(msg!("Loaded {}", "Geladen: {}", path.display()))
     }
 
     fn fields(&mut self, ui: &mut egui::Ui, times: Option<&[f64]>) {

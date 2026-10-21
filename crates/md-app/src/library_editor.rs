@@ -13,9 +13,8 @@ mod add;
 mod extras;
 
 use crate::App;
-use crate::errors;
 use crate::identify::Library;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg, t, tf};
 use add::{AddDialog, RtDialog, Source};
 use extras::NewFragment;
 
@@ -38,9 +37,9 @@ pub struct LibraryEditor {
     dirty: bool,
     /// Replacement of the edited library that waits for "Discard" of unsaved changes.
     pending: Option<Replace>,
-    error: Option<String>,
+    error: Option<Msg>,
     /// Entries named by the last save or export because they are incomplete.
-    warning: Option<String>,
+    warning: Option<Msg>,
     /// "Add component" and "Copy retention times" while they are open.
     add: Option<AddDialog>,
     rt: Option<RtDialog>,
@@ -131,7 +130,7 @@ impl LibraryEditor {
     }
 
     /// Names the entries with problems (empty when all are fine); saving and exporting still write them.
-    fn incomplete(&self) -> Option<String> {
+    fn incomplete(&self) -> Option<Msg> {
         let names: Vec<_> = (self.compounds.iter())
             .filter(|c| !check(c).is_empty())
             .map(|c| c.name.as_str())
@@ -141,12 +140,12 @@ impl LibraryEditor {
         (!names.is_empty()).then(|| {
             let (n, shown) = (names.len(), names[..names.len().min(SHOWN)].join(", "));
             if more > 0 {
-                tf!(
+                msg!(
                     "{n} incomplete entries were written: {shown} and {more} more (filter the list to find them).",
                     "{n} unvollständige Einträge wurden geschrieben: {shown} und {more} weitere (Liste filtern, um sie zu finden).",
                 )
             } else {
-                tf!(
+                msg!(
                     "{n} incomplete entries were written: {shown} (filter the list to find them).",
                     "{n} unvollständige Einträge wurden geschrieben: {shown} (Liste filtern, um sie zu finden).",
                 )
@@ -156,7 +155,7 @@ impl LibraryEditor {
 
     fn save(&mut self, path: PathBuf) -> Option<PathBuf> {
         if let Err(e) = save_mdlib(&path, &self.compounds) {
-            self.error = Some(format!("{}: {e}", path.display()));
+            self.error = Some(format!("{}: {e}", path.display()).into());
             return None;
         }
         self.name = path
@@ -194,10 +193,10 @@ impl LibraryEditor {
                     {
                         std::fs::write(&path, text)
                             .err()
-                            .map(|e| format!("{}: {e}", path.display()))
+                            .map(|e| format!("{}: {e}", path.display()).into())
                     } else {
                         let p = path.display();
-                        Some(tf!("{p}: export as .msl.", "{p}: als .msl exportieren."))
+                        Some(msg!("{p}: export as .msl.", "{p}: als .msl exportieren."))
                     };
                     self.warning = if self.error.is_none() {
                         self.incomplete()
@@ -271,7 +270,7 @@ impl LibraryEditor {
                     saved = self.save(path);
                 } else {
                     let p = path.display();
-                    self.error = Some(tf!(
+                    self.error = Some(msg!(
                         "{p}: save as .mdlib (use Export MSL for .msl); .lbr and .msl files are never overwritten.",
                         "{p}: als .mdlib speichern (für .msl MSL exportieren verwenden); .lbr- und .msl-Dateien werden nie überschrieben.",
                     ));
@@ -296,10 +295,10 @@ impl LibraryEditor {
             });
         }
         if let Some(e) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
+            ui.colored_label(ui.visuals().error_fg_color, &**e);
         }
         if let Some(w) = &self.warning {
-            ui.colored_label(ui.visuals().warn_fg_color, w);
+            ui.colored_label(ui.visuals().warn_fg_color, &**w);
         }
         ui.separator();
         self.add_windows(ui.ctx());

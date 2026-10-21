@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use eframe::egui;
 
-use crate::lang::{t, tf};
+use crate::lang::{Msg, msg};
 use crate::{App, Run, poll_job, settings, spawn};
 
 impl App {
@@ -22,14 +22,14 @@ impl App {
                     data
                 })
                 .and_then(|data| match data.scan_count() {
-                    0 => Err(t("no scans", "keine Scans").into()),
+                    0 => Err("no scans".into()),
                     _ => {
                         // Results the old program saved next to the run replace the analysis
                         // until the settings change. A broken side file only gives a warning.
                         let mut warnings = Vec::new();
                         let saved = md_core::cmp::saved_components(&p, &data.scan_times_s)
                             .unwrap_or_else(|e| {
-                                warnings.push(e.to_string());
+                                warnings.push(e.to_string().into());
                                 None
                             });
                         let (components, peak_masses, peaks) = match saved {
@@ -38,7 +38,7 @@ impl App {
                         };
                         let saved_calibration =
                             md_core::ri::saved_calibration(&p).unwrap_or_else(|e| {
-                                warnings.push(tf!("calibration: {e}", "Kalibrierung: {e}"));
+                                warnings.push(msg!("calibration: {e}", "Kalibrierung: {e}"));
                                 None
                             });
                         let run = Run {
@@ -65,7 +65,7 @@ impl App {
                         Ok((run, warnings))
                     }
                 })
-                .map_err(|e| format!("{}: {e}", p.display()))
+                .map_err(|e| Msg::from(format!("{}: {e}", p.display())))
         });
         self.load_started.get_or_insert_with(Instant::now);
         self.loading.push((path, rx));
@@ -83,8 +83,10 @@ impl App {
                         self.ri.set_own(run.path.clone(), cal);
                     }
                     if !warnings.is_empty() {
-                        self.error =
-                            Some(format!("{}: {}", run.path.display(), warnings.join("; ")));
+                        self.error = Some(Msg::new(|| {
+                            let warnings: Vec<&str> = warnings.iter().map(|w| &**w).collect();
+                            format!("{}: {}", run.path.display(), warnings.join("; "))
+                        }));
                     }
                     self.saved.remember(run.path.clone());
                     self.runs.push(run);
@@ -92,7 +94,7 @@ impl App {
                 Ok(Err(e)) => self.error = Some(e),
                 Err(mpsc::TryRecvError::Empty) => return true,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.error = Some(t("loader crashed", "Laden abgestürzt").into())
+                    self.error = Some(msg!("loader crashed", "Laden abgestürzt"))
                 }
             }
             false
@@ -109,11 +111,11 @@ impl App {
         {
             let took = crate::view::took(t.elapsed());
             self.load_note = match self.runs.len() {
-                1 => tf!(
+                1 => msg!(
                     "1 run open, loaded in {took}",
                     "1 Lauf geöffnet, geladen in {took}"
                 ),
-                n => tf!(
+                n => msg!(
                     "{n} runs open, last batch loaded in {took}",
                     "{n} Läufe geöffnet, letzter Stapel geladen in {took}"
                 ),
@@ -126,7 +128,7 @@ impl App {
         let key = (self.mz, self.tolerance);
         for run in &mut self.runs {
             if let Some((k, rx)) = &run.sic_job
-                && let Some(result) = poll_job(rx, &format!("{}: SIC", run.name))
+                && let Some(result) = poll_job(rx, || format!("{}: SIC", run.name))
             {
                 // A crashed SIC is not retried for this key; the trace stays empty.
                 let sic = result.unwrap_or_else(|e| {

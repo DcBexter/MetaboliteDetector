@@ -9,9 +9,8 @@ use std::sync::mpsc::Receiver;
 use eframe::egui;
 use semver::Version;
 
-use crate::errors;
 use crate::jobs::{poll_job, spawn};
-use crate::lang::{t, tf};
+use crate::lang::{Msg, t, tf};
 use crate::layout::ToolWindow;
 use release::{Config, Kind, Release};
 
@@ -21,13 +20,13 @@ enum State {
     Idle,
     /// `manual` checks report their errors; the automatic one stays silent.
     Checking {
-        rx: Receiver<Result<Option<Release>, String>>,
+        rx: Receiver<Result<Option<Release>, Msg>>,
         manual: bool,
     },
     UpToDate,
     Available(Release),
-    Installing(Version, Receiver<Result<(), String>>),
-    Failed(String),
+    Installing(Version, Receiver<Result<(), Msg>>),
+    Failed(Msg),
 }
 
 pub struct Updater {
@@ -151,7 +150,9 @@ impl Updater {
         match &self.state {
             State::Checking { rx, manual } => {
                 let manual = *manual;
-                let Some(result) = poll_job(rx, t("The update check", "Die Update-Suche")) else {
+                let Some(result) =
+                    poll_job(rx, || t("The update check", "Die Update-Suche").into())
+                else {
                     return;
                 };
                 self.state = match result.and_then(|r| r) {
@@ -166,7 +167,9 @@ impl Updater {
                 };
             }
             State::Installing(_, rx) => {
-                match poll_job(rx, t("The update", "Das Update")).map(|r| r.and_then(|r| r)) {
+                match poll_job(rx, || t("The update", "Das Update").into())
+                    .map(|r| r.and_then(|r| r))
+                {
                     Some(Ok(())) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                     Some(Err(e)) => self.state = State::Failed(e),
                     None => {}
@@ -279,7 +282,7 @@ impl Updater {
                 });
             }
             State::Failed(e) => {
-                ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
+                ui.colored_label(ui.visuals().error_fg_color, &**e);
                 ui.hyperlink_to(t("Releases page", "Release-Seite"), RELEASES_PAGE);
             }
         }

@@ -78,6 +78,63 @@ macro_rules! tf {
 }
 pub(crate) use tf;
 
+/// A text that is stored and shown later (a note, an error, the RI source, #341). It keeps both
+/// languages and picks one when it is drawn, so a switch changes texts already on screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Msg {
+    en: String,
+    de: String,
+}
+
+impl Msg {
+    /// Runs `text` once per language, so `t` and `tf!` inside it give both versions. A part that is an
+    /// `md-core` message is translated by its templates ([`crate::errors`]), as when it was drawn.
+    pub fn new(text: impl Fn() -> String) -> Msg {
+        let now = get();
+        set(Lang::En);
+        let en = text();
+        set(Lang::De);
+        let de = crate::errors::text(&text());
+        set(now);
+        Msg { en, de }
+    }
+}
+
+/// An `md-core` message or a file name, which has no language of its own.
+impl From<String> for Msg {
+    fn from(text: String) -> Msg {
+        Msg::new(|| text.clone())
+    }
+}
+
+impl From<&str> for Msg {
+    fn from(text: &str) -> Msg {
+        text.to_owned().into()
+    }
+}
+
+impl std::ops::Deref for Msg {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        if de() { &self.de } else { &self.en }
+    }
+}
+
+impl std::fmt::Display for Msg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+/// [`tf!`] as a [`Msg`]: `msg!("Saved {}", "Gespeichert: {}", path.display())`.
+macro_rules! msg {
+    ($($args:tt)*) => {
+        $crate::lang::Msg::new(|| $crate::lang::tf!($($args)*))
+    };
+}
+pub(crate) use msg;
+
 /// The switch in Help and in Settings. Language names stay in their own language.
 pub fn switch(ui: &mut egui::Ui) {
     let mut lang = get();
@@ -111,6 +168,30 @@ mod tests {
         ] {
             assert_eq!(Lang::from_locale(locale), lang, "{locale:?}");
         }
+    }
+
+    #[test]
+    fn stored_texts_follow_the_language() {
+        let n = 3;
+        set(Lang::En);
+        let note = msg!("{n} runs", "{n} Läufe");
+        let inner = msg!("entered by hand", "von Hand eingegeben");
+        let outer = Msg::new(|| format!("{inner}: {}", t("done", "fertig")));
+        // An `md-core` message is translated with the templates of `errors.txt`.
+        let core = Msg::from("PCA needs at least two runs".to_owned());
+        assert_eq!(&*note, "3 runs");
+        set(Lang::De);
+        assert_eq!(&*note, "3 Läufe");
+        assert_eq!(&*outer, "von Hand eingegeben: fertig");
+        assert_eq!(&*core, "Die PCA braucht mindestens zwei Läufe");
+        set(Lang::En);
+        assert_eq!(&*outer, "entered by hand: done");
+        assert_eq!(&*core, "PCA needs at least two runs");
+        assert_eq!(
+            get(),
+            Lang::En,
+            "creating a text leaves the language as it was"
+        );
     }
 
     #[test]

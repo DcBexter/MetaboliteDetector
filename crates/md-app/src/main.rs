@@ -46,6 +46,7 @@ mod vector;
 mod view;
 
 use jobs::{poll_job, spawn};
+use lang::Msg;
 
 fn main() -> eframe::Result {
     // First, so the notes of `guard` and a failed start come in it too; a saved choice replaces it
@@ -105,10 +106,10 @@ struct App {
     runs: Vec<Run>,
     /// Index into `runs` whose scan cursor and spectrum are shown.
     active: usize,
-    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, String>>)>,
+    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, Msg>>)>,
     load_started: Option<Instant>,
-    load_note: String,
-    error: Option<String>,
+    load_note: lang::Msg,
+    error: Option<lang::Msg>,
     trace: Trace,
     mz: f32,
     tolerance: f32,
@@ -148,7 +149,7 @@ impl Default for App {
             active: 0,
             loading: Vec::new(),
             load_started: None,
-            load_note: String::new(),
+            load_note: lang::Msg::default(),
             error: None,
             trace: Trace::Tic,
             // TMS fragment; many runs start scanning above m/z 73.
@@ -186,7 +187,7 @@ impl Default for App {
 type SicKey = (f32, f32);
 
 /// A loaded run with warnings about its side files (`.cmp`, `.calib`).
-type Loaded = (Run, Vec<String>);
+type Loaded = (Run, Vec<Msg>);
 
 struct Run {
     path: PathBuf,

@@ -10,7 +10,7 @@ use std::time::Duration;
 use semver::Version;
 
 use super::release::{self, Kind, Release};
-use crate::lang::tf;
+use crate::lang::{Msg, msg, tf};
 
 const RELEASES_URL: &str =
     "https://api.github.com/repos/DcBexter/MetaboliteDetector/releases?per_page=20";
@@ -29,14 +29,14 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-fn get(agent: &ureq::Agent, url: &str, accept: &str) -> Result<Vec<u8>, String> {
+fn get(agent: &ureq::Agent, url: &str, accept: &str) -> Result<Vec<u8>, Msg> {
     let mut response = agent
         .get(url)
         .header("User-Agent", USER_AGENT)
         .header("Accept", accept)
         .call()
         .map_err(|e| {
-            tf!(
+            msg!(
                 "Could not reach {url}: {e}",
                 "{url} ist nicht erreichbar: {e}"
             )
@@ -47,7 +47,7 @@ fn get(agent: &ureq::Agent, url: &str, accept: &str) -> Result<Vec<u8>, String> 
         .limit(MAX_DOWNLOAD)
         .read_to_vec()
         .map_err(|e| {
-            tf!(
+            msg!(
                 "Download from {url} failed: {e}",
                 "Download von {url} fehlgeschlagen: {e}"
             )
@@ -55,7 +55,7 @@ fn get(agent: &ureq::Agent, url: &str, accept: &str) -> Result<Vec<u8>, String> 
 }
 
 /// The newest published release above `current`, if any.
-pub fn check(current: &Version) -> Result<Option<Release>, String> {
+pub fn check(current: &Version) -> Result<Option<Release>, Msg> {
     let agent = agent(Duration::from_secs(30));
     let body = get(&agent, RELEASES_URL, "application/vnd.github+json")?;
     release::newest(&String::from_utf8_lossy(&body), current)
@@ -64,13 +64,13 @@ pub fn check(current: &Version) -> Result<Option<Release>, String> {
 /// Downloads the asset for `kind`, checks it against the release's `SHA256SUMS.txt`, installs it
 /// and starts the new version; the caller then closes the app. Nothing changes on any error before
 /// the files are replaced.
-pub fn install(release: &Release, kind: Kind, exe: &Path) -> Result<(), String> {
+pub fn install(release: &Release, kind: Kind, exe: &Path) -> Result<(), Msg> {
     let name = release::asset_name(kind, &release.version);
     let url = |file: &str| {
         (release.assets.iter())
             .find(|(n, u)| n == file && u.starts_with("https://"))
             .map(|(_, u)| u.clone())
-            .ok_or(tf!(
+            .ok_or(msg!(
                 "The release has no {file}",
                 "Die Version enthält keine Datei {file}"
             ))
@@ -86,7 +86,7 @@ pub fn install(release: &Release, kind: Kind, exe: &Path) -> Result<(), String> 
         Kind::Linux => {
             replace_from_tar_gz(&data, exe).map_err(|e| {
                 let dir = exe.parent().unwrap_or(exe).display();
-                tf!(
+                msg!(
                     "Could not replace the binaries in {dir}: {e}. Download the update from {}",
                     "Die Programmdateien in {dir} konnten nicht ersetzt werden: {e}. \
                      Das Update von {} herunterladen",
@@ -110,9 +110,9 @@ pub fn remove_old(exe: &Path) {
     std::fs::remove_file(side(exe, ".old")).ok();
 }
 
-fn start(exe: &Path) -> Result<(), String> {
+fn start(exe: &Path) -> Result<(), Msg> {
     Command::new(exe).spawn().map(drop).map_err(|e| {
-        tf!(
+        msg!(
             "Installed, but {} did not start: {e}",
             "Installiert, aber {} startete nicht: {e}",
             exe.display()
@@ -122,7 +122,7 @@ fn start(exe: &Path) -> Result<(), String> {
 
 /// Runs the MSI from a fresh temp dir through a hidden helper that waits for this app to exit,
 /// then starts the installed exe again.
-fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(), String> {
+fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(), Msg> {
     let nanos = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
         .map_or(0, |d| d.as_nanos());
     let dir = std::env::temp_dir().join(format!(
@@ -133,7 +133,7 @@ fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(
     std::fs::create_dir(&dir)
         .and_then(|()| std::fs::write(&msi, data))
         .map_err(|e| {
-            tf!(
+            msg!(
                 "Could not save {}: {e}",
                 "{} konnte nicht gespeichert werden: {e}",
                 msi.display()
@@ -145,7 +145,7 @@ fn install_msi(data: &[u8], name: &str, all_users: bool, exe: &Path) -> Result<(
 /// Hidden PowerShell that waits for this process to exit, runs msiexec, removes the temp dir and
 /// starts `exe`. Paths travel as environment variables, so no shell ever parses them.
 #[cfg(windows)]
-fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(), String> {
+fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(), Msg> {
     use base64::Engine;
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -169,7 +169,7 @@ fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(),
         .spawn()
         .map(drop)
         .map_err(|e| {
-            tf!(
+            msg!(
                 "Could not start the installer: {e}",
                 "Das Installationsprogramm konnte nicht starten: {e}"
             )
@@ -177,38 +177,37 @@ fn msi_helper(dir: &Path, msi: &Path, all_users: bool, exe: &Path) -> Result<(),
 }
 
 #[cfg(not(windows))]
-fn msi_helper(_: &Path, _: &Path, _: bool, _: &Path) -> Result<(), String> {
-    Err(crate::lang::t(
+fn msi_helper(_: &Path, _: &Path, _: bool, _: &Path) -> Result<(), Msg> {
+    Err(msg!(
         "The MSI installs only on Windows",
-        "Das MSI installiert nur unter Windows",
-    )
-    .into())
+        "Das MSI installiert nur unter Windows"
+    ))
 }
 
 /// Swaps the portable exe: Windows lets a running exe be renamed but not overwritten.
-fn replace_exe(data: &[u8], exe: &Path) -> Result<(), String> {
+fn replace_exe(data: &[u8], exe: &Path) -> Result<(), Msg> {
     let (new, old) = (side(exe, ".new"), side(exe, ".old"));
     let shown = exe.display();
-    let fail = |message: String| {
+    let fail = |message: Msg| {
         std::fs::remove_file(&new).ok();
         message
     };
     std::fs::write(&new, data).map_err(|e| {
-        fail(tf!(
+        fail(msg!(
             "Could not write the update next to {shown}: {e}",
             "Das Update konnte nicht neben {shown} geschrieben werden: {e}"
         ))
     })?;
     std::fs::remove_file(&old).ok();
     std::fs::rename(exe, &old).map_err(|e| {
-        fail(tf!(
+        fail(msg!(
             "Could not rename {shown}: {e}",
             "{shown} konnte nicht umbenannt werden: {e}"
         ))
     })?;
     if let Err(e) = std::fs::rename(&new, exe) {
         std::fs::rename(&old, exe).ok();
-        return Err(fail(tf!(
+        return Err(fail(msg!(
             "Could not replace {shown}: {e}",
             "{shown} konnte nicht ersetzt werden: {e}"
         )));

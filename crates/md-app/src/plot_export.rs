@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::export::{crop, not_visible, write_file, write_png};
-use crate::lang::t;
+use crate::lang::{Msg, msg, t};
 use crate::vector;
 
 /// Where a plot was drawn: the screen rectangle (points) and the layer that holds its shapes.
@@ -199,7 +199,7 @@ pub fn entries(ui: &mut egui::Ui, area: Area, stem: &str) {
 }
 
 /// Runs the export asked for in the last frame; returns the error of a finished one.
-pub fn finish(ctx: &egui::Context) -> Option<String> {
+pub fn finish(ctx: &egui::Context) -> Option<Msg> {
     if let Some(p) = ctx
         .data_mut(|d| d.remove_temp::<Option<Pending>>(pending_id()))
         .flatten()
@@ -209,18 +209,20 @@ pub fn finish(ctx: &egui::Context) -> Option<String> {
             Err(e) => return Some(e),
         }
     }
-    ctx.data_mut(|d| d.remove_temp::<String>(error_id()))
+    ctx.data_mut(|d| d.remove_temp::<Msg>(error_id()))
 }
 
-fn run(ctx: &egui::Context, p: Pending) -> Result<(), String> {
+fn run(ctx: &egui::Context, p: Pending) -> Result<(), Msg> {
     let rect = p.area.rect;
     match p.kind {
         Kind::Svg | Kind::Pdf => {
             let scene = vector::capture(ctx, p.area.layer, rect);
             if scene.items.is_empty() {
-                return Err(not_visible().into());
+                return Err(not_visible());
             }
-            let path = p.path.ok_or(t("no file chosen", "keine Datei gewählt"))?;
+            let path = p
+                .path
+                .ok_or_else(|| msg!("no file chosen", "keine Datei gewählt"))?;
             let [w, h] = p.size;
             if p.kind == Kind::Svg {
                 let svg = vector::svg(&scene, w, h);

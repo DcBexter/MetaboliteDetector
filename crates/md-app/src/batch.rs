@@ -8,7 +8,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::errors;
-use crate::lang::{self, tf};
+use crate::lang::{self, Msg, msg, tf};
 use crate::layout::ToolWindow;
 use crate::settings::row;
 use eframe::egui;
@@ -224,9 +224,9 @@ pub struct Batch {
     generation: u64,
     /// File dates of the table's runs and how many could not be read; read once per table.
     times: Option<(Vec<i64>, usize)>,
-    note: String,
+    note: Msg,
     /// FRAG export being written; its note replaces `note` when done.
-    frag_job: Option<mpsc::Receiver<String>>,
+    frag_job: Option<mpsc::Receiver<Msg>>,
 }
 
 /// A loaded sample table and the two columns that give run and group.
@@ -269,7 +269,7 @@ fn samples_row(
     samples: &mut Option<Samples>,
     groups: &mut SampleGroups,
     paths: &[PathBuf],
-    note: &mut String,
+    note: &mut Msg,
 ) {
     let hint = lang::t(
         "Load a CSV, TSV or semicolon table with a column of run file names and a column \
@@ -312,7 +312,7 @@ fn samples_row(
                     s.apply(groups);
                     *samples = Some(s);
                 }
-                Err(e) => *note = format!("{}: {}", p.display(), errors::text(&e)),
+                Err(e) => *note = msg!("{}: {}", "{}: {}", p.display(), errors::text(&e)),
             }
         }
         let Some(s) = samples else { return };
@@ -529,7 +529,7 @@ impl Default for Batch {
             shown: None,
             generation: 0,
             times: None,
-            note: String::new(),
+            note: Msg::default(),
             frag_job: None,
         }
     }
@@ -593,7 +593,7 @@ impl Batch {
 
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.frag_job
-            && let Some(r) = crate::poll_job(rx, lang::t("MID export", "MID-Export"))
+            && let Some(r) = crate::poll_job(rx, || lang::t("MID export", "MID-Export").into())
         {
             (self.note, self.frag_job) = (r.unwrap_or_else(|e| e), None);
         }
@@ -610,16 +610,16 @@ impl Batch {
                     errors,
                     took: job.started.elapsed(),
                 });
-                (self.table, self.note) = (None, String::new());
+                (self.table, self.note) = (None, Msg::default());
             }
-            Ok(None) => self.note = lang::t("Cancelled.", "Abgebrochen.").into(),
+            Ok(None) => self.note = msg!("Cancelled.", "Abgebrochen."),
             Err(mpsc::TryRecvError::Empty) => {
                 // Keeps the progress bar moving.
                 ctx.request_repaint_after(Duration::from_millis(200));
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.note = lang::t("Batch crashed.", "Batch abgestürzt.").into()
+                self.note = msg!("Batch crashed.", "Batch abgestürzt.")
             }
         }
         self.job = None;
@@ -925,7 +925,7 @@ impl Batch {
                 if self.paths.is_empty() {
                     ui.label(lang::t("Add runs first.", "Läufe fehlen."));
                 }
-                ui.label(errors::text(&self.note));
+                ui.label(&*self.note);
             }
         });
     }
@@ -1083,10 +1083,8 @@ impl Batch {
                         if self.frag_job.is_none()
                             && let Some(rx) = frag_button(ui, shown, scan)
                         {
-                            (self.note, self.frag_job) = (
-                                lang::t("Exporting MIDs…", "MIDs werden exportiert…").into(),
-                                Some(rx),
-                            );
+                            (self.note, self.frag_job) =
+                                (msg!("Exporting MIDs…", "MIDs werden exportiert…"), Some(rx));
                         }
                     });
                     view_controls(
@@ -1123,7 +1121,7 @@ impl Batch {
 
 /// "Export MIDs" of the old batch table: isotopomer shares of the fragments in each shown
 /// substance's `FRAG` feature, written on a worker thread that sends back a note.
-fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiver<String>> {
+fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiver<Msg>> {
     if !ui
         .button(lang::t("Export MIDs (FRAG)…", "MIDs exportieren (FRAG)…"))
         .on_hover_text(lang::t(
@@ -1155,24 +1153,27 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
             })
             .collect();
         let e = frag_export(&shown_runs(&runs, &sources), &compounds);
-        let mut note = match std::fs::write(&p, &e.csv) {
-            Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
-            Err(err) => tf!("Export failed: {err}", "Export fehlgeschlagen: {err}"),
-        };
-        for m in &e.errors {
-            note += &format!("\n{}", errors::text(m));
-        }
-        match e.warnings.len() {
-            0 => {}
-            1 => note += &format!("\n{}", errors::text(&e.warnings[0])),
-            n => {
-                note += &tf!(
-                    "\n{n} substances have no fragment (FRAG) defined.",
-                    "\nFür {n} Substanzen ist kein Fragment (FRAG) definiert."
-                )
+        let written = std::fs::write(&p, &e.csv);
+        Msg::new(|| {
+            let mut note = match &written {
+                Ok(()) => tf!("Saved {}", "Gespeichert: {}", p.display()),
+                Err(err) => tf!("Export failed: {err}", "Export fehlgeschlagen: {err}"),
+            };
+            for m in &e.errors {
+                note += &format!("\n{}", errors::text(m));
             }
-        }
-        note
+            match e.warnings.len() {
+                0 => {}
+                1 => note += &format!("\n{}", errors::text(&e.warnings[0])),
+                n => {
+                    note += &tf!(
+                        "\n{n} substances have no fragment (FRAG) defined.",
+                        "\nFür {n} Substanzen ist kein Fragment (FRAG) definiert."
+                    )
+                }
+            }
+            note
+        })
     }))
 }
 
@@ -1243,7 +1244,7 @@ fn scan_settings(scan: &Scan) -> Vec<(&'static str, String)> {
 /// The export has the values the table shows, plus the replicate groups and the settings used
 /// next to it, and with `ex.ions` the raw integral of every quant ion. Returns a note after a
 /// save attempt.
-fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<String> {
+fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<Msg> {
     if !ui
         .button(lang::t("Export CSV…", "CSV exportieren…"))
         .clicked()
@@ -1256,7 +1257,7 @@ fn export_button(ui: &mut egui::Ui, t: &Table, ex: &Export) -> Option<String> {
         .save_file()?;
     Some(match save_results(&p, t, ex) {
         Ok(note) => note,
-        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
+        Err(e) => msg!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     })
 }
 
@@ -1279,7 +1280,7 @@ fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
 
 /// Writes the results CSV `p` and the files next to it; the note names what was saved and what
 /// could not be.
-fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
+fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
     let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
     t.write_csv(create(p)?)?;
     german(p, 3, ex)?;
@@ -1290,21 +1291,21 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
         remove_stale(&group_stats_path(p))
     };
     // (text columns for the German variant, name in the note, file)
-    let quant_ions = lang::t("quant ions", "Quant-Ionen");
+    let quant_ions = msg!("quant ions", "Quant-Ionen");
     let mut results = vec![
         (
             2,
-            lang::t("replicate groups", "Replikatgruppen"),
+            msg!("replicate groups", "Replikatgruppen"),
             t.write_groups_file(p).transpose(),
         ),
         (
             3,
-            lang::t("group statistics", "Gruppenstatistik"),
+            msg!("group statistics", "Gruppenstatistik"),
             group_stats.transpose(),
         ),
         (
             2,
-            lang::t("settings", "Einstellungen"),
+            msg!("settings", "Einstellungen"),
             Some(
                 create(&sp)
                     .and_then(|f| ex.settings.write_csv(&ex.extra, f))
@@ -1313,7 +1314,11 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
         ),
     ];
     if !ex.ions {
-        results.push((2, quant_ions, remove_stale(&ions_path(p)).transpose()));
+        results.push((
+            2,
+            quant_ions.clone(),
+            remove_stale(&ions_path(p)).transpose(),
+        ));
     } else {
         let ip = ions_path(p);
         let runs: Vec<&RunResult> = (t.sources.iter())
@@ -1328,19 +1333,22 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<String> {
         let r = r.map(|r| r.and_then(|f| german(&f, cols, ex).map(|()| f)));
         match r {
             Some(Ok(path)) => saved.push(path.display().to_string()),
-            Some(Err(e)) => failed.push(format!("{what}: {e}")),
+            Some(Err(e)) => failed.push(msg!("{what}: {e}", "{what}: {e}")),
             None => {}
         }
     }
-    let mut text = tf!("Saved {}", "Gespeichert: {}", saved.join(", "));
-    if !failed.is_empty() {
-        text += &tf!(
-            "; not saved: {}",
-            "; nicht gespeichert: {}",
-            failed.join("; ")
-        );
-    }
-    Ok(text)
+    Ok(Msg::new(|| {
+        let mut text = tf!("Saved {}", "Gespeichert: {}", saved.join(", "));
+        if !failed.is_empty() {
+            let failed: Vec<&str> = failed.iter().map(|m| &**m).collect();
+            text += &tf!(
+                "; not saved: {}",
+                "; nicht gespeichert: {}",
+                failed.join("; ")
+            );
+        }
+        text
+    }))
 }
 
 /// The runs as the user left them (removed and moved), with their file dates.
@@ -1378,7 +1386,7 @@ fn pool_mapping_button(
     t: &Table,
     n: &Norm,
     times: Option<&[i64]>,
-    note: &mut String,
+    note: &mut Msg,
 ) {
     if n.kind != Kind::Pool
         || !ui
@@ -1405,8 +1413,8 @@ fn pool_mapping_button(
         path.as_mut_os_string().push(".txt");
     }
     *note = match std::fs::write(&path, pool_mapping_text(&base, &p)) {
-        Ok(()) => tf!("Saved {}", "Gespeichert: {}", path.display()),
-        Err(e) => tf!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
+        Ok(()) => msg!("Saved {}", "Gespeichert: {}", path.display()),
+        Err(e) => msg!("Export failed: {e}", "Export fehlgeschlagen: {e}"),
     };
 }
 
