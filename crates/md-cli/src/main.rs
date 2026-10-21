@@ -53,6 +53,7 @@ Options:
                               commas (needs -o)
       --untargeted            also tabulate components without library hit (pooled over all runs)
       --rescan                look for quant ions a run lacks in its ion traces
+      --baseline-correction   subtract each scan's baseline of every run (the old wizard's switch; old type 1 .bin/.idx caches only)
       --save-cmp DIR          also save the components of each deconvoluted run as DIR/RUN.cmp
       --shift-reference NAME  shift the calibration per run onto this library substance (needs -c)
       --shift-cutoff F        min. score of the reference in a run (default: the library search cutoff)
@@ -80,6 +81,7 @@ struct Args {
     excel_de: bool,
     untargeted: bool,
     rescan: bool,
+    baseline_correction: bool,
     save_cmp: Option<PathBuf>,
     shift_reference: Option<String>,
     shift_cutoff: Option<f64>,
@@ -130,6 +132,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         excel_de: false,
         untargeted: false,
         rescan: false,
+        baseline_correction: false,
         save_cmp: None,
         shift_reference: None,
         shift_cutoff: None,
@@ -180,6 +183,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
             "--excel-de" => a.excel_de = true,
             "--untargeted" => a.untargeted = true,
             "--rescan" => a.rescan = true,
+            "--baseline-correction" => a.baseline_correction = true,
             "--save-cmp" => a.save_cmp = Some(value()?.into()),
             "--shift-reference" => a.shift_reference = Some(text()?),
             "--shift-cutoff" => a.shift_cutoff = Some(num(0.0, 1.0)?),
@@ -263,6 +267,7 @@ fn run(a: Args) -> Result<bool, String> {
     ts.max_discrepancy = a.max_discrepancy.unwrap_or(ts.max_discrepancy);
     let mut scan = settings.scan(calibration);
     scan.untargeted = a.untargeted;
+    scan.baseline_correction = a.baseline_correction;
     if let Some(dir) = a.save_cmp {
         // Before the scan: a wrong folder must not cost a whole scan.
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -295,6 +300,7 @@ fn run(a: Args) -> Result<bool, String> {
             a.shift_reference.clone().unwrap_or_else(|| "none".into()),
         ),
         ("UNTARGETED", a.untargeted.to_string()),
+        ("BASELINE_CORRECTION", a.baseline_correction.to_string()),
         ("RESCAN", rescan.to_string()),
         ("RUNS_GIVEN", a.runs.len().to_string()),
     ];
@@ -623,7 +629,7 @@ NUM PEAKS: 12
         };
         assert_eq!(table("").lines().count(), 2, "header and early");
         let csv = table(
-            "--untargeted --rescan --exclude-ions 73,147-149 --min-sn 1 --max-discrepancy 1000",
+            "--untargeted --rescan --baseline-correction --exclude-ions 73,147-149 --min-sn 1 --max-discrepancy 1000",
         );
         let names: Vec<&str> = csv
             .lines()
@@ -633,6 +639,10 @@ NUM PEAKS: 12
         assert_eq!(names, ["early", "Unknown 1"], "{csv}");
         let settings = std::fs::read_to_string(dir.join("out.settings.csv")).unwrap();
         assert!(settings.contains("\nUNTARGETED,true\n"), "{settings}");
+        assert!(
+            settings.contains("\nBASELINE_CORRECTION,true\n"),
+            "{settings}"
+        );
         assert!(settings.contains("\nUNKNOWN_SUBSTANCES,1\n"), "{settings}");
         assert!(settings.contains("\nRUNS_SCANNED,1\n"), "{settings}");
 

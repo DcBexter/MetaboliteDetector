@@ -64,7 +64,7 @@ pub fn rescan_runs(
                         let path = &paths[*i];
                         // A panic in one file becomes its error, so the other files are kept.
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::read_run(path)
+                            super::read_scan_run(path, s)
                                 .and_then(|c| rescan_run(c, todo, s).map_err(|e| e.to_string()))
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))

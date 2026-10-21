@@ -418,6 +418,7 @@ impl GcmsSettings {
             shift: None,
             untargeted: false,
             save_cmp: None,
+            baseline_correction: false,
         }
     }
 
