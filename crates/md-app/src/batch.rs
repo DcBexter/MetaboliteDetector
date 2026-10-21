@@ -17,14 +17,13 @@ use md_core::batch::{
     Completed, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference, Table,
     TableSettings, complete_scan, path_key, run_key, scan_runs, table,
 };
-use md_core::batch::{
-    cell_ions, group_label, group_names, group_stats_path, hit_list, ions_path, settings_path,
-};
+use md_core::batch::{cell_ions, group_stats_path, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
+use md_core::view::{self, BatchView, BatchViewCache, Line, Mode, Stat, Title};
 
 use crate::identify::Library;
 use crate::spawn;
@@ -127,18 +126,6 @@ enum Act {
     DropRow(usize),
 }
 
-/// What the shown table lists.
-#[derive(Clone, Copy, PartialEq, Default)]
-enum Mode {
-    /// Summed quant ion integrals per run.
-    #[default]
-    Values,
-    /// Retention time of the hit per run, in minutes.
-    Times,
-    /// Mean, relative standard error, hits and p-value against the blanks, per replicate group.
-    Groups,
-}
-
 /// How the shown table is displayed; changing it does not derive the table again.
 struct View {
     mode: Mode,
@@ -224,6 +211,8 @@ pub struct Batch {
     shown: Option<(Norm, Table)>,
     /// Counts the tables `shown` has held, so windows reading it know when it changed.
     generation: u64,
+    /// Headings and lines of the table for `generation` and `view`.
+    batch_view: BatchViewCache,
     /// File dates of the table's runs and how many could not be read; read once per table.
     times: Option<(Vec<i64>, usize)>,
     note: Msg,
@@ -531,6 +520,7 @@ impl Default for Batch {
             totals: (0, Vec::new()),
             shown: None,
             generation: 0,
+            batch_view: BatchViewCache::default(),
             times: None,
             note: Msg::default(),
             frag_job: None,
@@ -1105,12 +1095,24 @@ impl Batch {
                                 (msg!("Exporting MIDs…", "MIDs werden exportiert…"), Some(rx));
                         }
                     });
+                    let shape = |v: &View| (v.mode, v.ion_rows, v.totals);
+                    let groups = &self
+                        .batch_view
+                        .get(self.generation, shown, shape(&self.view), &self.view.blanks)
+                        .groups;
                     view_controls(
                         ui,
                         &mut self.view,
                         &mut self.norm.edits,
-                        &group_names(shown),
+                        groups,
                         self.norm.z_score,
+                    );
+                    // The controls may have changed the view; a hit when they did not.
+                    let bv = self.batch_view.get(
+                        self.generation,
+                        shown,
+                        shape(&self.view),
+                        &self.view.blanks,
                     );
                     if self.view.totals && self.totals.0 != self.generation {
                         self.totals = (self.generation, shown.total_intensities());
@@ -1120,7 +1122,8 @@ impl Batch {
                         scan,
                         settings: &self.settings,
                     };
-                    if let Some(act) = table_view(ui, shown, &self.norm, &self.view, totals, &d) {
+                    if let Some(act) = table_view(ui, shown, &self.norm, &self.view, totals, bv, &d)
+                    {
                         self.norm.edits.apply(act, t.runs.len());
                     }
                 }
@@ -1442,7 +1445,7 @@ fn view_controls(
     ui: &mut egui::Ui,
     v: &mut View,
     edits: &mut Edits,
-    groups: &[&str],
+    groups: &[String],
     z_scored: bool,
 ) {
     if z_scored && v.mode == Mode::Groups {
@@ -1533,7 +1536,7 @@ fn view_controls(
                     "Replicate group of the blank runs; every other group gets a p-value against it.",
                     "Replikatgruppe der Blindwertläufe; jede andere Gruppe bekommt einen p-Wert dagegen.",
                 ));
-            if !groups.contains(&v.blanks.as_str()) {
+            if !groups.contains(&v.blanks) {
                 ui.weak(lang::t(
                     "no such group, so no p-values",
                     "keine solche Gruppe, daher keine p-Werte",
@@ -1552,93 +1555,6 @@ fn view_controls(
             edits.restore();
         }
     });
-}
-
-/// A statistic that is undefined (NaN) shows as a dash.
-fn number(v: f64, decimals: usize) -> String {
-    if v.is_finite() {
-        format!("{v:.decimals$}")
-    } else {
-        "–".into()
-    }
-}
-
-/// A mean with 6 significant digits, like the old table (Qt shows a double as `'g'` with 6), so
-/// normalised fractions stay readable; without exponent.
-pub(crate) fn significant(v: f64) -> String {
-    if v == 0.0 || !v.is_finite() {
-        return number(v, 0);
-    }
-    if v.abs() < 1e-10 {
-        return format!("{v:.5e}");
-    }
-    let decimals = (5 - v.abs().log10().floor() as i32).clamp(0, 15) as usize;
-    let s = format!("{v:.decimals$}");
-    if s.contains('.') {
-        s.trim_end_matches('0').trim_end_matches('.').into()
-    } else {
-        s
-    }
-}
-
-/// Titles and sub-titles of the columns after "Quant ions".
-fn heads(t: &Table, v: &View, groups: &[&str], blank: bool) -> Vec<(String, String)> {
-    if v.mode != Mode::Groups {
-        return (t.runs.iter().zip(&t.groups))
-            .map(|(r, g)| (r.clone(), group_label(g).to_string()))
-            .collect();
-    }
-    let stats = [
-        lang::t("Mean", "Mittelwert"),
-        lang::t("Rel. Std. Err.", "Rel. Std.-Fehler"),
-        "#",
-        lang::t("P (blank)", "P (Blindwert)"),
-    ];
-    let per_group = if blank { 4 } else { 3 };
-    (groups.iter())
-        .flat_map(|g| {
-            stats[..per_group]
-                .iter()
-                .map(move |s| (s.to_string(), group_label(g).to_string()))
-        })
-        .chain([(
-            "P (ANOVA)".to_string(),
-            lang::t("all groups", "alle Gruppen").to_string(),
-        )])
-        .collect()
-}
-
-/// The cells of one substance in "Group statistics": per group mean, relative standard error,
-/// hits and (with a blank group) the p-value against the blanks; last the ANOVA p-value over all
-/// the groups, blanks included, like the old "p-value" column.
-fn group_cells(t: &Table, row: usize, groups: &[&str], blank: Option<&str>) -> Vec<String> {
-    let p = |p: Option<f64>| p.map_or("–".into(), |p| format!("{p:.4}"));
-    let stats = t.group_stats(row, groups, blank);
-    let mut out = Vec::new();
-    for (k, s) in stats.groups.iter().enumerate() {
-        out.push(significant(s.mean));
-        out.push(number(s.rel_std_err, 3));
-        out.push(s.hits.to_string());
-        if blank.is_some() {
-            out.push(p(stats.p_blank[k]));
-        }
-    }
-    out.push(p(stats.anova));
-    out
-}
-
-/// Cells of substance `row` after "Quant ions".
-fn cells(t: &Table, v: &View, groups: &[&str], blank: bool, row: usize) -> Vec<String> {
-    let r = &t.rows[row];
-    match v.mode {
-        Mode::Values => (r.values.iter())
-            .map(|v| v.map_or("–".into(), |v| format!("{v:.0}")))
-            .collect(),
-        Mode::Times => (r.rts_s.iter())
-            .map(|rt| rt.map_or("–".into(), |s| format!("{:.2}", s / 60.0)))
-            .collect(),
-        Mode::Groups => group_cells(t, row, groups, blank.then_some(v.blanks.as_str())),
-    }
 }
 
 /// Buttons in the header of run `j` of `n`: move left, move right, remove.
@@ -1718,35 +1634,12 @@ impl Detail<'_> {
     }
 }
 
-/// One line of the table body.
-#[derive(Clone, Copy)]
-enum Line {
-    Total,
-    Substance(usize),
-    /// Quant ion `k` of substance `row`.
-    Ion(usize, usize),
-}
-
-fn body_lines(t: &Table, v: &View, with_total: bool) -> Vec<Line> {
-    let ions = v.ion_rows && v.mode == Mode::Values;
-    let mut lines = Vec::with_capacity(t.rows.len() + 1);
-    lines.extend(with_total.then_some(Line::Total));
-    for (i, r) in t.rows.iter().enumerate() {
-        lines.push(Line::Substance(i));
-        if ions {
-            lines.extend((0..r.ions.len()).map(|k| Line::Ion(i, k)));
-        }
-    }
-    lines
-}
-
 /// What the table body needs to draw a line.
 struct Body<'a> {
     t: &'a Table,
     v: &'a View,
     d: &'a Detail<'a>,
-    groups: &'a [&'a str],
-    blank: bool,
+    bv: &'a BatchView,
     totals: &'a [f64],
 }
 
@@ -1777,20 +1670,13 @@ impl Body<'_> {
             }
         });
         let ions: Vec<String> = r.ions.iter().map(u32::to_string).collect();
-        let lead = [
-            r.name.clone(),
-            format!("{:.2}", r.rt_s / 60.0),
-            ions.join(" "),
-        ];
+        let lead = [r.name.clone(), view::minutes(r.rt_s), ions.join(" ")];
         for text in lead {
             row.col(|ui| {
                 ui.label(text);
             });
         }
-        for (col, text) in cells(t, self.v, self.groups, self.blank, i)
-            .into_iter()
-            .enumerate()
-        {
+        for (col, text) in self.bv.cells(t, i).into_iter().enumerate() {
             row.col(|ui| {
                 let label = ui.label(text);
                 if self.v.mode == Mode::Values {
@@ -1828,6 +1714,7 @@ fn table_view(
     norm: &Norm,
     v: &View,
     totals: Option<&[f64]>,
+    bv: &BatchView,
     d: &Detail,
 ) -> Option<Act> {
     let what = match (v.mode, norm.kind, norm.z_score) {
@@ -1861,17 +1748,13 @@ fn table_view(
         "{rows} substances × {runs} runs; values are {what}",
         "{rows} Substanzen × {runs} Läufe; Werte sind {what}"
     ));
-    let groups = group_names(t);
-    let blank = v.mode == Mode::Groups && groups.contains(&v.blanks.as_str());
-    let heads = heads(t, v, &groups, blank);
+    let (heads, lines) = (&bv.heads, &bv.lines);
     let totals = totals.filter(|_| v.mode == Mode::Values);
-    let lines = body_lines(t, v, totals.is_some());
     let body = Body {
         t,
         v,
         d,
-        groups: &groups,
-        blank,
+        bv,
         totals: totals.unwrap_or_default(),
     };
     let mut act = None;
@@ -1901,11 +1784,14 @@ fn table_view(
                             ui.strong(title);
                         });
                     }
-                    for (j, (title, sub)) in heads.iter().enumerate() {
+                    for (j, head) in heads.iter().enumerate() {
                         h.col(|ui| {
                             ui.vertical(|ui| {
-                                ui.strong(title);
-                                ui.label(sub);
+                                ui.strong(title_text(&head.title));
+                                ui.label(match head.title {
+                                    Title::Anova => lang::t("all groups", "alle Gruppen"),
+                                    _ => &head.group,
+                                });
                                 if v.mode != Mode::Groups {
                                     act = run_buttons(ui, j, heads.len()).or(act);
                                 }
@@ -1921,6 +1807,18 @@ fn table_view(
                 });
         });
     act
+}
+
+/// A column title in the language of the UI.
+fn title_text(t: &Title) -> &str {
+    match t {
+        Title::Run(r) => r,
+        Title::Stat(Stat::Mean) => lang::t("Mean", "Mittelwert"),
+        Title::Stat(Stat::RelStdErr) => lang::t("Rel. Std. Err.", "Rel. Std.-Fehler"),
+        Title::Stat(Stat::Hits) => "#",
+        Title::Stat(Stat::PBlank) => lang::t("P (blank)", "P (Blindwert)"),
+        Title::Anova => "P (ANOVA)",
+    }
 }
 
 fn total_row(row: &mut egui_extras::TableRow, totals: &[f64]) {
@@ -2108,41 +2006,6 @@ mod tests {
     }
 
     #[test]
-    fn anova_column_covers_all_groups_and_stands_last() {
-        // Hand calculation (md-core stats test): groups of 1 2 3 / 2 3 4 / 5 6 7 give p = 27 / 4096.
-        let v = [1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let t = Table {
-            runs: (0..9).map(|i| i.to_string()).collect(),
-            groups: ["A", "A", "A", "B", "B", "B", "C", "C", "C"]
-                .map(String::from)
-                .to_vec(),
-            rows: vec![md_core::batch::Row {
-                compound: 0,
-                name: "s0".into(),
-                rt_s: 60.0,
-                ions: vec![73],
-                values: v.map(Some).to_vec(),
-                rts_s: vec![Some(60.0); 9],
-            }],
-            ..Default::default()
-        };
-        let groups = ["A", "B", "C"];
-        let cells = group_cells(&t, 0, &groups, None);
-        assert_eq!(cells.len(), 3 * 3 + 1);
-        assert_eq!(cells.last().unwrap(), "0.0066");
-        // With a blank group its column comes between the group's, the ANOVA still last and over all.
-        let cells = group_cells(&t, 0, &groups, Some("C"));
-        assert_eq!(cells.len(), 3 * 4 + 1);
-        assert_eq!(cells.last().unwrap(), "0.0066");
-        let view = View {
-            mode: Mode::Groups,
-            ..Default::default()
-        };
-        assert_eq!(heads(&t, &view, &groups, true).len(), cells.len());
-        assert_eq!(heads(&t, &view, &groups, false).len(), 3 * 3 + 1);
-    }
-
-    #[test]
     fn group_statistics_are_readable_after_normalising_and_locked_for_z_scores() {
         let t = Table {
             runs: vec!["a".into(), "b".into(), "c".into()],
@@ -2158,18 +2021,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            group_cells(&t, 0, &["A"], None)[..3],
+            view::group_cells(&t, 0, &["A"], None)[..3],
             ["4.33333", "0.657", "3"]
         );
         // One group: nothing to compare, p = 1 like the old code.
-        assert_eq!(group_cells(&t, 0, &["A"], None)[3], "1.0000");
+        assert_eq!(view::group_cells(&t, 0, &["A"], None)[3], "1.0000");
         // By total signal every value is 1: the old code rounded the mean to "1" and fractions to 0.
         let mut n = Norm {
             kind: Kind::TotalSignal,
             ..Default::default()
         };
         let shown = shown_table(&t, &n, None);
-        assert_eq!(group_cells(&shown, 0, &["A"], None)[0], "1");
+        assert_eq!(view::group_cells(&shown, 0, &["A"], None)[0], "1");
         let shown = Table {
             rows: vec![md_core::batch::Row {
                 values: vec![Some(0.0123), Some(0.0124), Some(0.0128)],
@@ -2177,11 +2040,7 @@ mod tests {
             }],
             ..t.clone()
         };
-        assert_eq!(group_cells(&shown, 0, &["A"], None)[0], "0.0125");
-        assert_eq!(significant(1_234_567.0), "1234567");
-        assert_eq!(significant(-0.0123456789), "-0.0123457");
-        assert_eq!(significant(f64::NAN), "–");
-        assert_eq!(significant(-1e-20), "-1.00000e-20");
+        assert_eq!(view::group_cells(&shown, 0, &["A"], None)[0], "0.0125");
 
         // z-scores of 1, 2, 10: only one is above 0, so "#" would say 1 of 3 hits.
         n = Norm {
@@ -2198,7 +2057,7 @@ mod tests {
         };
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            view_controls(ui, &mut v, &mut Edits::default(), &["A"], true);
+            view_controls(ui, &mut v, &mut Edits::default(), &["A".to_string()], true);
         });
         out.textures_delta.clear();
         assert!(v.mode == Mode::Values);
@@ -2374,11 +2233,14 @@ mod tests {
         assert_eq!(hits, [("Glucose".into(), 0.9), ("Fructose".into(), 0.8)]);
         // The ion lines follow their substance; without the checkbox there are none.
         let mut v = View::default();
-        assert_eq!(body_lines(&t, &v, false).len(), 1);
+        assert_eq!(view::body_lines(&t, v.mode, v.ion_rows, false).len(), 1);
         v.ion_rows = true;
-        assert_eq!(body_lines(&t, &v, true).len(), 1 + 1 + 2);
+        assert_eq!(
+            view::body_lines(&t, v.mode, v.ion_rows, true).len(),
+            1 + 1 + 2
+        );
         v.mode = Mode::Times;
-        assert_eq!(body_lines(&t, &v, false).len(), 1);
+        assert_eq!(view::body_lines(&t, v.mode, v.ion_rows, false).len(), 1);
     }
 
     #[test]

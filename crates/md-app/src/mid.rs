@@ -879,12 +879,9 @@ fn fragment_plot(
         .allow_zoom(false)
         .allow_scroll(false)
         .y_axis_label(t("Share", "Anteil"))
-        .x_axis_formatter(move |m, _| {
-            let k = m.value.round();
-            match (m.value - k).abs() < 1e-6 && k >= 0.0 && (k as usize) < n {
-                true => format!("M{k}"),
-                false => String::new(),
-            }
+        .x_axis_formatter(move |m, _| match md_core::view::axis_index(m.value) {
+            Some(k) if k < n => format!("M{k}"),
+            _ => String::new(),
         })
         .show(ui, |p| {
             for (j, (key, name, values)) in series.iter().enumerate() {

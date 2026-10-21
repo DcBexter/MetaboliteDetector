@@ -37,6 +37,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
+  src/view.rs           view model of the tables: display rules (missing as 0, NaN sort, digits, axis index), batch view cached per generation
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
   src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
                         statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
@@ -729,7 +730,7 @@ scales with the number of runs squared, not the number of substances squared, wh
 non-targeted tables. The sign of a component is chosen so its largest loading is positive. Values are
 tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
 [algorithms.md](reverse-engineering/algorithms.md) §7f. The window
-(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
+(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change; which rows it lists and how numbers read comes from `md_core::view`.
 
 ## Mass isotopomer distributions (MID)
 
