@@ -137,7 +137,6 @@ impl Results {
             return;
         };
         let lib = (run.ident.as_ref()).map(|((lib, ..), ..)| lib.clone());
-        let cal = cal.filter(|_| lib.is_none());
         let stamp = (Arc::downgrade(&run.data), run.rev, cal.cloned(), cutoff);
         let mut cache = self.cache.take().filter(|c| same(&c.0, &stamp));
         if cache.is_none() {

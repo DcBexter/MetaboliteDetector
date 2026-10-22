@@ -267,7 +267,7 @@ impl App {
         if let Some((path, k, _, ri, _)) = &self.nist.hits
             && let Some(run) = self.runs.iter().find(|r| &r.path == path)
             && run.components.get(*k).is_some()
-            && crate::results::component_ri(run, *k, self.ri.for_run(run)) != *ri
+            && crate::results::component_ri(run, *k, self.ri.for_library(run)) != *ri
         {
             self.nist.hits = None;
         }
@@ -283,7 +283,7 @@ impl App {
             return;
         };
         let c = &run.components[k];
-        let ri = crate::results::component_ri(run, k, self.ri.for_run(run));
+        let ri = crate::results::component_ri(run, k, self.ri.for_library(run));
         let (path, spectrum, lib) = (run.path.clone(), c.spectrum.clone(), lib.clone());
         self.nist.search = Some(Job::spawn(ctx, move |_, _| {
             let hits = library_hits(&spectrum, ri, &lib.prepared, &lib.settings);

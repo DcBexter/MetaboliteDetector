@@ -129,6 +129,11 @@ impl Calibration {
         applicable(ident, self.base(run).map(|c| &**c), self.rt_only)
     }
 
+    /// The RI to store or search with: `for_run`, but none in RT-only mode, where "RI" would be a time.
+    pub fn for_library<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
+        self.for_run(run).filter(|_| !self.rt_only)
+    }
+
     /// What the batch and MID scans search with: the calibration, not while the library is rebuilt
     /// after a switch of RT-only (its anchors would not match), and the reference with its cutoff.
     pub fn for_search(
