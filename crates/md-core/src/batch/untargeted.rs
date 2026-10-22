@@ -29,7 +29,7 @@ pub fn add_unknowns(
     cancel: &Cancel,
 ) -> Option<Vec<LibraryCompound>> {
     let mut lib: Vec<LibraryCompound> = Vec::new();
-    let mut prepared = PreparedLibrary::new(&[], &s.search);
+    let mut prepared = PreparedLibrary::new(&[], &s.analysis.search);
     for run in runs {
         if cancel.is_cancelled() {
             return None;
@@ -37,7 +37,7 @@ pub fn add_unknowns(
         let unknown = std::mem::take(&mut run.unknown);
         // Every component only reads the library as it was before the run, so they are scored in parallel.
         let hits: Vec<_> = (unknown.par_iter())
-            .map(|u| library_hits(&u.spectrum, u.ri, &prepared, &s.search))
+            .map(|u| library_hits(&u.spectrum, u.ri, &prepared, &s.analysis.search))
             .collect();
         let assigned = assign_best_first(&hits, lib.len());
         for (u, hit) in unknown.into_iter().zip(assigned) {
@@ -61,7 +61,7 @@ pub fn add_unknowns(
                 alternatives: Vec::new(),
             });
         }
-        prepared = PreparedLibrary::new(&lib, &s.search);
+        prepared = PreparedLibrary::new(&lib, &s.analysis.search);
     }
     Some(lib)
 }

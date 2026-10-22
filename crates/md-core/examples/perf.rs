@@ -202,7 +202,7 @@ fn main() {
 
     // Batch: one run end to end (ion traces, peaks, deconvolution, search of all components).
     let s = ScanSettings::default();
-    let prepared = PreparedLibrary::new(&lib, &s.search);
+    let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
     let t = Instant::now();
     let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
     println!(

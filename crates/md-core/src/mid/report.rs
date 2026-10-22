@@ -8,7 +8,8 @@ use crate::library::LibraryCompound;
 use super::{Method, Mids, group_stat};
 
 /// A move in the result view: run columns (old "Change column order…") or substances with their
-/// diagrams (old "Change order of diagrams…"), from one position to another.
+/// diagrams (old "Change order of diagrams…"). `MidReport::apply` swaps the two positions given;
+/// it does not move one item to the other position.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Move {
     Run(usize, usize),

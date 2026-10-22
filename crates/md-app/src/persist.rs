@@ -18,7 +18,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use md_core::settings::MAX_LEN;
+use md_core::settings::{MAX_LEN, keys};
 
 use crate::App;
 use crate::lang::{Msg, msg, t};
@@ -102,8 +102,8 @@ fn put<T: std::str::FromStr>(f: &mut T, v: &str) -> bool {
 /// Keys the old app named differently from its settings file (Inferred: same meaning and default).
 fn alias(key: &str) -> &str {
     match key {
-        "AN_BP_HEIGHT" => "AN_MIN_HEIGHT_BP",
-        "MASS_FILTER" => "LS_MASS_FILTER",
+        keys::LEGACY_AN_BP_HEIGHT => keys::AN_MIN_HEIGHT_BP,
+        keys::LEGACY_MASS_FILTER => keys::LS_MASS_FILTER,
         k => k,
     }
 }
@@ -681,11 +681,9 @@ size=@Size(1591 800)
     #[test]
     fn saved_width_one_becomes_auto_once() {
         let width = |a: &App| a.settings.applied.an_deconvolution_width;
+        let width_one = format!("{}=1\n", keys::AN_DECONVOLUTION_WIDTH);
         for (text, entries) in [
-            (
-                "AN_DECONVOLUTION_WIDTH=1\n",
-                own_entries as fn(&str) -> Vec<Entry>,
-            ),
+            (width_one.as_str(), own_entries as fn(&str) -> Vec<Entry>),
             (OLD, ini_entries),
         ] {
             let (mut app, _) = apply_text(text, entries);
@@ -700,7 +698,10 @@ size=@Size(1591 800)
             width_once(&mut next);
             assert_eq!(width(&next), Some(1.0), "the marker stops a second switch");
         }
-        let (mut app, _) = apply_text("AN_DECONVOLUTION_WIDTH=2.5\n", own_entries);
+        let (mut app, _) = apply_text(
+            &format!("{}=2.5\n", keys::AN_DECONVOLUTION_WIDTH),
+            own_entries,
+        );
         width_once(&mut app);
         assert_eq!(width(&app), Some(2.5), "only 1 is switched");
     }
@@ -719,7 +720,7 @@ size=@Size(1591 800)
         }
         let mut app = App::default();
         let ctx = egui::Context::default();
-        let fake = Fake("AN_DECONVOLUTION_WIDTH=1\n".into());
+        let fake = Fake(format!("{}=1\n", keys::AN_DECONVOLUTION_WIDTH));
         restore(&mut app, &ctx, Some(&fake), None, None);
         assert_eq!(app.settings.applied.an_deconvolution_width, None);
         assert!(text(&app).contains("\nauto_width_once=true\n"));
@@ -787,7 +788,11 @@ size=@Size(1591 800)
         back.guided.ask = true;
         assert!(!super::text(&back).contains("mode="));
         assert_eq!(back.settings.applied, app.settings.applied);
-        let set = apply_text("AN_DECONVOLUTION_WIDTH=2.5\n", own_entries).0;
+        let set = apply_text(
+            &format!("{}=2.5\n", keys::AN_DECONVOLUTION_WIDTH),
+            own_entries,
+        )
+        .0;
         assert_eq!(set.settings.applied.an_deconvolution_width, Some(2.5));
         assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);
@@ -833,16 +838,21 @@ size=@Size(1591 800)
     #[test]
     fn bad_values_keep_defaults() {
         let (app, bad) = apply_text(
-            "LS_RI_DIFF=abc\nAN_NUMBER_BINS=0\nLS_PURE_FACTOR=0.7\npanel.runs=yes\n\
-             PEAK_DETECTOR=matched 0 5\n",
+            &format!(
+                "{}=abc\n{}=0\n{}=0.7\npanel.runs=yes\n{}=matched 0 5\n",
+                keys::LS_RI_DIFF,
+                keys::AN_NUMBER_BINS,
+                keys::LS_PURE_FACTOR,
+                keys::PEAK_DETECTOR
+            ),
             own_entries,
         );
         assert_eq!(
             bad,
             [
-                "LS_RI_DIFF",
+                keys::LS_RI_DIFF,
                 "panel.runs",
-                "AN_NUMBER_BINS: must be between 1 and 100",
+                &format!("{}: must be between 1 and 100", keys::AN_NUMBER_BINS),
                 "Peak width: must be between 1 and 1000"
             ]
         );

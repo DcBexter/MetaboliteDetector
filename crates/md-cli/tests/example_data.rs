@@ -6,7 +6,7 @@ use md_core::job::{Cancel, Progress};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use md_core::batch::{QuantSettings, Study, TableSettings, run_study, table};
+use md_core::batch::{Study, TableSettings, run_study, table};
 use md_core::library::parse_msl;
 use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
@@ -74,13 +74,13 @@ fn csv_equals_the_core_table_of_the_example_runs() {
 
     let settings = GcmsSettings::default();
     let compounds = parse_msl(&msl).unwrap();
-    let prepared = PreparedLibrary::new(&compounds, &settings.search());
+    let scan = settings.scan(None);
+    let prepared = PreparedLibrary::new(&compounds, &scan.analysis.search);
     let study = Study {
         runs: &runs,
         library: &compounds,
         prepared: &prepared,
-        scan: &settings.scan(None),
-        quant: &QuantSettings::default(),
+        scan: &scan,
         rescan: false,
         parallel: 4,
     };

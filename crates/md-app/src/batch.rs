@@ -24,7 +24,7 @@ use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
-use md_core::settings::GcmsSettings;
+use md_core::settings::{GcmsSettings, keys};
 use md_core::view::{self, BatchView, BatchViewCache, Line, Mode, Stat, Title};
 
 use crate::Job;
@@ -472,8 +472,8 @@ impl Batch {
     pub fn use_settings(&mut self, applied: &GcmsSettings, rt_only: bool) {
         self.rt_only = rt_only;
         if self.applied != *applied {
-            let quant = applied.quant();
-            if quant != self.applied.quant() {
+            let quant = applied.analysis().quant;
+            if quant != self.applied.analysis().quant {
                 self.quant = quant;
             }
             self.applied = applied.clone();
@@ -558,7 +558,7 @@ impl Batch {
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
-        let s = ScanSettings {
+        let mut s = ScanSettings {
             // Like the single-run search: only a substance with an RI can be the reference.
             shift: cal
                 .and(reference)
@@ -568,8 +568,9 @@ impl Batch {
             baseline_correction: self.options.baseline_correction,
             ..self.applied.scan(cal.cloned())
         };
+        // The window's own quant ions (they may differ from the applied ones).
+        s.analysis.quant = self.quant.clone();
         let rescan = self.options.rescan;
-        let quant = self.quant.clone();
         let (paths, l, parallel) = (self.paths.clone(), lib.clone(), self.parallel);
         let total = paths.len();
         let job = Job::spawn(ctx, move |done, cancel| {
@@ -578,7 +579,6 @@ impl Batch {
                 library: &l.compounds,
                 prepared: &l.prepared,
                 scan: &s,
-                quant: &quant,
                 rescan,
                 parallel,
             };
@@ -657,7 +657,7 @@ impl Batch {
             save_cmp_row(ui, &mut self.options.save_cmp);
             row(
                 ui,
-                name_of("baseline_correction"),
+                name_of(keys::BASELINE_CORRECTION),
                 "",
                 lang::t(
                     "Subtract each scan's stored baseline from every run, like the switch in the old \
@@ -687,7 +687,7 @@ impl Batch {
                 row(
                     ui,
                     lang::t("Quant ions per substance", "Quant-Ionen pro Substanz"),
-                    "QUANT_ION_NUMBER",
+                    keys::QUANT_ION_NUMBER,
                     lang::t(
                         "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
                         "Wie viele Ionen jeder Substanz integriert und summiert werden. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
@@ -697,7 +697,7 @@ impl Batch {
                 row(
                     ui,
                     lang::t("Min. distance of quant ions", "Min. Abstand der Quant-Ionen"),
-                    "QUANT_MIN_DIST_IONS",
+                    keys::QUANT_MIN_DIST_IONS,
                     lang::t(
                         "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
                         "Quant-Ionen einer Substanz liegen möglichst mindestens so viele m/z auseinander. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
@@ -709,7 +709,7 @@ impl Batch {
                 row(
                     ui,
                     lang::t("Quant ion quality cut-off", "Qualitätsschwelle der Quant-Ionen"),
-                    "QUANT_QUALITY_CUTOFF",
+                    keys::QUANT_QUALITY_CUTOFF,
                     lang::t(
                         "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
                         "Ionen, deren Peak-Qualität darunter liegt (niedriger ist besser), werden zuerst gewählt. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
@@ -785,7 +785,7 @@ impl Batch {
             });
             crate::settings::ranges(
                 ui,
-                "QUANT_EXCL_IONS",
+                keys::QUANT_EXCL_IONS,
                 lang::t(
                     "Ions avoided as quant ions",
                     "Als Quant-Ionen gemiedene Ionen",
@@ -801,7 +801,7 @@ impl Batch {
 
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
     fn library_ready(&self, lib: &Library) -> bool {
-        lib.settings == self.applied.search() && lib.prepared.is_rt_only() == self.rt_only
+        lib.settings == self.applied.analysis().search && lib.prepared.is_rt_only() == self.rt_only
     }
 
     /// Progress and Cancel while a scan runs, else Start and what it will use.
@@ -2061,7 +2061,7 @@ mod tests {
 
     #[test]
     fn start_waits_for_the_library_to_match_search_settings_and_rt_only() {
-        let search = GcmsSettings::default().search();
+        let search = GcmsSettings::default().analysis().search;
         let lib = |rt_only: bool| Library {
             path: PathBuf::new(),
             name: String::new(),
@@ -2084,7 +2084,7 @@ mod tests {
     /// One run with one hit of two quant ions and an alternative library entry.
     fn one_hit_scan() -> (Scan, Table) {
         use md_core::batch::{IonPeak, Row};
-        let search = GcmsSettings::default().search();
+        let search = GcmsSettings::default().analysis().search;
         let compound = |n: &str| LibraryCompound::new(n);
         let ion = |mass, integral| IonPeak {
             mass,

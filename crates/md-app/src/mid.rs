@@ -221,12 +221,12 @@ impl MidWindow {
             };
             let cancelled = || msg!("Cancelled.", "Abgebrochen.");
             // The quant ions are the fragment ions, so the rescan fills those that were not deconvoluted.
+            s.analysis.quant = QuantSettings::default();
             let study = Study {
                 runs: &paths,
                 library: &mids_lib,
                 prepared: &prepared,
                 scan: &s,
-                quant: &QuantSettings::default(),
                 rescan,
                 parallel: DEFAULT_PARALLEL,
             };
@@ -340,8 +340,8 @@ impl MidWindow {
             None => {
                 let problem = self.problem();
                 // Not while the library is rebuilt for new search settings, as in the batch window.
-                let ready =
-                    lib.filter(|l| problem.is_none() && l.settings == self.applied.search());
+                let ready = lib
+                    .filter(|l| problem.is_none() && l.settings == self.applied.analysis().search);
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new(t("Start", "Starten")))
                     .clicked()
@@ -355,7 +355,7 @@ impl MidWindow {
                         "Erst eine Bibliothek öffnen (Datei → Bibliothek öffnen).",
                     )),
                     (_, Some(p)) => ui.label(p),
-                    (Some(l), None) if l.settings != self.applied.search() => ui.label(t(
+                    (Some(l), None) if l.settings != self.applied.analysis().search => ui.label(t(
                         "Library is being prepared for the new search settings.",
                         "Die Bibliothek wird für die neuen Sucheinstellungen vorbereitet.",
                     )),

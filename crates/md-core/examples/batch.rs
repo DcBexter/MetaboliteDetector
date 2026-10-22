@@ -5,7 +5,7 @@ use md_core::job::{Cancel, Progress};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use md_core::batch::{QuantSettings, ScanSettings, Study, TableSettings, run_study, table};
+use md_core::batch::{ScanSettings, Study, TableSettings, run_study, table};
 use md_core::library::{import_msl, read_lbr};
 use md_core::search::PreparedLibrary;
 
@@ -33,13 +33,12 @@ fn main() {
         untargeted,
         ..Default::default()
     };
-    let prepared = PreparedLibrary::new(&lib, &s.search);
+    let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
     let study = Study {
         runs: &paths,
         library: &lib,
         prepared: &prepared,
         scan: &s,
-        quant: &QuantSettings::default(),
         rescan,
         parallel,
     };

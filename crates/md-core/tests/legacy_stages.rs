@@ -87,6 +87,7 @@ fn peaks_match_old_version() {
         let p = find_run_peaks(
             c,
             &PeakSettings::default(),
+            md_core::settings::AnalysisSettings::default().fwhm,
             PeakPass::Reordered,
             &Cancel::default(),
         )
@@ -134,6 +135,7 @@ fn regions_match_old_version() {
         let p = find_run_peaks(
             c,
             &PeakSettings::default(),
+            md_core::settings::AnalysisSettings::default().fwhm,
             PeakPass::Reordered,
             &Cancel::default(),
         )
@@ -164,6 +166,7 @@ fn components_match_old_version() {
         let a = analyze_run(
             c,
             &PeakSettings::default(),
+            md_core::settings::AnalysisSettings::default().fwhm,
             &DeconvSettings::default(),
             PeakPass::Reordered,
             &Cancel::default(),

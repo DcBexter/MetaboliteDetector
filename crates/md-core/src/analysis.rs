@@ -54,10 +54,11 @@ pub enum AnalyzeError {
 pub fn find_run_peaks(
     run: impl Borrow<Chromatogram>,
     s: &PeakSettings,
+    fwhm: f64,
     pass: PeakPass,
     cancel: &Cancel,
 ) -> Result<RunPeaks, AnalyzeError> {
-    let mut traces = IonTraces::new(run.borrow(), s.fwhm)?;
+    let mut traces = IonTraces::new(run.borrow(), fwhm)?;
     let times = run.borrow().scan_times_s.clone();
     drop(run);
     // The stages are not interruptible inside; `cancel` is looked at between them.
@@ -82,6 +83,7 @@ pub fn find_run_peaks(
 pub fn analyze_run(
     run: impl Borrow<Chromatogram>,
     peak_settings: &PeakSettings,
+    fwhm: f64,
     deconv: &DeconvSettings,
     pass: PeakPass,
     cancel: &Cancel,
@@ -91,7 +93,7 @@ pub fn analyze_run(
         times,
         peaks,
         fresh,
-    } = find_run_peaks(run, peak_settings, pass, cancel)?;
+    } = find_run_peaks(run, peak_settings, fwhm, pass, cancel)?;
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
     }
@@ -110,6 +112,9 @@ pub fn analyze_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SF_FWHM` of the defaults.
+    const FWHM: f64 = 0.5;
 
     /// An exact-mass run: 73.047 and 73.089 carry one fragment with apexes 3 scans apart (merged by
     /// `reorder_peaks`), 74.0 is a whole mass away.
@@ -146,7 +151,7 @@ mod tests {
     fn peak_pass_selects_reordering() {
         let (c, s) = (split_masses(), PeakSettings::default());
         let apexes = |pass| -> Vec<u32> {
-            let p = find_run_peaks(&c, &s, pass, &Cancel::default())
+            let p = find_run_peaks(&c, &s, FWHM, pass, &Cancel::default())
                 .unwrap()
                 .peaks;
             p.iter().map(|p| p.apex_scan).collect()
@@ -166,9 +171,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        let fresh = (IonTraces::new(&c, s.fwhm).unwrap()).detect_peaks(&s);
+        let fresh = (IonTraces::new(&c, FWHM).unwrap()).detect_peaks(&s);
         for pass in [PeakPass::Reordered, PeakPass::Fresh] {
-            let mut traces = IonTraces::new(&c, s.fwhm).unwrap();
+            let mut traces = IonTraces::new(&c, FWHM).unwrap();
             let peaks = match pass {
                 PeakPass::Reordered => traces.detect_all_peaks(&s),
                 PeakPass::Fresh => traces.detect_peaks(&s),
@@ -180,8 +185,8 @@ mod tests {
                 .collect();
             // Borrowed (app) and owned (batch) runs give the same result.
             for a in [
-                analyze_run(&c, &s, &d, pass, &Cancel::default()).unwrap(),
-                analyze_run(c.clone(), &s, &d, pass, &Cancel::default()).unwrap(),
+                analyze_run(&c, &s, FWHM, &d, pass, &Cancel::default()).unwrap(),
+                analyze_run(c.clone(), &s, FWHM, &d, pass, &Cancel::default()).unwrap(),
             ] {
                 assert_eq!(a.peaks, peaks);
                 assert_eq!(a.components, components);
@@ -194,7 +199,7 @@ mod tests {
         }
         // The pass reaches the result: the reordered apexes differ from the fresh ones.
         let analyzed = |pass| {
-            analyze_run(&c, &s, &d, pass, &Cancel::default())
+            analyze_run(&c, &s, FWHM, &d, pass, &Cancel::default())
                 .unwrap()
                 .peaks
         };
@@ -212,11 +217,11 @@ mod tests {
         cancel.cancel();
         let p = PeakPass::Reordered;
         assert_eq!(
-            find_run_peaks(&c, &s, p, &cancel).err(),
+            find_run_peaks(&c, &s, FWHM, p, &cancel).err(),
             Some(AnalyzeError::Cancelled)
         );
         assert_eq!(
-            analyze_run(&c, &s, &d, p, &cancel).err(),
+            analyze_run(&c, &s, FWHM, &d, p, &cancel).err(),
             Some(AnalyzeError::Cancelled)
         );
     }
