@@ -458,7 +458,7 @@ fn savitzky_golay(v: &[f32], smooth: &mut Vec<f32>, slope: &mut Vec<f32>) {
     slope.clear();
     slope.resize(n, 0.0);
     for (k, w) in v.windows(5).enumerate() {
-        smooth[k + 2] = sg_trunc(w);
+        smooth[k + 2] = sg_trunc([w[0], w[1], w[2], w[3], w[4]]);
         let [a, b, _, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
         slope[k + 2] = ((-2.0 * a - b + d + 2.0 * e) / 10.0) as f32;
     }

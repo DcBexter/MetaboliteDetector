@@ -70,7 +70,8 @@ pub(crate) struct Baseline {
 /// Old `SpectrumFunctions::analyzeBaseline<int>`: pooled mean and standard deviation of the
 /// non-overlapping segments of 25 points that cross their own mean at least 12 times. The peak
 /// detector's function of the same name (`peaks::trace_baseline`) accepts segments by slope instead.
-/// Both pool alike in exact arithmetic but with different operation orders, so they stay separate.
+/// Both pool the accepted segments' mean and variance, but in different operation orders, so they
+/// stay separate.
 /// A spectrum shorter than a segment makes the old code fall back to segments of one point, whose
 /// variance is 0/0: the deviation is NaN, so no peak end is ever accepted. With no accepted
 /// segment at all, mean and deviation are 0.

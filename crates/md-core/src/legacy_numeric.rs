@@ -16,15 +16,16 @@ pub(crate) fn c_int(x: f64) -> i32 {
 
 /// One point of the old `SavitzkyGolayFilter<int>` (window 5, quadratic): the smoothed value of
 /// the window's centre, truncated to `int` (algorithms.md §3.1).
-pub(crate) fn sg_trunc(w: &[f32]) -> f32 {
-    let [a, b, c, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
+pub(crate) fn sg_trunc(w: [f32; 5]) -> f32 {
+    let [a, b, c, d, e] = w.map(f64::from);
     c_int((-3.0 * (a + e) + 12.0 * (b + d) + 17.0 * c) / 35.0) as f32
 }
 
 /// The old `PeakEssential::roundSignificantFigures(x, 8)` (0x6fa301): rounds half up to one digit
 /// more, then floors to the last one, with the digit count from `(int)log10`. So it floors rather
 /// than rounds, keeps 8 significant digits below 1 and 9 from 1 up, and works on decimal places for
-/// 0 and negative `x` (`log10` gives no exponent there).
+/// 0 and negative `x` (`log10` gives no exponent there). From 1e9 up the second digit count is
+/// negative, which gives NaN like the old code.
 pub(crate) fn round_sig8(x: f64) -> f64 {
     // `(int)log10(v)` via the 64-bit `cvttsd2si`: its low 32 bits are 0 for -inf and NaN.
     let exponent = |v: f64| {
@@ -98,10 +99,10 @@ mod tests {
     #[test]
     fn sg_trunc_truncates_toward_zero() {
         // A flat top keeps its value; 17/35 truncates to 0, -17/35 too.
-        assert_eq!(sg_trunc(&[7.0; 5]), 7.0);
-        assert_eq!(sg_trunc(&[0.0, 0.0, 1.0, 0.0, 0.0]), 0.0);
-        assert_eq!(sg_trunc(&[0.0, 0.0, -1.0, 0.0, 0.0]), 0.0);
-        assert_eq!(sg_trunc(&[0.0, 1.0, 3.0, 1.0, 0.0]), 2.0); // 75/35
+        assert_eq!(sg_trunc([7.0; 5]), 7.0);
+        assert_eq!(sg_trunc([0.0, 0.0, 1.0, 0.0, 0.0]), 0.0);
+        assert_eq!(sg_trunc([0.0, 0.0, -1.0, 0.0, 0.0]), 0.0);
+        assert_eq!(sg_trunc([0.0, 1.0, 3.0, 1.0, 0.0]), 2.0); // 75/35
     }
 
     #[test]
@@ -116,16 +117,18 @@ mod tests {
         assert_eq!(round_sig8(0.0), 0.0);
         // Negative: 9 decimals rounded, then 8 floored (toward -inf).
         assert_eq!(round_sig8(-0.123456781), -0.12345679);
-        // From 1e10 the decimal count wraps to a huge unsigned: inf * x, floor, inf / inf.
-        assert!(round_sig8(1.5e10).is_nan());
+        // From 1e9 the second digit count is -1, which `unsigned` wraps: inf * y, floor, inf / inf.
+        assert_eq!(round_sig8(987654321.4), 987654321.0);
+        assert!(round_sig8(1.5e9).is_nan());
         assert!(round_sig8(f64::NAN).is_nan());
     }
 
     #[test]
     fn glibc_pow2_is_exact_below_2_53() {
-        let x = 9.4e7f64.floor();
-        assert_eq!(glibc_pow2(x), x * x);
-        assert!(glibc_pow2(x) < 2f64.powi(53));
+        // The largest bins × scan below the limit: its square is still an exact integer.
+        let x = 94_906_265u64;
+        assert!(glibc_pow2(x as f64) < 2f64.powi(53));
+        assert_eq!(glibc_pow2(x as f64) as u64, x * x);
         assert_eq!(glibc_pow2(-3.5), 12.25);
     }
 
@@ -134,7 +137,13 @@ mod tests {
         assert_eq!(glibc_hypot(0.0, 0.0), 0.0);
         assert_eq!(glibc_hypot(3.0, 4.0), 5.0);
         assert_eq!(glibc_hypot(-3.0, 0.0), 3.0);
-        for (x, y) in [(1.0, 1e-9), (3.3, 7.1), (1e100, 2e99), (0.1, 0.2)] {
+        for (x, y) in [
+            (1.0, 1e-9),
+            (-5.0, 12.0),
+            (3.3, 7.1),
+            (1e100, 2e99),
+            (0.1, 0.2),
+        ] {
             assert_eq!(glibc_hypot(x, y), glibc_hypot(y, x));
             let h = glibc_hypot(x, y);
             assert!((h - (x * x + y * y).sqrt()).abs() <= 1e-15 * h);
