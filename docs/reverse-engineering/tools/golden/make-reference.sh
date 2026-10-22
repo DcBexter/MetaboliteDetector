@@ -106,7 +106,7 @@ if [[ "${1:-}" == --exact-masses ]]; then
 fi
 LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
 if [[ "${1:-}" == --stages ]]; then
-  python3 "$here/stages.py" "$repo/crates/md-core/tests/fixtures/legacy" < "$work/raw.tsv"
+  python3 "$here/stages.py" < "$work/raw.tsv"
   exit
 fi
 python3 "$here/golden.py" "static default settings"< "$work/raw.tsv" > "$out/old-md-3.3.tsv"
