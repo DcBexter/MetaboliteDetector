@@ -14,7 +14,7 @@ pub struct DeconvSettings {
     /// `AN_DECONVOLUTION_WIDTH`: width in scans of the matched filter over the apex histogram;
     /// `None` takes it from the run's scan rate ([`auto_width`]).
     pub width: Option<f64>,
-    /// `AN_NUMBER_BINS`: histogram bins per scan; keep it equal to `PeakSettings::number_bins`.
+    /// `AN_NUMBER_BINS`: histogram bins per scan; `GcmsSettings::number_bins` feeds this and `PeakSettings::number_bins`.
     pub number_bins: u32,
     /// `AN_MIN_PEAK_NUMBER`: minimum ion peaks per component, before and after the fit.
     pub min_peak_number: usize,

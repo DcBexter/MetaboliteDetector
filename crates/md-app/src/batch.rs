@@ -846,6 +846,7 @@ impl Batch {
             });
             crate::settings::ranges(
                 ui,
+                "QUANT_EXCL_IONS",
                 lang::t(
                     "Ions avoided as quant ions",
                     "Als Quant-Ionen gemiedene Ionen",

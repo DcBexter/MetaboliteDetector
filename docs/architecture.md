@@ -771,7 +771,11 @@ against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0
 ## Settings
 
 `md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
-converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. It reads and writes the old settings
+converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. One const table, `settings::KEYS` (old key,
+accessor, range, fixed slot in the old file; no macro), drives the app's `KEY=value` lines (`set`, `lines`), the
+old file's fixed-size fields, `validate` (`sanitized` resets the bad ones) and the ranges of the Settings window
+(`limits`); a new value is one table row plus its struct field and default. `an_number_bins` is read once
+(`number_bins`) for both `peak()` and `deconv()`. It reads and writes the old settings
 file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because algorithms.md §1 reports
 one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
 every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
@@ -840,7 +844,7 @@ the window". Each step draws a building block of the expert window (`Calibration
 string of the module is in `guided::text` for the translation (S8).
 
 Every value is checked at start: a bad value keeps its default, and each field `GcmsSettings::validate`
-names falls back to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
+names falls back (`sanitized`, in md-core) to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
 key is missing from an existing file), the file is copied to `app.ron.<unix s>.bak` and the Settings window
 opens with the message. A library that is missing at start (a drive not mounted) is not opened but kept.
 Paths are saved absolute; a recent run that is clicked leaves the list until it loads again.
