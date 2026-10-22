@@ -139,7 +139,7 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
-| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 83 ms (250 ms with the sorted pair list) |
 | Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
@@ -309,7 +309,11 @@ entry: the pure score is a cosine over all peaks of both spectra, the impure sco
 `0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
 Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
 components in parallel and then assigns library compounds greedily by best overall score, each library compound
-and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
+and each component at most once. The assignment does not build or sort the list of all (component, hit) pairs:
+each component's hits are already best first, so a heap over the components' current best pairs takes them in
+the same order (ties: lower library index, then lower component index) and gives the same result bit for bit
+(`assign_best_first`, checked against the sorted pair list in a test). All hits stay, the colouring needs them.
+`SearchSettings::default()` holds the old `LS_*` defaults.
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
 spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
 `library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
@@ -319,9 +323,9 @@ the old NIST search. Both are in the settings dialog ("Number of fragments", "Mi
 frag."; old `SQL_*`).
 
 File → Open NIST library loads a second library next to the normal one, always with the pre-filter (old
-`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on the
-UI thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
-entries) and its NIST hits are listed below the library hits, which stay
+`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on a
+worker thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
+entries; the button waits meanwhile) and its NIST hits are listed below the library hits, which stay
 as they are (old "NIST search..."). The NIST hits belong to that component and spectrum; a re-analysis hides
 them.
 
