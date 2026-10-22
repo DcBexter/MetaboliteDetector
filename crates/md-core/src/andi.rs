@@ -9,6 +9,7 @@ use std::rc::Rc;
 use netcdf3::{DataSet, DataVector, FileReader, FileWriter, Version};
 
 use crate::Chromatogram;
+use crate::job::Cancel;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AndiError {
@@ -20,6 +21,8 @@ pub enum AndiError {
     MissingVariable(&'static str),
     #[error("inconsistent ANDI-MS data: {0}")]
     Inconsistent(String),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// Reads an ANDI-MS `.cdf` file into memory.
@@ -63,15 +66,17 @@ pub fn read(path: impl AsRef<Path>) -> Result<Chromatogram, AndiError> {
 
 /// Writes the variables `read` needs, which is the core of ANDI-MS (raw data group).
 pub fn write(path: impl AsRef<Path>, c: &Chromatogram) -> Result<(), AndiError> {
-    write_with_tic(path, c, &c.tic())
+    write_with_tic(path, c, &c.tic(), &Cancel::default())
 }
 
 /// Like [`write`], with the total intensity of each scan given: a centroided export keeps the
-/// TIC of the profile scans it came from.
+/// TIC of the profile scans it came from. A set `cancel` gives [`AndiError::Cancelled`] before the
+/// next variable is written; no file is created then.
 pub fn write_with_tic(
     path: impl AsRef<Path>,
     c: &Chromatogram,
     tic: &[f64],
+    cancel: &Cancel,
 ) -> Result<(), AndiError> {
     let invalid = |e| AndiError::Inconsistent(format!("{e:?}"));
     let i32s = |v: Vec<usize>| -> Result<Vec<i32>, AndiError> {
@@ -112,14 +117,28 @@ pub fn write_with_tic(
     // Classic NetCDF-3 caps file offsets at 2 GiB; the 64-bit-offset variant lifts that.
     w.set_def(&ds, Version::Offset64Bit, 0)
         .map_err(AndiError::Write)?;
+    let stop = || match cancel.is_cancelled() {
+        true => Err(AndiError::Cancelled),
+        false => Ok(()),
+    };
+    stop()?;
     w.write_var_f64("scan_acquisition_time", &c.scan_times_s)
-        .and_then(|_| w.write_var_f64("total_intensity", tic))
-        .and_then(|_| w.write_var_i32("scan_index", &index))
-        .and_then(|_| w.write_var_i32("point_count", &count))
-        .and_then(|_| w.write_var_f32("mass_values", &c.mz))
-        .and_then(|_| w.write_var_f32("intensity_values", &c.intensity))
-        .and_then(|_| w.close())
         .map_err(AndiError::Write)?;
+    stop()?;
+    w.write_var_f64("total_intensity", tic)
+        .map_err(AndiError::Write)?;
+    w.write_var_i32("scan_index", &index)
+        .map_err(AndiError::Write)?;
+    w.write_var_i32("point_count", &count)
+        .map_err(AndiError::Write)?;
+    stop()?;
+    w.write_var_f32("mass_values", &c.mz)
+        .map_err(AndiError::Write)?;
+    stop()?;
+    w.write_var_f32("intensity_values", &c.intensity)
+        .map_err(AndiError::Write)?;
+    stop()?;
+    w.close().map_err(AndiError::Write)?;
     // Temp file + rename: a failed write never leaves the target (maybe the source .cdf) truncated.
     let path = path.as_ref();
     let mut tmp = path.as_os_str().to_owned();
@@ -334,5 +353,28 @@ mod tests {
             c.spectrum(0),
             (&[73.0, 100.0, 147.0][..], &[2.0, 3.0, 1.0][..])
         );
+    }
+
+    #[test]
+    fn a_cancelled_write_leaves_no_file() {
+        let c = Chromatogram {
+            offsets: vec![0, 2, 3],
+            mz: vec![73.0, 147.0, 73.0],
+            intensity: vec![100.0, 50.0, 80.0],
+            scan_times_s: vec![300.0, 300.5],
+            exact_masses: false,
+            baseline: Default::default(),
+        };
+        let path = std::env::temp_dir().join(format!("md-core-cancel-{}.cdf", std::process::id()));
+        let cancel = Cancel::default();
+        cancel.cancel();
+        assert!(matches!(
+            write_with_tic(&path, &c, &c.tic(), &cancel),
+            Err(AndiError::Cancelled)
+        ));
+        assert!(!path.exists());
+        write_with_tic(&path, &c, &c.tic(), &Cancel::default()).unwrap();
+        assert_eq!(read(&path).unwrap().offsets, c.offsets);
+        std::fs::remove_file(&path).ok();
     }
 }

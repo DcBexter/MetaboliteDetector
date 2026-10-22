@@ -178,7 +178,8 @@ fn ri_of_markers_matches_target_search() {
         .collect();
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
-        let peaks = md_core::ri::marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let peaks =
+            md_core::ri::marker_peaks(&c, 87.0, DENSITY, THRESHOLD, &Default::default()).unwrap();
         let points = md_core::ri::window_points(&peaks, &windows);
         assert_eq!(points.len(), windows.len(), "{}: {peaks:?}", name(path));
         let cal = md_core::ri::RiCalibration::new(points.iter().copied()).unwrap();
@@ -254,7 +255,7 @@ fn amino_acids_get_ri_score_with_lib_aa() {
     let mut corrected = 0;
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
-        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD, &Default::default()).unwrap();
         let fame = RiCalibration::new(window_points(&fame, &windows)).unwrap();
         let cal = RiCalibration::new(bridge.map(|(f, n)| (fame.rt(f), lib_ri(n)))).unwrap();
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
@@ -367,7 +368,7 @@ fn mona_msp_finds_the_targets_with_ri() {
     let mut total = [[0usize; 3]; 2];
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
-        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD);
+        let fame = marker_peaks(&c, 87.0, DENSITY, THRESHOLD, &Default::default()).unwrap();
         let cal = RiCalibration::new(window_points(&fame, &windows)).unwrap();
         let mut traces = IonTraces::new(&c, 0.5).unwrap();
         let peaks = traces.detect_peaks(&PeakSettings::default());
@@ -479,7 +480,7 @@ fn targetsearch_library_finds_its_targets() {
     for path in &runs {
         let c = md_core::andi::read(path).unwrap();
         let cal = RiCalibration::new(window_points(
-            &marker_peaks(&c, 87.0, DENSITY, THRESHOLD),
+            &marker_peaks(&c, 87.0, DENSITY, THRESHOLD, &Default::default()).unwrap(),
             &windows,
         ))
         .unwrap();

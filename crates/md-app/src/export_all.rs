@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use eframe::egui;
 use md_core::Chromatogram;
+use md_core::andi::AndiError;
 use md_core::centroid::{CentroidSettings, ExportKind, reduce};
 use md_core::job::{Cancel, Progress};
 
@@ -71,10 +72,13 @@ fn export_runs(
             continue;
         }
         let result = if kind == ExportKind::Profile {
-            md_core::andi::write(&path, data)
+            md_core::andi::write_with_tic(&path, data, &data.tic(), cancel)
         } else {
-            md_core::andi::write_with_tic(&path, &reduce(data, kind, s), &data.tic())
+            md_core::andi::write_with_tic(&path, &reduce(data, kind, s), &data.tic(), cancel)
         };
+        if let Err(AndiError::Cancelled) = result {
+            break;
+        }
         if let Err(e) = result {
             errors.push(format!("{file}: {e}").into());
         }

@@ -655,6 +655,25 @@ fn the_view_toolbar_works_on_a_run() {
     h.get_by_label_contains("Double-click, or All");
 }
 
+/// #378: the status bar cancels opening while runs are already open, not only on the start screen.
+#[test]
+fn opening_more_runs_can_be_cancelled() {
+    let mut h = harness(egui::Theme::Dark);
+    h.state_mut().runs.push(crate::results::tests::run());
+    let job = crate::Job::spawn(&h.ctx, |_, cancel| {
+        while !cancel.is_cancelled() {
+            std::thread::yield_now();
+        }
+        Err(crate::lang::Msg::from("cancelled"))
+    });
+    let cancel = job.cancel.clone();
+    h.state_mut().loading.push((PathBuf::from("more.cdf"), job));
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().loading.is_empty() && cancel.is_cancelled());
+}
+
 /// First start: Guided is preselected and the answer sticks; Guided closes "Advanced", Expert opens it;
 /// a flow can be skipped through and ends in its expert window.
 #[test]

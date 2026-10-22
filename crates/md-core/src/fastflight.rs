@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Chromatogram;
 use crate::andi;
+use crate::job::Cancel;
 use crate::tof::{TofCalibration, TofError};
 
 #[derive(Debug, thiserror::Error)]
@@ -79,7 +80,7 @@ pub fn find_calibration(path: &Path) -> Result<PathBuf, FastFlightError> {
 pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, FastFlightError> {
     let (mut times, mut starts, mut counts) = (Vec::new(), Vec::new(), Vec::new());
     let (mut mz, mut intensity) = (Vec::new(), Vec::new());
-    for_each_scan(path, |time_ms, bins, values| {
+    for_each_scan(path, &Cancel::default(), |time_ms, bins, values| {
         times.push(time_ms / 1000.0);
         starts.push(mz.len() as f64);
         counts.push(bins.len() as f64);
@@ -93,23 +94,29 @@ pub fn read(path: &Path, calibration: &TofCalibration) -> Result<Chromatogram, F
 }
 
 /// The run summed over all scans, per TOF bin: (bin, total intensity) in bin order. This is what
-/// the calibration window shows, since the bins are what the calibration maps to m/z.
-pub fn bin_spectrum(path: &Path) -> Result<Vec<(f32, f64)>, FastFlightError> {
+/// the calibration window shows, since the bins are what the calibration maps to m/z. `None` once
+/// `cancel` is set (checked before each scan).
+pub fn bin_spectrum(
+    path: &Path,
+    cancel: &Cancel,
+) -> Result<Option<Vec<(f32, f64)>>, FastFlightError> {
     let mut sums = std::collections::BTreeMap::<u32, f64>::new();
-    for_each_scan(path, |_, bins, values| {
+    let done = for_each_scan(path, cancel, |_, bins, values| {
         for (b, v) in bins.iter().zip(&values) {
             *sums.entry(*b as u32).or_default() += f64::from(*v);
         }
     })?;
-    Ok(sums.into_iter().map(|(b, v)| (b as f32, v)).collect())
+    Ok(done.then(|| sums.into_iter().map(|(b, v)| (b as f32, v)).collect()))
 }
 
 /// Walks the scans of a run in time order: `visit(time in ms, TOF bins, intensities)` for each scan
-/// with signal, with the lowest intensity subtracted and the first point dropped.
+/// with signal, with the lowest intensity subtracted and the first point dropped. False when `cancel`
+/// stopped the walk before the last scan.
 fn for_each_scan(
     path: &Path,
+    cancel: &Cancel,
     mut visit: impl FnMut(f64, Vec<f32>, Vec<i32>),
-) -> Result<(), FastFlightError> {
+) -> Result<bool, FastFlightError> {
     let dir = if path.is_dir() {
         path
     } else {
@@ -126,6 +133,9 @@ fn for_each_scan(
     let mut fft = BufReader::new(fft_file);
     let mut points = 0;
     for scan in index {
+        if cancel.is_cancelled() {
+            return Ok(false);
+        }
         fft.seek(SeekFrom::Start(scan.offset))
             .map_err(|e| FastFlightError::Io(dir.join(FFT), e))?;
         let (mut bins, mut values, tic) = read_spectrum(&mut fft).map_err(|e| match e {
@@ -156,7 +166,7 @@ fn for_each_scan(
         }
         visit(scan.time_ms, bins, values);
     }
-    Ok(())
+    Ok(true)
 }
 
 struct Scan {
@@ -321,5 +331,37 @@ mod tests {
         let mut wrong = bytes.clone();
         wrong[0] = 0;
         assert!(read_spectrum(&mut &wrong[..]).is_err());
+    }
+
+    /// A run of one scan (`two_frames`, TIC 27) and one more with the same data, under a fresh directory.
+    fn run_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("md-ff-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = two_frames();
+        let entry = |n: i32, offset: u64| {
+            let mut e = [0u8; FFC_ENTRY];
+            e[4..8].copy_from_slice(&n.to_le_bytes());
+            e[12..20].copy_from_slice(&27u64.to_le_bytes());
+            e[20..28].copy_from_slice(&offset.to_le_bytes());
+            e[28..36].copy_from_slice(&1.0f64.to_le_bytes());
+            e
+        };
+        let mut ffc = 2i32.to_le_bytes().to_vec();
+        ffc.extend(entry(1, 0));
+        ffc.extend(entry(2, data.len() as u64));
+        std::fs::write(dir.join(FFC), ffc).unwrap();
+        std::fs::write(dir.join(FFT), [data.clone(), data].concat()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_cancelled_sum_stops_in_the_scan_loop() {
+        let dir = run_dir("sum");
+        let sum = bin_spectrum(&dir, &Cancel::default()).unwrap().unwrap();
+        assert_eq!(sum, [(104.0, 4.0), (120.0, 8.0), (121.0, 2.0)]);
+        let cancel = Cancel::default();
+        cancel.cancel();
+        assert!(bin_spectrum(&dir, &cancel).unwrap().is_none());
+        std::fs::remove_dir_all(dir).ok();
     }
 }
