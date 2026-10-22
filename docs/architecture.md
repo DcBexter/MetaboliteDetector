@@ -572,6 +572,26 @@ A fourth reference, `old-md-3.3-exact-masses.tsv`, takes the same run as a disk-
 
 The test fails when one of these counts grows.
 
+### Stage fixtures
+
+`crates/md-core/tests/fixtures/legacy/RUN.{peaks,regions,components}.tsv` hold the old program's
+intermediate output for each of the 15 runs (default detector, static `AN_*` defaults): every peak of
+`detectAllPeaks` in list order, every region of `detectComponents` (§4.5, rejected ones too, as peak
+lines), and every compound with its model peak and per-ion fit. `make-reference.sh --stages` writes them
+(the same driver, plus `stages.py`; format there), about 1.3 MB. `tests/legacy_stages.rs` compares
+`find_run_peaks` and `analyze_run` against them, in order:
+
+| Compared | Tolerance | Reason |
+|---|---|---|
+| Peak ion, first, apex, last scan; peak count and order | exact | same algorithm |
+| Interpolated apex | 5e-4 scan | md-core keeps it as f32 |
+| Peak S/N, quality, sharpness | 1e-6 relative | md-core computes them in f32 |
+| Component count, order, apex; model peak bounds and values | exact | integer sums |
+| Ion height | ±1 | as in the golden test |
+| Model share `c2` and ion integral | 2e-7 relative | 1938 of 4366 shares land on the neighbouring 8th digit (issue #365) |
+
+The regions are only recorded so far; md-core does not expose them.
+
 The golden test found three porting errors in peak detection, now fixed:
 
 - After an accepted peak the old loop steps back one scan, so a tailing peak starts right after the

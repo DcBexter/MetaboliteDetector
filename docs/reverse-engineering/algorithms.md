@@ -399,7 +399,7 @@ Quirks that a faithful port must keep or consciously drop (all Observed):
 - The flank extension stops one bin before the local minimum of f. The stop bin itself is not added.
 - A region of a single bin (begin == end) is dropped.
 - Comparisons use `(int)` truncated filter values against T = 5.0.
-- `DeconvolutedCompound(start_bin, stop_bin, peaks)` (0x5ed4a2) only stores the three values.
+- `DeconvolutedCompound(start_bin, stop_bin, peaks)` (0x5ed4a2) only stores the three values: two `unsigned long`, then a `vector<Peak*>` (0x28 bytes). `components` is the `vector<DeconvolutedCompound>` at GCMSAnalyzer+0x40 (cleared at 0x5ebafb) and still holds the regions after `deconvoluteChromatogram`; the stage fixtures read it there (architecture.md, "Stage fixtures").
 
 ### 4.6 deconvoluteChromatogram(peaks, scan_count, start_scan, width) (0x5e90de, Ghidra + objdump; Observed)
 

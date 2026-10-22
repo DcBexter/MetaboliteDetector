@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <new>
 #include <string>
 #include <vector>
@@ -88,13 +89,23 @@ void run(FILE* out, const char* cdf, const char* work) {
     }
     // GCMSAnalyzer::peaks: std::list<Peak<int,float>> at +0x10; Peak starts with its PeakEssential.
     auto* head = reinterpret_cast<ListNode*>(an + 0x10);
+    std::map<Self, size_t> index;  // peak -> its position among the run's peak records
     for (ListNode* n = head->next; n != head; n = n->next) {
+        index.emplace(n + 1, index.size());
         std::fputs("peak\t", out);
         peak_fields(out, n + 1);
         std::fputc('\n', out);
     }
 
     fn<void (*)(void*)>(DECONVOLUTE)(an);
+    // GCMSAnalyzer::components (detectComponents, algorithms.md §4.5): std::vector<DeconvolutedCompound> at
+    // +0x40 (cleared at 0x5ebafb); DeconvolutedCompound = {start_bin, stop_bin, vector<Peak*>} (ctor 0x5ed4a2).
+    struct Region { unsigned long begin, end; std::vector<Self> peaks; };
+    for (const Region& r : *reinterpret_cast<std::vector<Region>*>(an + 0x40)) {
+        std::fprintf(out, "region\t%lu\t%lu\t", r.begin, r.end);
+        for (size_t i = 0; i < r.peaks.size(); i++) std::fprintf(out, i ? ",%zu" : "%zu", index.at(r.peaks[i]));
+        std::fputc('\n', out);
+    }
     // GCMSAnalyzer::compounds: std::vector<Compound<int,float>*> at +0x58; Compound starts with its Spectrum.
     auto* comps = reinterpret_cast<std::vector<void*>*>(an + 0x58);
     for (void* c : *comps) {
@@ -104,6 +115,13 @@ void run(FILE* out, const char* cdf, const char* work) {
                      fn<double (*)(Self)>(SPEC_RT)(c), masses->size());
         for (size_t i = 0; i < masses->size(); i++)
             std::fprintf(out, "ion\t%.9g\t%d\n", (*masses)[i], (*values)[i]);
+        // Compound::getModelPeak: a Peak<double,short>, which starts with its PeakEssential<short>.
+        Self m = fn<Self (*)(Self)>(COMPOUND_MODEL)(c);
+        auto* mv = fn<const std::vector<double>* (*)(Self)>(MODEL_VALUES)(m);
+        std::fprintf(out, "model\t%lu\t%lu\t%lu\t", fn<unsigned long (*)(Self)>(MODEL_FIRST)(m),
+                     fn<unsigned long (*)(Self)>(MODEL_MAX)(m), fn<unsigned long (*)(Self)>(MODEL_LAST)(m));
+        for (size_t i = 0; i < mv->size(); i++) std::fprintf(out, i ? ",%.17g" : "%.17g", (*mv)[i]);
+        std::fputc('\n', out);
         alignas(8) char buf[sizeof(std::vector<Self>)];
         fn<void (*)(void*, Self)>(COMPOUND_PEAKS)(buf, c);
         auto* peaks = reinterpret_cast<std::vector<Self>*>(buf);
