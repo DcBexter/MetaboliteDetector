@@ -674,6 +674,21 @@ fn opening_more_runs_can_be_cancelled() {
     assert!(h.state().loading.is_empty() && cancel.is_cancelled());
 }
 
+/// #392: while the first runs load, the start screen shows no second Cancel next to the status bar's.
+#[test]
+fn first_load_shows_one_cancel() {
+    let mut h = harness(egui::Theme::Dark);
+    let job = crate::Job::spawn(&h.ctx, |_, cancel| {
+        while !cancel.is_cancelled() {
+            std::thread::yield_now();
+        }
+        Err(crate::lang::Msg::from("cancelled"))
+    });
+    h.state_mut().loading.push((PathBuf::from("a.cdf"), job));
+    h.run_steps(3);
+    assert_eq!(h.get_all_by_label("Cancel").count(), 1);
+}
+
 /// First start: Guided is preselected and the answer sticks; Guided closes "Advanced", Expert opens it;
 /// a flow can be skipped through and ends in its expert window.
 #[test]

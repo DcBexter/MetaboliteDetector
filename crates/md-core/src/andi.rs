@@ -366,10 +366,9 @@ mod tests {
             baseline: Default::default(),
         };
         let path = std::env::temp_dir().join(format!("md-core-cancel-{}.cdf", std::process::id()));
-        let cancel = Cancel::default();
-        cancel.cancel();
+        // The third check is after the first column, inside the write sequence.
         assert!(matches!(
-            write_with_tic(&path, &c, &c.tic(), &cancel),
+            write_with_tic(&path, &c, &c.tic(), &Cancel::after(3)),
             Err(AndiError::Cancelled)
         ));
         assert!(!path.exists());

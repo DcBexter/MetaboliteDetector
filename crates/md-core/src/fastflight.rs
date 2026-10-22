@@ -359,9 +359,9 @@ mod tests {
         let dir = run_dir("sum");
         let sum = bin_spectrum(&dir, &Cancel::default()).unwrap().unwrap();
         assert_eq!(sum, [(104.0, 4.0), (120.0, 8.0), (121.0, 2.0)]);
-        let cancel = Cancel::default();
-        cancel.cancel();
-        assert!(bin_spectrum(&dir, &cancel).unwrap().is_none());
+        // The second poll is before the second scan: one scan was read, then the loop stopped.
+        assert!(bin_spectrum(&dir, &Cancel::after(2)).unwrap().is_none());
+        assert!(bin_spectrum(&dir, &Cancel::after(3)).unwrap().is_some());
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -336,16 +336,12 @@ impl App {
     }
 
     /// Nothing open yet: the two ways in, instead of empty plots and controls. While the first runs
-    /// load, a spinner; the status bar counts the files.
+    /// load, a spinner; the status bar counts the files and holds the only Cancel.
     fn start_screen(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() / 3.0);
             if !self.loading.is_empty() {
                 ui.spinner();
-                // Dropping the jobs cancels them.
-                if ui.button(t("Cancel", "Abbrechen")).clicked() {
-                    (self.loading, self.load_started) = (Vec::new(), None);
-                }
                 return;
             }
             ui.label(t(
