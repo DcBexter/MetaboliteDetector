@@ -5,15 +5,15 @@
 //! `docs/reverse-engineering/gsl-clean-room.md`. Every operation and its order matters: the
 //! rounding of the result decides ties of the precise apex.
 
+use crate::legacy_numeric::{glibc_hypot as hypot, glibc_pow2};
+
 type M3 = [[f64; 3]; 3];
 
 const I3: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 /// Coefficients `c` of `y = c0 + c1 x + c2 x²` through the three points.
 pub(crate) fn quadratic(x: [f64; 3], y: [f64; 3]) -> [f64; 3] {
-    // shortcut: the old code takes glibc pow(x, 2), equal to x * x while x² < 2^53 (bins × scan
-    // < 9.4e7); beyond, pow may round half-way cases the other way. Port pow if such runs appear.
-    let mut a = x.map(|x| [1.0, x, x * x]);
+    let mut a = x.map(|x| [1.0, x, glibc_pow2(x)]);
     // Column balance by powers of two.
     let mut d = [0.0; 3];
     for j in 0..3 {
@@ -61,28 +61,6 @@ fn power_of_two(mut s: f64) -> f64 {
         }
     }
     f
-}
-
-/// `sqrt(x² + y²)` with the correction step of Borges (2019, arXiv:1904.09481, form without FMA);
-/// equals the glibc `hypot` the old program calls. The platform `hypot` (e.g. MSVC) differs in the
-/// last bit, so it is written out. Inputs here are far from overflow.
-fn hypot(x: f64, y: f64) -> f64 {
-    let (a, b) = (x.abs().max(y.abs()), x.abs().min(y.abs()));
-    if a == 0.0 {
-        return 0.0;
-    }
-    let h = (a * a + b * b).sqrt();
-    let (t1, t2) = if h <= 2.0 * b {
-        let delta = h - b;
-        (a * (2.0 * delta - a), (delta - 2.0 * (a - b)) * delta)
-    } else {
-        let delta = h - a;
-        (
-            2.0 * delta * (a - 2.0 * b),
-            (4.0 * delta - b) * b + delta * delta,
-        )
-    };
-    h - (t1 + t2) / (2.0 * h)
 }
 
 /// Euclidean norm with running scale (reference BLAS `dnrm2`).
@@ -542,14 +520,6 @@ mod tests {
                 );
                 scan = (scan * 1.7).ceil();
             }
-        }
-    }
-
-    #[test]
-    fn hypot_is_close_and_symmetric() {
-        for (x, y) in [(3.0, 4.0), (1.0, 1e-9), (0.0, 0.0), (-5.0, 12.0)] {
-            assert_eq!(hypot(x, y), hypot(y, x));
-            assert!((hypot(x, y) - (x * x + y * y).sqrt()).abs() <= 1e-15 * hypot(x, y));
         }
     }
 }

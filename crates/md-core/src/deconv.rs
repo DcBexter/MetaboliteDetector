@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use rayon::prelude::*;
 
+use crate::legacy_numeric::{c_int, round_sig8};
 use crate::peaks::{IonTraces, Peak, matched_filter};
 
 /// The old `AN_*` deconvolution settings; defaults are the old static values (file-formats.md §5.1).
@@ -111,6 +112,21 @@ pub fn deconvolute(
     scan_times_s: &[f64],
     s: &DeconvSettings,
 ) -> Vec<Component> {
+    component_regions(traces, peaks, scan_times_s, s)
+        .into_par_iter()
+        .map_init(Vec::new, |buf, t| fit_component(traces, peaks, t, s, buf))
+        .flatten()
+        .collect()
+}
+
+/// §4.4–4.5, old `detectComponents`: the candidate regions of [`deconvolute`] before the fit, each
+/// as indices into `peaks` (with the old duplicates), in the old order.
+pub fn component_regions(
+    traces: &IonTraces,
+    peaks: &[Peak],
+    scan_times_s: &[f64],
+    s: &DeconvSettings,
+) -> Vec<Vec<usize>> {
     let nb = s.number_bins.max(1) as usize;
     let len = nb * (traces.scan_count() + 1) + 1;
     // §4.4: apex intensities summed per sub-scan bin, with the peaks of each bin (counting sort keeps
@@ -136,26 +152,22 @@ pub fn deconvolute(
     }
     let f = matched_filter(&sum, (nb as f64 * s.width_scans(scan_times_s)) as usize);
     regions(&f, &start, &members)
-        .into_par_iter()
-        .map_init(Vec::new, |buf, t| fit_component(traces, peaks, t, s, buf))
-        .flatten()
-        .collect()
 }
 
 /// §4.5: regions where the filtered apex histogram (truncated to integers) rises above 5, plus the
 /// falling flanks on both sides. Keeps the old quirks: the flank walk adds the first and last bin
 /// of the region a second time, and a region of one bin is dropped.
 fn regions(f: &[f64], start: &[usize], members: &[usize]) -> Vec<Vec<usize>> {
-    const T: f64 = 5.0;
+    const T: i32 = 5;
     let add = |t: &mut Vec<usize>, b: usize| t.extend_from_slice(&members[start[b]..start[b + 1]]);
     let mut out = Vec::new();
     let Some(f0) = f.first() else { return out };
-    let mut prev = f0.trunc();
+    let mut prev = c_int(*f0);
     let mut i = 0;
     while i < f.len() {
         let (begin, mut end) = (i, i);
         let mut t = Vec::new();
-        if prev < T && f[i].trunc() > T {
+        if prev < T && c_int(f[i]) > T {
             add(&mut t, i);
             loop {
                 i += 1;
@@ -164,7 +176,7 @@ fn regions(f: &[f64], start: &[usize], members: &[usize]) -> Vec<Vec<usize>> {
                 }
                 add(&mut t, i);
                 end = i;
-                if f[i].trunc() <= T {
+                if c_int(f[i]) <= T {
                     break;
                 }
             }
@@ -183,7 +195,7 @@ fn regions(f: &[f64], start: &[usize], members: &[usize]) -> Vec<Vec<usize>> {
             out.push(t);
         }
         if let Some(x) = f.get(i) {
-            prev = x.trunc();
+            prev = c_int(*x);
         }
         i += 1;
     }
@@ -254,9 +266,9 @@ fn fit_component(
         let Some(c2) = model_share(lo..=hi, at, y) else {
             continue;
         };
-        let c2 = round_sig(c2, 8);
-        let h = (c2 * model_max).trunc();
-        if h < 1.0 {
+        let c2 = round_sig8(c2);
+        let h = c_int(c2 * model_max);
+        if h < 1 {
             continue;
         }
         let integral = (lo..=hi)
@@ -337,15 +349,6 @@ fn model_share(
     (det > 1e-12 * xx * mmm).then(|| (xx * my2 - xm * xy) / det)
 }
 
-/// The old `PeakEssential::roundSignificantFigures`.
-fn round_sig(x: f64, digits: i32) -> f64 {
-    if x == 0.0 || !x.is_finite() {
-        return x;
-    }
-    let scale = 10f64.powi(digits - 1 - x.abs().log10().floor() as i32);
-    (x * scale).round() / scale
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -374,7 +377,6 @@ pub(crate) mod tests {
         });
         assert!((c2.unwrap() - 0.3).abs() < 1e-9);
         assert_eq!(model_share(40..=60, |_| 1.0, |_| 1.0), None);
-        assert_eq!(round_sig(0.123456789, 8), 0.12345679);
     }
 
     /// Apex scan and (mass, height) of each ion.

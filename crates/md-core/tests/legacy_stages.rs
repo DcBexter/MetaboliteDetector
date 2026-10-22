@@ -1,13 +1,12 @@
 //! Stage test: each stage of `analyze_run` against the old MetaboliteDetector 3.3 on the 15 example
 //! runs. The fixtures `tests/fixtures/legacy/RUN.{peaks,regions,components}.tsv` come from the old
 //! binary (docs/reverse-engineering/tools/golden/make-reference.sh --stages, format in stages.py).
-//! The regions are recorded for later stage tests; md-core does not expose them yet. Passes without
-//! checking anything when example-data/ is missing.
+//! Passes without checking anything when example-data/ is missing.
 
 use std::path::Path;
 
 use md_core::analysis::{PeakPass, analyze_run, find_run_peaks};
-use md_core::deconv::DeconvSettings;
+use md_core::deconv::{DeconvSettings, component_regions};
 use md_core::job::Cancel;
 use md_core::peaks::PeakSettings;
 
@@ -17,13 +16,10 @@ const APEX_TOLERANCE: f64 = 5e-4;
 const PEAK_VALUE_TOLERANCE: f64 = 1e-6;
 /// Model peak values: plain sums of integer intensities, so exact.
 const MODEL_TOLERANCE: f64 = 0.0;
-/// Ion height: the old code rounds a few modelled heights the other way (as in golden_old_md.rs).
-const HEIGHT_TOLERANCE: u32 = 1;
-/// Model share and integral, relative: one unit in the 8th significant digit (up to 1e-7) plus the
-/// dump rounding. Both codes round the share `c2` to 8 digits, but md-core's normal equations and the
-/// old GSL fit land on neighbouring 8th digits for 1938 of the 4366 shares; the integral follows `c2`.
-/// Issue #365 (legacy_numeric) is to make these exact.
-const FIT_TOLERANCE: f64 = 2e-7;
+/// Integral, relative: the dump rounds it to 9 significant digits (half a unit is at most 5e-9).
+/// Ion heights and model shares are exact: both codes take the share `c2` through the old
+/// `roundSignificantFigures` (`legacy_numeric::round_sig8`), whose 8 or 9 digits the dump prints in full.
+const INTEGRAL_TOLERANCE: f64 = 5e-9;
 
 const RUNS: [&str; 15] = [
     "7235eg04", "7235eg06", "7235eg07", "7235eg08", "7235eg09", "7235eg11", "7235eg12", "7235eg15",
@@ -128,6 +124,32 @@ fn peaks_match_old_version() {
     }
 }
 
+/// `component_regions` against the old `detectComponents` regions: the peaks of each region, in order
+/// and with the old duplicates. The fixture's bin bounds are not compared (md-core keeps none).
+#[test]
+fn regions_match_old_version() {
+    for run in RUNS {
+        let Some(path) = run_path(run) else { return };
+        let c = md_core::andi::read(path).unwrap();
+        let p = find_run_peaks(
+            c,
+            &PeakSettings::default(),
+            PeakPass::Reordered,
+            &Cancel::default(),
+        )
+        .unwrap();
+        let new = component_regions(&p.traces, &p.peaks, &p.times, &DeconvSettings::default());
+        let old: Vec<Vec<usize>> = fixture(run, "regions")
+            .iter()
+            .map(|r| r[2].split(',').map(|k| k.parse().unwrap()).collect())
+            .collect();
+        assert_eq!(old.len(), new.len(), "{run}: region count");
+        for (k, (o, n)) in old.iter().zip(&new).enumerate() {
+            assert_eq!(o, n, "{run}: region {k}");
+        }
+    }
+}
+
 /// `analyze_run` components against the old compounds, in order: model peak, spectrum and fit.
 #[test]
 #[allow(
@@ -135,7 +157,7 @@ fn peaks_match_old_version() {
     reason = "a test of many cases: each assert counts, and Sonar skips tests"
 )]
 fn components_match_old_version() {
-    let (mut fitted, mut eighth_digit) = (0, 0);
+    let mut fitted = 0;
     for run in RUNS {
         let Some(path) = run_path(run) else { return };
         let c = md_core::andi::read(path).unwrap();
@@ -179,11 +201,7 @@ fn components_match_old_version() {
             assert_eq!(ions.len(), n.exact_spectrum.len(), "{at}: ion count");
             for (o, &(mass, height)) in ions.iter().zip(&n.exact_spectrum) {
                 assert_eq!(num(&o[1]), f64::from(mass), "{at}");
-                assert!(
-                    (num(&o[2]) as u32).abs_diff(height) <= HEIGHT_TOLERANCE,
-                    "{at}: ion {mass} height {} vs {height}",
-                    o[2]
-                );
+                assert_eq!(num(&o[2]), f64::from(height), "{at}: ion {mass} height");
                 // The fitted peak of this ion: same mass and bounds (the old peak copy).
                 let f = n
                     .peaks
@@ -198,29 +216,19 @@ fn components_match_old_version() {
                             ) == (num(&o[3]), num(&o[4]), num(&o[5]))
                     })
                     .unwrap_or_else(|| panic!("{at}: no fitted peak for {o:?}"));
-                let (di, ds) = (rel(num(&o[6]), f.integral), rel(num(&o[7]), f.model_share));
                 assert!(
-                    di <= FIT_TOLERANCE && ds <= FIT_TOLERANCE,
+                    rel(num(&o[6]), f.integral) <= INTEGRAL_TOLERANCE
+                        && num(&o[7]) == f.model_share,
                     "{at}: ion {mass} integral {} vs {}, share {} vs {}",
                     o[6],
                     f.integral,
                     o[7],
                     f.model_share
                 );
-                // The dump's 9 digits resolve the 8-digit share exactly: count the neighbours.
-                if ds > 1e-9 {
-                    eighth_digit += 1;
-                }
                 fitted += 1;
             }
         }
         assert!(comps.next().is_none(), "{run}: extra components");
     }
-    eprintln!("{eighth_digit} of {fitted} model shares differ in the 8th digit");
-    // Known count (architecture.md, "Stage fixtures"): fails when it grows; lower it when #365 fixes some.
-    assert_eq!(fitted, 4366);
-    assert!(
-        eighth_digit <= 1938,
-        "{eighth_digit} shares off, 1938 known"
-    );
+    assert_eq!(fitted, 4366, "fitted ions");
 }
