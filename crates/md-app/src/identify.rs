@@ -127,13 +127,15 @@ pub struct Nist {
     job: Option<LibraryJob>,
     /// Search settings whose preparation crashed; not retried until they change.
     failed: Option<SearchSettings>,
+    /// The running search of the selected component.
+    search: Option<Job<NistHits>>,
     /// The last search: run path, component, its spectrum, the RI searched with, hits.
     pub hits: Option<NistHits>,
 }
 
 impl Nist {
     pub fn busy(&self) -> bool {
-        self.job.is_some()
+        self.job.is_some() || self.search.is_some()
     }
 
     /// Hits of the last search if it was for this component of this run as it is now (a new
@@ -215,6 +217,7 @@ impl App {
     pub fn open_nist(&mut self, ctx: &egui::Context, path: PathBuf) {
         let s = self.settings.applied.search();
         self.nist.hits = None;
+        self.nist.search = None;
         self.nist.job = Some(Job::spawn(ctx, move |_, c| {
             load(&path, s, true, c).map(Arc::new)
         }));
@@ -246,9 +249,19 @@ impl App {
         {
             let lib = lib.clone();
             self.nist.hits = None;
+            self.nist.search = None;
             self.nist.job = Some(Job::spawn(ctx, move |_, _| {
                 Ok(Arc::new(reprepare(&lib, wanted, false, true)))
             }));
+        }
+        if let Some(job) = &self.nist.search
+            && let Some(result) = job.poll(|| t("NIST search", "NIST-Suche").into())
+        {
+            match result {
+                Ok(hits) => self.nist.hits = Some(hits),
+                Err(e) => self.error = Some(e),
+            }
+            self.nist.search = None;
         }
         // A new RI calibration of that run makes the hits stale.
         if let Some((path, k, _, ri, _)) = &self.nist.hits
@@ -266,7 +279,7 @@ impl App {
 
     /// Old `nistSearch`: the selected component of the active run against the NIST library, with RI
     /// once the run is calibrated.
-    pub fn nist_search(&mut self) {
+    pub fn nist_search(&mut self, ctx: &egui::Context) {
         let (Some(run), Some(lib)) = (self.runs.get(self.active), &self.nist.lib) else {
             return;
         };
@@ -275,10 +288,11 @@ impl App {
         };
         let c = &run.components[k];
         let ri = self.component_ri(run, c);
-        // shortcut: on the UI thread; with the default pre-filter a 300 000 entry library takes ~10 ms,
-        // a low "Minimum number of identical frag." scores almost all of it; then move it to `spawn`.
-        let hits = library_hits(&c.spectrum, ri, &lib.prepared, &lib.settings);
-        self.nist.hits = Some((run.path.clone(), k, c.spectrum.clone(), ri, hits));
+        let (path, spectrum, lib) = (run.path.clone(), c.spectrum.clone(), lib.clone());
+        self.nist.search = Some(Job::spawn(ctx, move |_, _| {
+            let hits = library_hits(&spectrum, ri, &lib.prepared, &lib.settings);
+            (path, k, spectrum, ri, hits)
+        }));
     }
 
     /// The settings the library is prepared with. The fragment values steer only the NIST
@@ -561,7 +575,12 @@ mod tests {
         let before = run.ident.as_ref().map(|i| i.1.hits.clone());
         app.runs.push(run);
         app.nist.lib = Some(Arc::new(nist));
-        app.nist_search();
+        let ctx = egui::Context::default();
+        app.nist_search(&ctx);
+        while app.nist.busy() {
+            app.update_nist(&ctx);
+            std::thread::yield_now();
+        }
         let hits = app.nist.hits_for(&app.runs[0], 0).unwrap();
         let lib = app.nist.lib.as_ref().unwrap();
         assert_eq!(lib.compounds[hits[0].compound].name, "Synthetic alpha");
@@ -575,7 +594,6 @@ mod tests {
         app.runs[0].components[0]
             .spectrum
             .clone_from(&app.nist.hits.as_ref().unwrap().2);
-        let ctx = egui::Context::default();
         app.update_nist(&ctx);
         assert!(app.nist.hits_for(&app.runs[0], 0).is_some());
         app.ri.cal = Some(Arc::new(RiCalibration::identity()));

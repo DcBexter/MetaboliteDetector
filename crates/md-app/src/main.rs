@@ -247,7 +247,7 @@ impl eframe::App for App {
                 self.ri.for_run(run),
             )
         {
-            self.nist_search();
+            self.nist_search(ui.ctx());
         }
         self.central_panel(ui);
         // Last, so the frame holds every plot that asked for an export.

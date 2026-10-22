@@ -2,6 +2,9 @@
 //! compound to at most one component, the old `LibrarySearch<int,float>`
 //! (docs/reverse-engineering/algorithms.md §5). Deviations are listed in docs/architecture.md.
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
 use rayon::prelude::*;
 
 use crate::deconv::Component;
@@ -371,30 +374,61 @@ pub fn map_compounds_to_library(
 pub fn assign_best_first(hits: &[Vec<LibraryHit>], lib_len: usize) -> Vec<Option<LibraryHit>> {
     // Taking pairs in descending score equals the old loop, which picks the best free pair each round.
     // Ties go to the lower library index, then the lower component index (old: pointer order).
-    let mut pairs: Vec<(usize, usize)> = hits
-        .iter()
-        .enumerate()
-        .flat_map(|(c, h)| (0..h.len()).map(move |j| (c, j)))
+    // Every list is already in that order, so a heap over each component's current best pair replaces
+    // sorting all pairs: a component whose compound is taken moves on to its next hit.
+    let mut heap: BinaryHeap<Head> = (hits.iter().enumerate())
+        .filter_map(|(c, h)| {
+            Some(Head {
+                hit: *h.first()?,
+                comp: c,
+                next: 1,
+            })
+        })
         .collect();
-    let hit = |p: &(usize, usize)| hits[p.0][p.1];
-    pairs.par_sort_unstable_by(|a, b| {
-        let (x, y) = (hit(a), hit(b));
-        y.overall
-            .total_cmp(&x.overall)
-            .then(x.compound.cmp(&y.compound))
-            .then(a.0.cmp(&b.0))
-    });
     let mut assigned = vec![None; hits.len()];
     let mut used = vec![false; lib_len];
-    for p in &pairs {
-        let h = hit(p);
-        if assigned[p.0].is_none() && !used[h.compound] {
-            assigned[p.0] = Some(h);
-            used[h.compound] = true;
+    while let Some(Head { hit, comp, next }) = heap.pop() {
+        if used[hit.compound] {
+            if let Some(&hit) = hits[comp].get(next) {
+                heap.push(Head {
+                    hit,
+                    comp,
+                    next: next + 1,
+                });
+            }
+        } else {
+            assigned[comp] = Some(hit);
+            used[hit.compound] = true;
         }
     }
     assigned
 }
+
+/// A component's best unassigned pair; the heap pops the greatest, i.e. the best score first.
+struct Head {
+    hit: LibraryHit,
+    comp: usize,
+    next: usize,
+}
+
+impl Ord for Head {
+    fn cmp(&self, o: &Self) -> Ordering {
+        (self.hit.overall.total_cmp(&o.hit.overall))
+            .then(o.hit.compound.cmp(&self.hit.compound))
+            .then(o.comp.cmp(&self.comp))
+    }
+}
+impl PartialOrd for Head {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl PartialEq for Head {
+    fn eq(&self, o: &Self) -> bool {
+        self.cmp(o) == Ordering::Equal
+    }
+}
+impl Eq for Head {}
 
 /// RT shift correction (§6.5) for one run: finds library compound `reference` among `comps` within
 /// `3 * ri_diff` of its library RI, with an overall score of at least `cutoff`, and returns `cal` shifted
@@ -595,6 +629,66 @@ mod tests {
         ];
         let lib = PreparedLibrary::new(&[entry("Ala", -1.0, &split)], &s);
         assert!((library_hits(&as_comp(&ALA, 1), None, &lib, &s)[0].overall - 1.0).abs() < 1e-12);
+    }
+
+    /// The former assignment: sort all (component, hit) pairs, then take the free ones in order.
+    fn assign_sorted_pairs(hits: &[Vec<LibraryHit>], lib_len: usize) -> Vec<Option<LibraryHit>> {
+        let mut pairs: Vec<(usize, usize)> = (hits.iter().enumerate())
+            .flat_map(|(c, h)| (0..h.len()).map(move |j| (c, j)))
+            .collect();
+        let hit = |p: &(usize, usize)| hits[p.0][p.1];
+        pairs.sort_unstable_by(|a, b| {
+            let (x, y) = (hit(a), hit(b));
+            (y.overall.total_cmp(&x.overall))
+                .then(x.compound.cmp(&y.compound))
+                .then(a.0.cmp(&b.0))
+        });
+        let (mut assigned, mut used) = (vec![None; hits.len()], vec![false; lib_len]);
+        for p in &pairs {
+            let h = hit(p);
+            if assigned[p.0].is_none() && !used[h.compound] {
+                assigned[p.0] = Some(h);
+                used[h.compound] = true;
+            }
+        }
+        assigned
+    }
+
+    #[test]
+    fn heap_assignment_equals_sorting_all_pairs_with_many_ties() {
+        // Scores from a few levels so that ties between compounds and components are everywhere.
+        let mut x = 12345u64;
+        let mut rnd = move |n: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % n
+        };
+        for _ in 0..50 {
+            let (comps, lib_len) = (1 + rnd(30) as usize, 1 + rnd(30) as usize);
+            let hits: Vec<Vec<LibraryHit>> = (0..comps)
+                .map(|_| {
+                    let mut h = Vec::new();
+                    for k in 0..lib_len {
+                        if rnd(3) > 0 {
+                            let overall = (1 + rnd(4)) as f64 / 4.0;
+                            h.push(LibraryHit {
+                                compound: k,
+                                spec_sim: 1.0,
+                                ri_sim: None,
+                                overall,
+                            });
+                        }
+                    }
+                    h.sort_by(|a, b| b.overall.total_cmp(&a.overall));
+                    h
+                })
+                .collect();
+            assert_eq!(
+                assign_best_first(&hits, lib_len),
+                assign_sorted_pairs(&hits, lib_len)
+            );
+        }
     }
 
     #[test]

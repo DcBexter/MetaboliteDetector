@@ -14,7 +14,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Component** | Ein deconvolvierter Stoff: Peaks mehrerer Ion traces mit gemeinsamer Retentionszeit, Modellpeak und Spektrum. | `md_core::deconv::Component` |
 | **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
-| **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins. | `md_core::search` |
+| **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins (Heap über die besten Treffer je Component, keine globale Paarliste). | `md_core::search` |
 | **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |
 | **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Library, Settings, Sample table, Gruppen. | `md_core::batch`; geplant: `run_study` (#363) |
 | **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{scan_runs, complete_scan, table}` |
