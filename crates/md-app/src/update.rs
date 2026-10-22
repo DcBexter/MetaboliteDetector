@@ -4,12 +4,11 @@ mod install;
 mod release;
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 
 use eframe::egui;
 use semver::Version;
 
-use crate::jobs::{poll_job, spawn};
+use crate::jobs::Job;
 use crate::lang::{Msg, t, tf};
 use crate::layout::ToolWindow;
 use release::{Config, Kind, Release};
@@ -20,12 +19,12 @@ enum State {
     Idle,
     /// `manual` checks report their errors; the automatic one stays silent.
     Checking {
-        rx: Receiver<Result<Option<Release>, Msg>>,
+        rx: Job<Result<Option<Release>, Msg>>,
         manual: bool,
     },
     UpToDate,
     Available(Release),
-    Installing(Version, Receiver<Result<(), Msg>>),
+    Installing(Version, Job<Result<(), Msg>>),
     Failed(Msg),
 }
 
@@ -94,7 +93,7 @@ impl Updater {
             State::Checking { manual: m, .. } => *m |= manual,
             State::Installing(..) => {}
             _ => {
-                let rx = spawn(ctx, || install::check(&current()));
+                let rx = Job::spawn(ctx, |_, _| install::check(&current()));
                 self.state = State::Checking { rx, manual };
             }
         }
@@ -150,8 +149,7 @@ impl Updater {
         match &self.state {
             State::Checking { rx, manual } => {
                 let manual = *manual;
-                let Some(result) =
-                    poll_job(rx, || t("The update check", "Die Update-Suche").into())
+                let Some(result) = rx.poll(|| t("The update check", "Die Update-Suche").into())
                 else {
                     return;
                 };
@@ -167,8 +165,7 @@ impl Updater {
                 };
             }
             State::Installing(_, rx) => {
-                match poll_job(rx, || t("The update", "Das Update").into())
-                    .map(|r| r.and_then(|r| r))
+                match (rx.poll(|| t("The update", "Das Update").into())).map(|r| r.and_then(|r| r))
                 {
                     Some(Ok(())) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                     Some(Err(e)) => self.state = State::Failed(e),
@@ -293,7 +290,7 @@ impl Updater {
         }
         if let Some((release, kind, exe)) = install {
             let version = release.version.clone();
-            let rx = spawn(ui.ctx(), move || install::install(&release, kind, &exe));
+            let rx = Job::spawn(ui.ctx(), move |_, _| install::install(&release, kind, &exe));
             self.state = State::Installing(version, rx);
         }
     }

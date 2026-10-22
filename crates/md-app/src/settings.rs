@@ -5,7 +5,6 @@
 use std::io::Read;
 use std::ops::RangeInclusive;
 use std::path::Path;
-use std::sync::mpsc;
 
 use crate::errors;
 use crate::lang::{Msg, msg, t, tf};
@@ -14,10 +13,11 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::analysis::{PeakPass, analyze_run};
 use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
+use md_core::job::Cancel;
 use md_core::peaks::{Detector, Peak, PeakSettings};
 use md_core::settings::{GcmsSettings, MAX_LEN};
 
-use crate::{Run, spawn};
+use crate::{Job, Run};
 
 /// What the components of a run were computed with.
 pub type Key = (PeakSettings, DeconvSettings);
@@ -78,7 +78,7 @@ type Analyzed = Result<(Vec<Component>, Vec<u32>, Vec<Peak>), String>;
 pub struct Analysis {
     /// Settings behind `Run::components`.
     pub key: Option<Key>,
-    job: Option<(Key, mpsc::Receiver<Analyzed>)>,
+    job: Option<(Key, Job<Analyzed>)>,
 }
 
 impl Analysis {
@@ -95,9 +95,9 @@ impl Analysis {
 }
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
-pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
-    let mut a =
-        analyze_run(data, &key.0, &key.1, PeakPass::Reordered).map_err(|e| e.to_string())?;
+pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
+    let mut a = analyze_run(data, &key.0, &key.1, PeakPass::Reordered, cancel)
+        .map_err(|e| e.to_string())?;
     a.components.sort_by_key(|k| k.apex_scan);
     Ok((a.components, a.masses, a.peaks))
 }
@@ -134,9 +134,10 @@ impl Settings {
                 (run.sic_for, run.sic_job) = (None, None);
             }
             let a = &mut run.analysis;
-            if let Some((key, rx)) = &a.job {
-                match rx.try_recv() {
-                    Ok(result) => {
+            if let Some((key, job)) = &a.job {
+                let what = || format!("{}: {}", run.name, t("analysis", "Analyse"));
+                match job.poll(what) {
+                    Some(Ok(result)) => {
                         match result {
                             Ok((components, masses, peaks)) => {
                                 (run.components, run.peak_masses, run.peaks) =
@@ -150,14 +151,10 @@ impl Settings {
                         a.key = Some(key.clone());
                         a.job = None;
                     }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
+                    None => {}
+                    Some(Err(e)) => {
                         // Panicked: keep the old components and do not retry these settings.
-                        error = Some(msg!(
-                            "{}: analysis crashed",
-                            "{}: Analyse abgestürzt",
-                            run.name
-                        ));
+                        error = Some(e);
                         a.key = Some(key.clone());
                         a.job = None;
                     }
@@ -168,7 +165,10 @@ impl Settings {
                 a.job = None;
             } else if a.job.as_ref().map(|j| &j.0) != Some(&wanted) {
                 let (data, key) = (run.data.clone(), wanted.clone());
-                a.job = Some((wanted.clone(), spawn(ctx, move || analyze(&data, &key))));
+                a.job = Some((
+                    wanted.clone(),
+                    Job::spawn(ctx, move |_, cancel| analyze(&data, &key, cancel)),
+                ));
             }
         }
         error
@@ -911,6 +911,19 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn a_cancelled_analysis_is_an_error_not_a_result() {
+        let run = crate::results::tests::run();
+        let cancel = Cancel::default();
+        let key = Settings::default().key();
+        assert!(analyze(&run.data, &key, &cancel).is_ok());
+        cancel.cancel();
+        assert_eq!(
+            analyze(&run.data, &key, &cancel).err().as_deref(),
+            Some("cancelled")
+        );
+    }
 
     /// #303: in Guided mode "Advanced" is closed, but an invalid draft opens it.
     #[test]

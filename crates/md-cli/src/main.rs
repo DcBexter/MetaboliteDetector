@@ -1,11 +1,11 @@
 //! Headless batch quantification for big studies: finds the library substances in many runs and writes
 //! the substance × run table of the app's batch window as CSV. Depends on `md-core` only.
 
+use md_core::job::{Cancel, Progress};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Instant;
 
 use md_core::batch::{
@@ -313,7 +313,7 @@ fn run(a: Args) -> Result<bool, String> {
         None => Box::new(std::io::stdout().lock()),
     };
     let started = Instant::now();
-    let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let (done, cancel) = (Progress::default(), Cancel::default());
     let (mut runs, mut errors) =
         scan_runs(&a.runs, &prepared, &scan, a.parallel, &done, &cancel).ok_or("cancelled")?;
     let more = complete_scan(

@@ -2,9 +2,9 @@
 //! TargetSearchData library and compares its CSV with the table `md-core` builds in process, which is
 //! the one of the app's batch window. Passes without checking anything when the data is missing.
 
+use md_core::job::{Cancel, Progress};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use md_core::batch::{TableSettings, scan_runs, table};
 use md_core::library::parse_msl;
@@ -75,7 +75,7 @@ fn csv_equals_the_core_table_of_the_example_runs() {
     let settings = GcmsSettings::default();
     let compounds = parse_msl(&msl).unwrap();
     let prepared = PreparedLibrary::new(&compounds, &settings.search());
-    let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let (done, cancel) = (Progress::default(), Cancel::default());
     let (found, errors) =
         scan_runs(&runs, &prepared, &settings.scan(None), 4, &done, &cancel).unwrap();
     assert!(errors.is_empty(), "{errors:?}");

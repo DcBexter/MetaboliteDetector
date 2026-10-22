@@ -4,17 +4,16 @@
 //! opening such a run needs. A saved file can be loaded to look at or correct its ions.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 
 use eframe::egui;
 use egui_plot::{Line, Plot, VLine};
 use md_core::decimate;
 use md_core::tof::{TofCalibration, TofError, peak_bin};
 
+use crate::Job;
 use crate::errors;
 use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
-use crate::{poll_job, spawn};
 
 /// One reference ion: a peak of the run (TOF bin) and the m/z it stands for. Rows that are not
 /// `used` stay in the table but out of the fit.
@@ -33,7 +32,7 @@ pub struct TofWindow {
     run: Option<Summed>,
     xs: Vec<f64>,
     ys: Vec<f64>,
-    job: Option<mpsc::Receiver<Result<Summed, Msg>>>,
+    job: Option<Job<Result<Summed, Msg>>>,
     rows: Vec<Row>,
     degree: usize,
     /// Bins around a click searched for the peak.
@@ -62,10 +61,10 @@ impl Default for TofWindow {
 impl TofWindow {
     /// `fwhm` is `SF_FWHM` of the peak centring.
     pub fn window(&mut self, ctx: &egui::Context, fwhm: f64) {
-        if let Some(rx) = &self.job
-            && let Some(result) =
-                poll_job(rx, || t("FastFlight import", "FastFlight-Import").into())
-                    .map(|r| r.and_then(|x| x))
+        if let Some(job) = &self.job
+            && let Some(result) = job
+                .poll(|| t("FastFlight import", "FastFlight-Import").into())
+                .map(|r| r.and_then(|x| x))
         {
             match result {
                 Ok(run) => self.set_run(run),
@@ -109,6 +108,10 @@ impl TofWindow {
                     "Adding up the scans of the run…",
                     "Die Scans des Laufs werden aufsummiert…",
                 ));
+                // Dropping the job cancels it; its result is discarded.
+                if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                    self.job = None;
+                }
             });
         }
         self.plot(ui, fwhm);
@@ -139,7 +142,11 @@ impl TofWindow {
                 self.error = None;
                 // The run is summed on its own thread: raw runs are large.
                 let ctx = ui.ctx().clone();
-                self.job = Some(spawn(&ctx, move || {
+                self.job = Some(Job::spawn(&ctx, move |_, cancel| {
+                    // The summing cannot be interrupted; a cancelled job does not start it.
+                    if cancel.is_cancelled() {
+                        return Err(msg!("Cancelled.", "Abgebrochen."));
+                    }
                     md_core::fastflight::bin_spectrum(&path)
                         .map(|s| (path, s))
                         .map_err(|e| e.to_string().into())

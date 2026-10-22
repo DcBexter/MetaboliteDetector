@@ -568,9 +568,9 @@ fn result_table_of_a_real_run() {
 fn unlabelled_runs_give_m0_by_sum_formula() {
     use md_core::batch::{QuantSettings, ScanSettings, complete_scan, scan_runs};
     use md_core::isotope::IsotopeTable;
+    use md_core::job::{Cancel, Progress};
     use md_core::mid::{Method, determine, mid_library};
     use md_core::search::PreparedLibrary;
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
     let Ok(lbr) = std::env::var("MD_LBR_SAMPLE") else {
         eprintln!("skipped: MD_LBR_SAMPLE not set");
         return;
@@ -593,9 +593,9 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
     // batch-quantification.md). 6 s is the window this test used before #133.
     s.search.ri_diff = 6.0;
     let prepared = PreparedLibrary::new(&lib, &s.search);
-    let no = AtomicBool::new(false);
+    let no = Cancel::default();
     let (mut found, errors) =
-        scan_runs(&runs, &prepared, &s, 4, &AtomicUsize::new(0), &no).unwrap();
+        scan_runs(&runs, &prepared, &s, 4, &Progress::default(), &no).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
     // Few runs find the substance without RI calibration; rescan the fragment ions in the others.
     let q = QuantSettings::default();
