@@ -104,7 +104,8 @@ if [[ "${1:-}" == --exact-masses ]]; then
   python3 "$here/golden.py" "static default settings, exact-mass cache (DataType 1) made from 7235eg04" < "$work/raw.tsv" > "$out/old-md-3.3-exact-masses.tsv"
   exit
 fi
-LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
+# Default detector: an MD_MATCHED left in the environment must not reach this run.
+env -u MD_MATCHED LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
 if [[ "${1:-}" == --stages ]]; then
   python3 "$here/stages.py" < "$work/raw.tsv"
   exit

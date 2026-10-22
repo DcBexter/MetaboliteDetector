@@ -209,4 +209,7 @@ fn components_match_old_version() {
         assert!(comps.next().is_none(), "{run}: extra components");
     }
     eprintln!("{eighth_digit} of {fitted} model shares differ in the 8th digit");
+    // Known count (architecture.md, "Stage fixtures"): fails when it grows; lower it when #365 fixes some.
+    assert_eq!(fitted, 4366);
+    assert!(eighth_digit <= 1938, "{eighth_digit} shares off, 1938 known");
 }
