@@ -5,10 +5,11 @@
 
 use std::path::Path;
 
+use md_core::Chromatogram;
 use md_core::analysis::{PeakPass, analyze_run, find_run_peaks};
 use md_core::deconv::{DeconvSettings, component_regions};
 use md_core::job::Cancel;
-use md_core::peaks::PeakSettings;
+use md_core::peaks::{IonTraces, PeakSettings};
 
 /// Interpolated apex, in scans: md-core keeps it as f32 (ulp 2.4e-4 at 2048..4096 scans, 4.9e-4 above).
 const APEX_TOLERANCE: f64 = 5e-4;
@@ -234,4 +235,27 @@ fn components_match_old_version() {
         assert!(comps.next().is_none(), "{run}: extra components");
     }
     assert_eq!(fitted, 4366, "fitted ions");
+}
+
+/// `fwhm` (`SF_FWHM`) decides which points the centroid sums, so it must reach the centroid stage
+/// that feeds peak detection and deconvolution. One scan with a falling peak; the nominal-mass trace
+/// at 100 holds the centroid sum.
+#[test]
+fn fwhm_reaches_the_centroid_stage() {
+    let c = Chromatogram {
+        scan_times_s: vec![0.0],
+        offsets: vec![0, 4],
+        mz: vec![100.0, 100.05, 100.10, 100.15],
+        intensity: vec![100.0, 60.0, 30.0, 10.0],
+        exact_masses: false,
+        baseline: Default::default(),
+    };
+    let at_100 = |fwhm: f64| {
+        let t = IonTraces::new(&c, fwhm).unwrap();
+        let row = t.masses.iter().position(|m| *m == 100).unwrap();
+        t.value(row, 0)
+    };
+    // 0.5 keeps 100 and 60 (sum 160); 0.2 also keeps 30 (sum 190); 10 is below both thresholds.
+    assert_eq!(at_100(0.5), 160.0);
+    assert_eq!(at_100(0.2), 190.0);
 }
