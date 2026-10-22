@@ -141,6 +141,7 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
 | Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 83 ms (250 ms with the sorted pair list) |
 | Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
+| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | 470 / 450 / 47 ms (2026-10-22) |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -154,8 +155,17 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
-0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+detector on every trace in parallel. The index is dense (masses × scans × 4 bytes; the example runs:
+about 0.1 GiB) or, when the run fills at most 1 in 4 cells (`SPARSE_FILL_RATIO`, typical for exact-mass
+runs), sparse: per row the scans with a point (8 bytes each), every other scan reads the missing value.
+Readers call `IonTraces::trace(row, scans, buf)`, which returns the dense slice or fills `buf` (one per
+rayon worker; peak detection keeps it thread-local because `map_init` would allocate it per row), and
+`IonTraces::value(row, scan)` for single points. The ratio is measured with `examples/perf.rs` on
+36 000 scans × 500 points per scan spread over 1, 2, 4, 8 and 40 exact m/z per mass: at 1 in 2 sparse
+saves nothing, at 1 in 4 it saves a third of the peak memory for about a quarter more time, at 1 in 40
+(20 000 traces) the peak memory falls from 2.8 GiB to 0.3 GiB at the same detection time.
+`reorder_peaks` keeps a running f64 sum per profile, so a join adds one member instead of re-adding all.
+`IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
 

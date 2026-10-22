@@ -317,13 +317,16 @@ pub(crate) mod tests {
         // Without correction a missing mass reads the scan's mean (old `getSignal`).
         let t = crate::peaks::IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(
-            (t.trace(0), t.trace(1)),
+            (&t.row(0)[..], &t.row(1)[..]),
             (&[10.0, 7.0][..], &[5.0, 5.0][..])
         );
         c.set_baseline_correction(true);
         assert_eq!(c.spectrum(0).1, &[8.0, 3.0][..]);
         let t = crate::peaks::IonTraces::new(&c, 0.5).unwrap();
-        assert_eq!((t.trace(0), t.trace(1)), (&[8.0, 2.0][..], &[3.0, 0.0][..]));
+        assert_eq!(
+            (&t.row(0)[..], &t.row(1)[..]),
+            (&[8.0, 2.0][..], &[3.0, 0.0][..])
+        );
         assert_eq!(c.tic(), tic, "the TIC stays uncorrected");
         c.set_baseline_correction(false);
         assert_eq!(c, parse(&idx, &bin).unwrap());
