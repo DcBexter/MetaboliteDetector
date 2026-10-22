@@ -16,7 +16,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
 | Updates | `ureq` (rustls), `serde_json`, `sha2`, `semver`, `tar` + `flate2`, app only | `ureq`: HTTPS to the GitHub API and release assets without a system TLS library; `serde_json`: read the release list; `sha2`: verify downloads against `SHA256SUMS.txt`; `semver`: order versions incl. pre-releases; `tar`: unpack the Linux tar.gz. See [Updates](#updates). |
 | R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
-| Search cutoff | LS_CUTOFF everywhere, also the main window | one rule; hits below are not kept, lowering the cutoff re-runs the identification (#399) |
+| Search cutoff | LS_CUTOFF everywhere, also the main window | one rule; hits below are not kept, lowering the cutoff re-runs the identification; applies to the NIST list too (#399) |
 
 ## Layout
 
