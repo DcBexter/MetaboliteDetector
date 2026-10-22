@@ -344,7 +344,7 @@ pub fn library_hits(
 }
 
 /// Result of `map_compounds_to_library`, indexed like the components.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Identification {
     /// All hits of each component (overall >= cutoff), best first.
     pub hits: Vec<Vec<LibraryHit>>,
@@ -354,20 +354,9 @@ pub struct Identification {
 
 /// Old `mapCompoundsToLibrary`: searches every component in parallel, then assigns greedily by best
 /// overall score so that each library compound and each component is used at most once.
-/// `ris[i]` is the RI of component `i`; pass `None` while the run is not RI-calibrated.
+/// `ris[i]` is the RI of component `i`; pass `None` while the run is not RI-calibrated. Checks `cancel`
+/// before each component's search and returns `None` once it is set.
 pub fn map_compounds_to_library(
-    comps: &[Component],
-    ris: Option<&[f64]>,
-    lib: &PreparedLibrary,
-    s: &SearchSettings,
-) -> Identification {
-    map_compounds_cancellable(comps, ris, lib, s, &Cancel::default())
-        .expect("a fresh Cancel is never set")
-}
-
-/// [`map_compounds_to_library`] that checks `cancel` before each component's search and returns `None`
-/// once it is set; otherwise the result is identical.
-pub fn map_compounds_cancellable(
     comps: &[Component],
     ris: Option<&[f64]>,
     lib: &PreparedLibrary,
@@ -732,14 +721,14 @@ mod tests {
             component(&as_comp(&ALA, 2)),
             component(&[(50, 1)]),
         ];
-        let id = map_compounds_to_library(&comps, None, &lib, &s);
+        let id = map_compounds_to_library(&comps, None, &lib, &s, &Cancel::default()).unwrap();
         assert_eq!(id.hits[0][0].compound, 0);
         assert!(id.hits[2].is_empty());
         let got: Vec<_> = id.assigned.iter().map(|a| a.map(|h| h.compound)).collect();
         assert_eq!(got, [Some(1), Some(0), None]);
         // A cutoff above the fallback score leaves the first component unassigned.
         let cut = SearchSettings { cutoff: 0.99, ..s };
-        let id = map_compounds_to_library(&comps, None, &lib, &cut);
+        let id = map_compounds_to_library(&comps, None, &lib, &cut, &Cancel::default()).unwrap();
         assert_eq!(
             id.assigned
                 .iter()
@@ -756,13 +745,11 @@ mod tests {
         let comps = [component(&[(50, 100)])];
         let prepared = PreparedLibrary::new(&lib, &s);
         let cancel = Cancel::default();
-        assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_some());
+        assert!(map_compounds_to_library(&comps, None, &prepared, &s, &cancel).is_some());
         cancel.cancel();
-        assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_none());
-        assert!(map_compounds_cancellable(&[], None, &prepared, &s, &cancel).is_none());
-        assert!(
-            map_compounds_cancellable(&comps, None, &prepared, &s, &Cancel::after(2)).is_none()
-        );
+        assert!(map_compounds_to_library(&comps, None, &prepared, &s, &cancel).is_none());
+        assert!(map_compounds_to_library(&[], None, &prepared, &s, &cancel).is_none());
+        assert!(map_compounds_to_library(&comps, None, &prepared, &s, &Cancel::after(2)).is_none());
     }
 
     #[test]
@@ -805,7 +792,8 @@ mod tests {
         );
         // Searched with the shifted RIs, Gly matches its library RI exactly.
         let ris = shifted.component_ris(&times, &comps);
-        let id = map_compounds_to_library(&comps, Some(&ris), &lib, &s);
+        let id =
+            map_compounds_to_library(&comps, Some(&ris), &lib, &s, &Cancel::default()).unwrap();
         assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
     }
 
