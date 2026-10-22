@@ -30,6 +30,8 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
                         library text format (.mdlib) read/write
   src/peaks.rs          ion traces (ion-major index), noise, baseline and peak detection per trace
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
+  src/analysis.rs       analyze run: ion traces, peaks (PeakPass) and deconvolution of one run, the one
+                        chain behind the app, the batch and its rescan
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file,
                         binary RICalculator record
@@ -37,6 +39,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
   src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
+  src/view.rs           view model of the tables: display rules (missing as 0, NaN sort, digits, axis index), batch view cached per generation
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
   src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
                         statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
@@ -163,6 +166,13 @@ deconvolution all use the chosen detector. In the old code the matched peaks hol
 the deconvolution reads those, so `IonTraces::detect_peaks` overwrites each trace in place with its filtered
 values (one row copy per worker, no second index). The filter is computed per trace in parallel with one
 precomputed kernel; `detect_peaks_matched` runs the same detector on a single trace (RI markers).
+
+`md_core::analysis` puts the chain together once: `analyze_run` (index, peaks, deconvolution) for the app
+and the batch, and its peak stage `find_run_peaks` for the rescan, which keeps the index and deconvolutes
+only small windows. `PeakPass` names the one difference: `Reordered` is the main window and batch
+(`detect_all_peaks`, old `detectAllPeaks(reorder=true)`), `Fresh` is the rescan (`detect_peaks` only,
+like the old `ResultSeries::scanIons`, algorithms.md §4.0). The batch passes its run by value so the
+spectra are dropped once the index is built; the app lends its run and keeps it for the plots.
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
 
@@ -730,7 +740,7 @@ scales with the number of runs squared, not the number of substances squared, wh
 non-targeted tables. The sign of a component is chosen so its largest loading is positive. Values are
 tested against R 4.5.2 (`scripts/r/stats_reference.R`, relative 1e-9). Details:
 [algorithms.md](reverse-engineering/algorithms.md) §7f. The window
-(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change.
+(`crates/md-app/src/statistics.rs`) recomputes only when the batch table or the groups change; which rows it lists and how numbers read comes from `md_core::view`.
 
 ## Mass isotopomer distributions (MID)
 

@@ -434,11 +434,11 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
     (rows.into_iter())
         .map(|res| {
             let c = &run.components[res.component];
-            let d = md_core::detail::component_detail(c, &run.peaks, &run.peak_masses);
+            let (area, sn) =
+                md_core::view::component_area_sn(res.area, c, &run.peaks, &run.peak_masses);
             Row {
-                area: (res.area)
-                    .unwrap_or_else(|| md_core::results::area(c, &[], &run.peak_masses)),
-                sn: (!d.peaks.is_empty()).then_some(d.mean_signal_to_noise),
+                area,
+                sn,
                 ions: c.spectrum.len(),
                 res,
             }
@@ -560,7 +560,7 @@ fn cell(r: &Row, col: Col) -> String {
 
 /// Missing values sort first.
 fn compare(a: &Row, b: &Row, col: Col) -> std::cmp::Ordering {
-    let num = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
+    let num = md_core::view::missing_first;
     let (x, y) = (&a.res, &b.res);
     match col {
         Col::Name => shown_name(x)
