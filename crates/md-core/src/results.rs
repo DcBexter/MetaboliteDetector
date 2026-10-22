@@ -70,10 +70,21 @@ pub fn result_rows(
         .collect()
 }
 
-/// The component list's order: rows by the apex scan of their component. Stable, so equal apexes keep
-/// the deconvolution order. Only the list sorts; the run's components stay in deconvolution order.
+/// The one apex rule: component indices by apex scan, stable, so equal apexes keep the deconvolution
+/// order. The list sorts by it and ↓/↑ with the list hidden steps along it; the run keeps its order.
+pub fn apex_order(comps: &[Component]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..comps.len()).collect();
+    order.sort_by_key(|&k| comps[k].apex_scan);
+    order
+}
+
+/// The rows of the component list in [`apex_order`] of their components.
 pub fn sort_by_apex(rows: &mut [ResultRow], comps: &[Component]) {
-    rows.sort_by_key(|r| comps[r.component].apex_scan);
+    let mut rank = vec![0; comps.len()];
+    for (p, k) in apex_order(comps).into_iter().enumerate() {
+        rank[k] = p;
+    }
+    rows.sort_by_key(|r| rank[r.component]);
 }
 
 /// Old `getIntegral`: the sum over the quant ions of the largest peak of that ion (a duplicate peak
@@ -389,6 +400,7 @@ mod tests {
         sort_by_apex(&mut rows, &comps);
         let order: Vec<usize> = rows.iter().map(|r| r.component).collect();
         assert_eq!(order, vec![3, 1, 0, 2]);
+        assert_eq!(apex_order(&comps), vec![3, 1, 0, 2]);
     }
 
     #[test]

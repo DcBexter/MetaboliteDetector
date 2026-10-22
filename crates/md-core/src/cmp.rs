@@ -51,8 +51,8 @@ pub fn is_cmp(path: &Path) -> bool {
 /// lists), as `settings::analyze` returns them. A saved peak has no ion-trace row (`Peak::row` is 0).
 pub type SavedComponents = (Vec<Component>, Vec<u32>, Vec<Peak>);
 
-/// Components saved next to a run (`<run>.cmp`), ordered by apex like `deconvolute`'s callers use
-/// them, with the ion mass and the peak of every `FittedPeak::peak`. None without a file; an
+/// Components saved next to a run (`<run>.cmp`) in file order, the deconvolution order 3.3 wrote, with
+/// the ion mass and the peak of every `FittedPeak::peak`. None without a file; an
 /// error when a component lies outside the run or its apex time does not match the run's
 /// `scan_times_s` (a `.cmp` of another run).
 pub fn saved_components(
@@ -140,7 +140,6 @@ fn components_of(
         masses.extend(c.peaks.iter().map(|p| p.ion.round() as u32));
         peaks.extend(c.peaks.iter().map(peak_of));
     }
-    components.sort_by_key(|k| k.apex_scan);
     Ok((components, masses, peaks))
 }
 
@@ -616,11 +615,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(back, back2);
         assert_eq!(standalone_times[10], 105.0);
-        // Components come back ordered by apex, so the one saved first is second now.
-        assert_eq!((back[1].apex_scan, back[0].apex_scan), (10, 4));
+        // Components come back in file order: the one saved first is first again.
+        assert_eq!((back[0].apex_scan, back[1].apex_scan), (10, 4));
         let (mut before, after) = (
             component_detail(&comps[0], &peaks, &masses),
-            component_detail(&back[1], &p2, &m2),
+            component_detail(&back[0], &p2, &m2),
         );
         // The old file keeps its ion peaks ascending by mass, not sharpest first.
         before.peaks.sort_by_key(|r| r.mass);
@@ -629,8 +628,8 @@ mod tests {
             "panel values from the file equal the originals"
         );
         assert_eq!(after.peaks.len(), 3);
-        assert_eq!(back[1].spectrum, comps[0].spectrum);
-        assert_eq!(back[1].model, comps[0].model);
+        assert_eq!(back[0].spectrum, comps[0].spectrum);
+        assert_eq!(back[0].model, comps[0].model);
         assert_eq!(p2[0].precise_apex, Some(10.5));
     }
 
