@@ -115,7 +115,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    matching the old `GCMSDiskScan<int, float>`. Accumulate sums in `f64`.
 2. **Never block the UI.** File loading and every analysis step run on worker threads; the UI polls
    results and shows progress. Long jobs must be cancellable: every background job is a `jobs::Job`
-   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too.
+   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, so one md-core call (file read or write, summing a run) runs to its end; closing a job's window or dropping the `Job` discards its result.
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.

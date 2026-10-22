@@ -395,6 +395,9 @@ impl Calibration {
             }
             if self.job.is_some() {
                 ui.spinner();
+                if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                    self.job = None;
+                }
             }
             if ui.button(t("Load .calib…", ".calib laden…")).clicked()
                 && let Some(path) = calib_dialog().pick_file()
@@ -512,6 +515,9 @@ impl Calibration {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(t("Searching the mix…", "Mischung wird gesucht…"));
+                    if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                        self.mix_job = None;
+                    }
                 });
             }
         });

@@ -296,7 +296,7 @@ impl App {
                     CentroidSettings::from(&self.settings.applied),
                 );
                 self.export_job = Some(Job::spawn(ui.ctx(), move |_, cancel| {
-                    // The write cannot be interrupted; a cancelled job does not start it.
+                    // The write itself cannot be interrupted (~0.2 s per 10M points).
                     if cancel.is_cancelled() {
                         return Ok(());
                     }

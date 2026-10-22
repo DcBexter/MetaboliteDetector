@@ -108,6 +108,10 @@ impl TofWindow {
                     "Adding up the scans of the run…",
                     "Die Scans des Laufs werden aufsummiert…",
                 ));
+                // Dropping the job cancels it; its result is discarded.
+                if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                    self.job = None;
+                }
             });
         }
         self.plot(ui, fwhm);
