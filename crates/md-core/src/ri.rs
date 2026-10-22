@@ -551,9 +551,8 @@ mod tests {
         };
         let peaks = marker_peaks(&c, 57.0, 12, 10, &Cancel::default()).unwrap();
         assert_eq!(peaks.iter().map(|p| p.0).collect::<Vec<_>>(), [50.0, 150.0]);
-        let cancel = Cancel::default();
-        cancel.cancel();
-        assert!(marker_peaks(&c, 57.0, 12, 10, &cancel).is_none());
+        // Set inside the scan loop (400 scans), not before it.
+        assert!(marker_peaks(&c, 57.0, 12, 10, &Cancel::after(100)).is_none());
     }
 
     #[test]

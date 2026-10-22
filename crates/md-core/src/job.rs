@@ -7,7 +7,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 /// returns early (usually `None`); work in a single step runs to its end. Clones share one flag, and
 /// once set it stays set.
 #[derive(Clone, Default, Debug)]
-pub struct Cancel(Arc<AtomicBool>);
+pub struct Cancel(
+    Arc<AtomicBool>,
+    /// Tests only: polls left until the flag sets itself; 0 is off.
+    #[cfg(test)]
+    Arc<AtomicUsize>,
+);
 
 impl Cancel {
     pub fn cancel(&self) {
@@ -15,7 +20,20 @@ impl Cancel {
     }
 
     pub fn is_cancelled(&self) -> bool {
+        #[cfg(test)]
+        if self.1.load(Relaxed) > 0 && self.1.fetch_sub(1, Relaxed) == 1 {
+            self.cancel();
+        }
         self.0.load(Relaxed)
+    }
+
+    /// Tests only: cancels itself at the `polls`-th call of [`Self::is_cancelled`], so a test can stop a
+    /// job inside its loop instead of before it.
+    #[cfg(test)]
+    pub(crate) fn after(polls: usize) -> Self {
+        let c = Self::default();
+        c.1.store(polls, Relaxed);
+        c
     }
 }
 
