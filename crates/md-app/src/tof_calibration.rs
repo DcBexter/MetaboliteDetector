@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use egui_plot::{Line, Plot, VLine};
 use md_core::decimate;
+use md_core::job::Cancel;
 use md_core::tof::{TofCalibration, TofError, peak_bin};
 
 use crate::Job;
@@ -25,6 +26,15 @@ struct Row {
 }
 
 type Summed = (PathBuf, Vec<(f32, f64)>);
+
+/// Adds up the scans of a run; a set `cancel` stops it before the next scan.
+fn sum_run(path: PathBuf, cancel: &Cancel) -> Result<Summed, Msg> {
+    match md_core::fastflight::bin_spectrum(&path, cancel) {
+        Ok(Some(spectrum)) => Ok((path, spectrum)),
+        Ok(None) => Err(msg!("Cancelled.", "Abgebrochen.")),
+        Err(e) => Err(e.to_string().into()),
+    }
+}
 
 pub struct TofWindow {
     pub open: bool,
@@ -142,15 +152,7 @@ impl TofWindow {
                 self.error = None;
                 // The run is summed on its own thread: raw runs are large.
                 let ctx = ui.ctx().clone();
-                self.job = Some(Job::spawn(&ctx, move |_, cancel| {
-                    // The summing cannot be interrupted; a cancelled job does not start it.
-                    if cancel.is_cancelled() {
-                        return Err(msg!("Cancelled.", "Abgebrochen."));
-                    }
-                    md_core::fastflight::bin_spectrum(&path)
-                        .map(|s| (path, s))
-                        .map_err(|e| e.to_string().into())
-                }));
+                self.job = Some(Job::spawn(&ctx, move |_, cancel| sum_run(path, cancel)));
             }
             if ui
                 .button(t("Load .mzcalib…", ".mzcalib laden…"))
@@ -432,6 +434,25 @@ impl TofWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cancelled_sum_is_an_error_not_a_spectrum() {
+        // One scan in the index whose data is not read: the cancel check comes first.
+        let dir = std::env::temp_dir().join(format!("md-tof-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ffc = 1i32.to_le_bytes().to_vec();
+        ffc.extend([0u8; 36]);
+        std::fs::write(dir.join("MsData.FFC"), ffc).unwrap();
+        std::fs::write(dir.join("MsData.FFT"), [0u8]).unwrap();
+        let cancel = Cancel::default();
+        assert!(sum_run(dir.clone(), &cancel).is_err());
+        cancel.cancel();
+        assert_eq!(
+            sum_run(dir.clone(), &cancel).err().as_deref(),
+            Some("Cancelled.")
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn rows_fit_into_a_calibration() {

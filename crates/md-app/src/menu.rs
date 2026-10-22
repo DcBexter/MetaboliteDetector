@@ -1,6 +1,9 @@
 //! Top menu bar: File, Analysis, View and Help.
 
 use eframe::egui;
+use md_core::andi::AndiError;
+use md_core::centroid::{CentroidSettings, ExportKind, reduce};
+use md_core::job::Cancel;
 
 use crate::lang::{Msg, t, tf};
 use crate::shortcuts::{Action, REPO};
@@ -254,7 +257,6 @@ impl App {
 
     /// The three ways the old program wrote a run: all points, one point per peak, or per nominal mass.
     fn netcdf_menu(&mut self, ui: &mut egui::Ui) {
-        use md_core::centroid::{CentroidSettings, ExportKind, reduce};
         for kind in ExportKind::ALL {
             let (label, hint) = match kind {
                 ExportKind::Profile => (
@@ -296,17 +298,7 @@ impl App {
                     CentroidSettings::from(&self.settings.applied),
                 );
                 self.export_job = Some(Job::spawn(ui.ctx(), move |_, cancel| {
-                    // The write itself cannot be interrupted (~0.2 s per 10M points).
-                    if cancel.is_cancelled() {
-                        return Ok(());
-                    }
-                    let result = if kind == ExportKind::Profile {
-                        md_core::andi::write(&path, &data)
-                    } else {
-                        let reduced = reduce(&data, kind, &s);
-                        md_core::andi::write_with_tic(&path, &reduced, &data.tic())
-                    };
-                    result.map_err(|e| Msg::from(format!("{}: {e}", path.display())))
+                    export_run(&path, &data, kind, &s, cancel)
                 }));
                 ui.close();
             }
@@ -415,5 +407,51 @@ impl App {
                 }
             }
         }
+    }
+}
+
+/// Writes one run as ANDI-MS. A cancelled write is no error: no file is created and the job's
+/// result is discarded anyway.
+fn export_run(
+    path: &std::path::Path,
+    data: &md_core::Chromatogram,
+    kind: ExportKind,
+    s: &CentroidSettings,
+    cancel: &Cancel,
+) -> Result<(), Msg> {
+    let result = match kind {
+        ExportKind::Profile => md_core::andi::write_with_tic(path, data, &data.tic(), cancel),
+        _ => md_core::andi::write_with_tic(path, &reduce(data, kind, s), &data.tic(), cancel),
+    };
+    match result {
+        Err(AndiError::Cancelled) => Ok(()),
+        r => r.map_err(|e| Msg::from(format!("{}: {e}", path.display()))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cancelled_export_writes_no_file() {
+        let run = md_core::Chromatogram {
+            offsets: vec![0, 1],
+            mz: vec![57.0],
+            intensity: vec![1.0],
+            scan_times_s: vec![0.0],
+            exact_masses: false,
+            baseline: Default::default(),
+        };
+        let path =
+            std::env::temp_dir().join(format!("md-export-cancel-{}.cdf", std::process::id()));
+        let s = CentroidSettings::default();
+        let cancel = Cancel::default();
+        cancel.cancel();
+        assert!(export_run(&path, &run, ExportKind::Profile, &s, &cancel).is_ok());
+        assert!(!path.exists());
+        export_run(&path, &run, ExportKind::Profile, &s, &Cancel::default()).unwrap();
+        assert!(path.exists());
+        std::fs::remove_file(&path).ok();
     }
 }

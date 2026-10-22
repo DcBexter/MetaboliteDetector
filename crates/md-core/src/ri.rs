@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::Chromatogram;
 use crate::deconv::Component;
+use crate::job::Cancel;
 use crate::peaks::detect_peaks_matched;
 
 #[derive(Debug, thiserror::Error)]
@@ -271,20 +272,29 @@ fn interpolate(points: &[(f64, f64)], x: f64, xy: fn((f64, f64)) -> (f64, f64)) 
 
 /// Peaks of the marker ion `mz` (± 0.5) in a calibration run, found like the old calibration dialog
 /// with the matched peak detector (§3.3; `density` and `threshold` are the dialog's settings).
-/// Returns (time in s, intensity) of each peak's highest scan, ascending in time.
-pub fn marker_peaks(c: &Chromatogram, mz: f32, density: usize, threshold: i32) -> Vec<(f64, f64)> {
-    let sic = c.sic(mz, 0.5);
+/// Returns (time in s, intensity) of each peak's highest scan, ascending in time; `None` once `cancel`
+/// is set (checked before each scan of the ion trace).
+pub fn marker_peaks(
+    c: &Chromatogram,
+    mz: f32,
+    density: usize,
+    threshold: i32,
+    cancel: &Cancel,
+) -> Option<Vec<(f64, f64)>> {
+    let sic = c.sic_cancellable(mz, 0.5, cancel)?;
     let trace: Vec<f32> = sic.iter().map(|v| *v as f32).collect();
-    detect_peaks_matched(&trace, density, threshold, 1)
-        .iter()
-        .map(|p| {
-            // Highest raw scan of the peak: the filtered apex can sit a few scans off.
-            let apex = (p.first_scan as usize..=p.last_scan as usize)
-                .max_by(|a, b| sic[*a].total_cmp(&sic[*b]))
-                .unwrap();
-            (c.scan_times_s[apex], sic[apex])
-        })
-        .collect()
+    Some(
+        detect_peaks_matched(&trace, density, threshold, 1)
+            .iter()
+            .map(|p| {
+                // Highest raw scan of the peak: the filtered apex can sit a few scans off.
+                let apex = (p.first_scan as usize..=p.last_scan as usize)
+                    .max_by(|a, b| sic[*a].total_cmp(&sic[*b]))
+                    .unwrap();
+                (c.scan_times_s[apex], sic[apex])
+            })
+            .collect(),
+    )
 }
 
 /// Calibration points for a homologous series (alkanes C10, C11, … → RI 1000, 1100, …): the
@@ -539,8 +549,11 @@ mod tests {
             exact_masses: false,
             baseline: Default::default(),
         };
-        let peaks = marker_peaks(&c, 57.0, 12, 10);
+        let peaks = marker_peaks(&c, 57.0, 12, 10, &Cancel::default()).unwrap();
         assert_eq!(peaks.iter().map(|p| p.0).collect::<Vec<_>>(), [50.0, 150.0]);
+        let cancel = Cancel::default();
+        cancel.cancel();
+        assert!(marker_peaks(&c, 57.0, 12, 10, &cancel).is_none());
     }
 
     #[test]

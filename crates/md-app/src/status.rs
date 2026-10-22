@@ -16,6 +16,10 @@ impl App {
                         "Lade {} Datei(en)…",
                         self.loading.len()
                     ));
+                    // Dropping the jobs cancels them.
+                    if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                        (self.loading, self.load_started) = (Vec::new(), None);
+                    }
                 });
             } else if self.runs.iter().any(|r| r.analysis.busy()) {
                 ui.horizontal(|ui| {

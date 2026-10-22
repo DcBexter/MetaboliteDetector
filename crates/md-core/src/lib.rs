@@ -139,13 +139,27 @@ impl Chromatogram {
 
     /// Selected ion chromatogram: per scan, summed intensity of ions within `mz ± tolerance`.
     pub fn sic(&self, mz: f32, tolerance: f32) -> Vec<f64> {
+        self.sic_cancellable(mz, tolerance, &job::Cancel::default())
+            .expect("a fresh Cancel is never set")
+    }
+
+    /// [`Self::sic`] that checks `cancel` before each scan and returns `None` once it is set.
+    pub fn sic_cancellable(
+        &self,
+        mz: f32,
+        tolerance: f32,
+        cancel: &job::Cancel,
+    ) -> Option<Vec<f64>> {
         (0..self.scan_count())
             .into_par_iter()
             .map(|s| {
+                if cancel.is_cancelled() {
+                    return None;
+                }
                 let (m, i) = self.spectrum(s);
                 let lo = m.partition_point(|x| *x < mz - tolerance);
                 let hi = m.partition_point(|x| *x <= mz + tolerance);
-                i[lo..hi].iter().map(|v| *v as f64).sum()
+                Some(i[lo..hi].iter().map(|v| *v as f64).sum())
             })
             .collect()
     }

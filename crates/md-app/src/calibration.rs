@@ -10,10 +10,12 @@ use std::sync::Arc;
 use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
+use md_core::Chromatogram;
 use md_core::deconv::Component;
+use md_core::job::Cancel;
 use md_core::library::LibraryCompound;
 use md_core::ri::{RiCalibration, marker_peaks, match_mix, series_points};
-use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
+use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_cancellable};
 
 use crate::identify::Library;
 use crate::{Job, Run};
@@ -390,11 +392,7 @@ impl Calibration {
                 let ris: Vec<f64> = (self.first..=self.last).map(|n| 100.0 * n as f64).collect();
                 let source = Msg::from(format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last));
                 let job = Job::spawn(ui.ctx(), move |_, cancel| {
-                    let peaks = marker_peaks(&data, mz, density, threshold);
-                    if cancel.is_cancelled() {
-                        return Err(msg!("Cancelled.", "Abgebrochen."));
-                    }
-                    RiCalibration::new(series_points(&peaks, &ris)).map_err(|e| e.to_string().into())
+                    alkane_calibration(&data, mz, density, threshold, &ris, cancel)
                 });
                 self.job = Some((source, job));
             }
@@ -507,10 +505,8 @@ impl Calibration {
                     self.mix.len()
                 );
                 let job = Job::spawn(ui.ctx(), move |_, cancel| {
-                    match cancel.is_cancelled() {
-                        true => Err(msg!("Cancelled.", "Abgebrochen.")),
-                        false => Ok(find_mix(mix, &comps, &data.scan_times_s, &s)),
-                    }
+                    find_mix(mix, &comps, &data.scan_times_s, &s, cancel)
+                        .ok_or_else(|| msg!("Cancelled.", "Abgebrochen."))
                 });
                 self.mix_job = Some((source, job));
             }
@@ -740,14 +736,30 @@ impl Calibration {
     }
 }
 
+/// The alkane calibration of a run: the marker ion's highest peaks, in time order, get `ris`. A set
+/// `cancel` stops it inside the ion trace.
+fn alkane_calibration(
+    data: &Chromatogram,
+    mz: f32,
+    density: usize,
+    threshold: i32,
+    ris: &[f64],
+    cancel: &Cancel,
+) -> Result<RiCalibration, Msg> {
+    let peaks = marker_peaks(data, mz, density, threshold, cancel)
+        .ok_or_else(|| msg!("Cancelled.", "Abgebrochen."))?;
+    RiCalibration::new(series_points(&peaks, ris)).map_err(|e| e.to_string().into())
+}
+
 /// Mix substances (sorted by RI) found in a run: the library search with spectra only, then the old
-/// assignment in time order (`match_mix`). Not found: unused row.
+/// assignment in time order (`match_mix`). Not found: unused row. `None` once `cancel` is set.
 fn find_mix(
     mut mix: Vec<LibraryCompound>,
     comps: &[Component],
     scan_times_s: &[f64],
     s: &SearchSettings,
-) -> Vec<Row> {
+    cancel: &Cancel,
+) -> Option<Vec<Row>> {
     mix.sort_by(|a, b| a.spectrum.ri.total_cmp(&b.spectrum.ri));
     // The mix is found by its spectra alone, whatever the search settings say about RI.
     let s = &SearchSettings {
@@ -755,7 +767,7 @@ fn find_mix(
         use_spec: true,
         ..s.clone()
     };
-    let id = map_compounds_to_library(comps, None, &PreparedLibrary::new(&mix, s), s);
+    let id = map_compounds_cancellable(comps, None, &PreparedLibrary::new(&mix, s), s, cancel)?;
     let rts: Vec<f64> = (comps.iter())
         .map(|c| scan_times_s[c.apex_scan as usize])
         .collect();
@@ -766,15 +778,17 @@ fn find_mix(
             .map_or(0.0, |h| h.overall)
     };
     let found = match_mix(&ris, &rts, 0.0, score);
-    mix.iter()
-        .zip(found)
-        .map(|(c, k)| Row {
-            name: c.name.clone(),
-            ri: c.spectrum.ri,
-            rt_min: k.map_or(0.0, |k| rts[k] / 60.0),
-            used: k.is_some(),
-        })
-        .collect()
+    Some(
+        mix.iter()
+            .zip(found)
+            .map(|(c, k)| Row {
+                name: c.name.clone(),
+                ri: c.spectrum.ri,
+                rt_min: k.map_or(0.0, |k| rts[k] / 60.0),
+                used: k.is_some(),
+            })
+            .collect(),
+    )
 }
 
 fn anchor(rt_only: bool, c: &LibraryCompound) -> f64 {
@@ -905,6 +919,25 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_searches_give_no_result() {
+        let cancel = Cancel::default();
+        cancel.cancel();
+        let s = SearchSettings::default();
+        let mix = vec![substance("C10", 1000.0, 40.0)];
+        assert!(find_mix(mix, &[component(1, 40)], &[0.0, 60.0], &s, &cancel).is_none());
+        let run = Chromatogram {
+            offsets: vec![0, 1],
+            mz: vec![57.0],
+            intensity: vec![1.0],
+            scan_times_s: vec![0.0],
+            exact_masses: false,
+            baseline: Default::default(),
+        };
+        let cal = alkane_calibration(&run, 57.0, 12, 10, &[1000.0], &cancel);
+        assert_eq!(cal.err().as_deref(), Some("Cancelled."));
+    }
+
+    #[test]
     fn mix_rows_follow_ri_and_leave_missing_substances_unused() {
         // C12 (RI 1200) and C10 (RI 1000) are in the run, C11 (RI 1100) is not; the library is unordered.
         let mix = vec![
@@ -920,7 +953,7 @@ mod tests {
             use_spec: false,
             ..SearchSettings::default()
         };
-        let rows = find_mix(mix, &comps, &times, &odd);
+        let rows = find_mix(mix, &comps, &times, &odd, &Cancel::default()).unwrap();
         let rows: Vec<_> = rows
             .iter()
             .map(|r| (&*r.name, r.ri, r.rt_min, r.used))
