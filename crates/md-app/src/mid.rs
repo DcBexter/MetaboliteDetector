@@ -22,6 +22,7 @@ use md_core::settings::{AnalysisSettings, GcmsSettings};
 
 use crate::Job;
 use crate::identify::Library;
+use crate::settings::Settings;
 
 /// The old method page's choices, in its order.
 #[derive(Clone, Copy, PartialEq)]
@@ -84,10 +85,10 @@ pub struct MidWindow {
     /// Tracer `abundance` was last filled in for.
     abundance_for: String,
     rescan: bool,
-    /// The applied settings (Analysis → Settings), set every frame.
-    pub applied: GcmsSettings,
-    /// `applied.analysis()`, copied with it every frame; the rows read it instead of deriving it.
-    pub analysis: AnalysisSettings,
+    /// The applied settings (Analysis → Settings), copied every frame by `use_settings`.
+    applied: GcmsSettings,
+    /// `applied.analysis()`, copied with `applied`; the rows read it instead of deriving it.
+    analysis: AnalysisSettings,
     table: IsotopeTable,
     job: Option<Running>,
     result: Option<Done>,
@@ -163,6 +164,12 @@ impl MidWindow {
             Kind::Library => Method::Library,
             Kind::Formula => Method::Formula,
         }
+    }
+
+    /// Takes the applied settings and their analysis, every frame.
+    pub fn use_settings(&mut self, settings: &Settings) {
+        self.applied.clone_from(settings.applied());
+        self.analysis.clone_from(settings.analysis());
     }
 
     fn start(

@@ -297,17 +297,16 @@ impl App {
             self.pick_library(ctx, which);
         }
         self.batch
-            .use_settings(&self.settings.applied, self.ri.rt_only);
+            .use_settings(self.settings.applied(), self.ri.rt_only);
         let (cal, reference) = self.ri.for_search(self.library.as_deref());
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
-        self.mid.applied.clone_from(&self.settings.applied);
-        self.mid.analysis.clone_from(&self.settings.analysis);
+        self.mid.use_settings(&self.settings);
         self.mid.window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());
         self.isotopes.window(ctx);
-        self.tof.window(ctx, self.settings.applied.sf_fwhm);
+        self.tof.window(ctx, self.settings.applied().sf_fwhm);
         self.info_window(ctx);
         self.library_editor(ctx);
         self.updater.window(ctx);

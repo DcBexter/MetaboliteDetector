@@ -74,7 +74,7 @@ impl App {
     pub fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
         let p = path.clone();
         let key = self.settings.key();
-        let correct = self.settings.applied.baseline_correction;
+        let correct = self.settings.applied().baseline_correction;
         let job = Job::spawn(ctx, move |_, cancel| load_run(&p, key, correct, cancel));
         self.load_started.get_or_insert_with(Instant::now);
         self.loading.push((path, job));

@@ -125,7 +125,7 @@ impl App {
     }
 
     fn export_all_contents(&mut self, ui: &mut egui::Ui) {
-        let (runs, applied) = (&self.runs, &self.settings.applied);
+        let (runs, applied) = (&self.runs, self.settings.applied());
         let e = &mut self.export_all;
         ui.add_enabled_ui(e.job.is_none(), |ui| {
             for kind in ExportKind::ALL {

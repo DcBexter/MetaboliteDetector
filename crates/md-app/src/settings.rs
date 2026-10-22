@@ -59,11 +59,11 @@ fn scores() -> [(bool, bool, &'static str); 3] {
 }
 
 pub struct Settings {
-    /// In use: new runs open with it and open runs are re-analysed to match it. Changed only through
-    /// `restore`, `set_applied` or the Apply and Load buttons, so `analysis` stays in step.
-    pub applied: GcmsSettings,
+    /// In use: new runs open with it and open runs are re-analysed to match it. Written only by
+    /// `restore`, `set_applied` and `load`, which keep `analysis` in step.
+    applied: GcmsSettings,
     /// `applied.analysis()`, derived once when `applied` is set. The UI reads this instead of deriving per row or frame.
-    pub analysis: AnalysisSettings,
+    analysis: AnalysisSettings,
     /// Being edited in the dialog until "Apply".
     draft: GcmsSettings,
     pub appearance: Appearance,
@@ -120,6 +120,16 @@ impl Settings {
     pub fn restore(&mut self, s: GcmsSettings) {
         self.draft = s.clone();
         self.set_applied(s);
+    }
+
+    /// The applied settings (Analysis → Settings).
+    pub fn applied(&self) -> &GcmsSettings {
+        &self.applied
+    }
+
+    /// `applied.analysis()`, derived once when the settings are applied.
+    pub fn analysis(&self) -> &AnalysisSettings {
+        &self.analysis
     }
 
     /// Takes `s` as the applied settings and derives `analysis` from it.
@@ -1030,5 +1040,24 @@ mod tests {
         s.edit_applied(|g| g.quant_ion_number = 4);
         assert_eq!(s.analysis, s.applied.analysis());
         assert_eq!(s.analysis.quant.ion_number, 4);
+    }
+
+    /// Load puts the file's settings in `applied` and derives `analysis` from them (#415).
+    #[test]
+    fn load_updates_the_stored_analysis() {
+        let mut s = Settings::default();
+        let file = GcmsSettings {
+            ls_cutoff: 0.6,
+            quant_ion_number: 4,
+            ..GcmsSettings::default()
+        };
+        let path = std::env::temp_dir().join(format!("md-load-415-{}.set", std::process::id()));
+        std::fs::write(&path, file.to_bytes()).unwrap();
+        let loaded = s.load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(loaded.is_ok());
+        // The file format rounds some values, so compare with what was loaded.
+        assert_eq!(s.applied().quant_ion_number, 4);
+        assert_eq!(s.analysis(), &s.applied().analysis());
     }
 }
