@@ -295,7 +295,8 @@ fn compare(text: &str, settings: &PeakSettings, known: Known) {
         } else {
             md_core::andi::read(dir.join(&r.name)).unwrap()
         };
-        let mut traces = IonTraces::new(&c, settings.fwhm).unwrap();
+        let mut traces =
+            IonTraces::new(&c, md_core::settings::AnalysisSettings::default().fwhm).unwrap();
         let peaks = traces.detect_all_peaks(settings);
         let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         let mass = |row: u32| traces.mz[row as usize];

@@ -335,7 +335,7 @@ fn library(app: &App) -> identify::Library {
         c.formulas.push((73, 76, "C3H9Si".into()));
         c.mid_sizes.push((73, 76, 4));
     }
-    let settings = app.settings.applied.search();
+    let settings = app.settings.applied.analysis().search;
     identify::Library {
         path: "screenshots.mdlib".into(),
         name: "screenshots.mdlib".into(),

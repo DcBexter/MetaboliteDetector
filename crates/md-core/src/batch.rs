@@ -32,20 +32,18 @@ use regex::Regex;
 
 use crate::Chromatogram;
 use crate::analysis::{AnalyzeError, PeakPass, RunAnalysis, analyze_run};
-use crate::deconv::{Component, DeconvSettings};
+use crate::deconv::Component;
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, Peak, PeakSettings};
+use crate::peaks::{IonTraces, Peak};
 use crate::ri::RiCalibration;
-use crate::search::{
-    PreparedLibrary, SearchSettings, map_compounds_cancellable, shift_to_reference,
-};
+use crate::search::{PreparedLibrary, map_compounds_cancellable, shift_to_reference};
+use crate::settings::AnalysisSettings;
 
 /// Settings of the per-run pass: the single-run defaults, one calibration for every run.
 #[derive(Debug, Clone, Default)]
 pub struct ScanSettings {
-    pub peaks: PeakSettings,
-    pub deconv: DeconvSettings,
-    pub search: SearchSettings,
+    /// The settings of every analysis step, derived once from `GcmsSettings` ([`crate::settings::AnalysisSettings`]).
+    pub analysis: AnalysisSettings,
     /// RT → RI for every run; without it the search compares spectra only.
     pub calibration: Option<RiCalibration>,
     /// Shifts `calibration` per run onto a reference substance (RT shift correction, §6.5).
@@ -223,7 +221,14 @@ fn scan_and_save(
         masses,
         fresh,
         fresh_masses,
-    } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered, cancel)?;
+    } = analyze_run(
+        c,
+        &s.analysis.peaks,
+        s.analysis.fwhm,
+        &s.analysis.deconv,
+        PeakPass::Reordered,
+        cancel,
+    )?;
     let scanned = scan_components(&times, &comps, &peaks, lib, s, cancel, |i| masses[i])
         .ok_or(AnalyzeError::Cancelled)?;
     let failed = cmp.and_then(|path| {
@@ -269,14 +274,22 @@ fn scan_components(
 ) -> Option<Scanned> {
     let calibration = s.calibration.as_ref().map(|cal| {
         let shifted = s.shift.and_then(|r| {
-            shift_to_reference(cal, times, comps, lib, r.compound, r.cutoff, &s.search)
+            shift_to_reference(
+                cal,
+                times,
+                comps,
+                lib,
+                r.compound,
+                r.cutoff,
+                &s.analysis.search,
+            )
         });
         shifted.unwrap_or_else(|| cal.clone())
     });
     let ris = calibration
         .as_ref()
         .map(|cal| cal.component_ris(times, comps));
-    let id = map_compounds_cancellable(comps, ris.as_deref(), lib, &s.search, cancel)?;
+    let id = map_compounds_cancellable(comps, ris.as_deref(), lib, &s.analysis.search, cancel)?;
     let (mut found, mut unknown) = (Vec::new(), Vec::new());
     for (i, (k, hit)) in comps.iter().zip(&id.assigned).enumerate() {
         if hit.is_none() && !s.untargeted {
@@ -444,8 +457,6 @@ pub struct Study<'a> {
     /// `library` prepared for the search (spectra, or RT only).
     pub prepared: &'a PreparedLibrary,
     pub scan: &'a ScanSettings,
-    /// Chooses the quant ions the rescan looks for.
-    pub quant: &'a QuantSettings,
     /// Look for missing quant ions in the ion traces (`rescan_runs`).
     pub rescan: bool,
     /// Runs in memory at once ([`DEFAULT_PARALLEL`]); each run is analysed in parallel anyway.
@@ -492,7 +503,7 @@ pub fn run_study(study: &Study, progress: &Progress, cancel: &Cancel) -> Option<
         extra,
         rescanned,
         errors,
-        quant: study.quant.clone(),
+        quant: study.scan.analysis.quant.clone(),
     })
 }
 
@@ -856,6 +867,7 @@ mod tests {
     use super::*;
     use crate::library::parse_msl;
     use crate::peaks::Detector;
+    use crate::search::SearchSettings;
 
     /// `table` of plain runs with the default quant settings.
     fn tbl(
@@ -886,7 +898,6 @@ mod tests {
             library: &[],
             prepared,
             scan: s,
-            quant: &QuantSettings::default(),
             rescan: false,
             parallel,
         };
@@ -894,23 +905,21 @@ mod tests {
         Some((runs.into_iter().map(|r| r.0).collect(), errors))
     }
 
-    /// `rescan_runs` over runs without peak lists, as a study over `lib` with `s`, `q` and `parallel`.
+    /// `rescan_runs` over runs without peak lists, as a study over `lib` with `s` and `parallel`.
     fn rescan(
         runs: &mut [RunResult],
         lib: &[LibraryCompound],
         extra: &[LibraryCompound],
         s: &ScanSettings,
-        q: &QuantSettings,
         parallel: usize,
         cancel: &Cancel,
     ) -> Option<(usize, Vec<String>)> {
-        let prepared = PreparedLibrary::new(lib, &s.search);
+        let prepared = PreparedLibrary::new(lib, &s.analysis.search);
         let study = Study {
             runs: &[],
             library: lib,
             prepared: &prepared,
             scan: s,
-            quant: q,
             rescan: true,
             parallel,
         };
@@ -1266,9 +1275,13 @@ NUM PEAKS: 12
     fn scan_finds_and_integrates_library_substances() {
         let lib = two_substances_library();
         let s = ScanSettings::default();
-        let found = scan_chromatogram(two_substances(), &PreparedLibrary::new(&lib, &s.search), &s)
-            .unwrap()
-            .found;
+        let found = scan_chromatogram(
+            two_substances(),
+            &PreparedLibrary::new(&lib, &s.analysis.search),
+            &s,
+        )
+        .unwrap()
+        .found;
         assert_eq!(found.len(), 2, "{found:?}");
         let early = found.iter().find(|f| f.compound == 1).unwrap();
         assert!((early.rt_s - 30.0).abs() <= 0.5, "{}", early.rt_s);
@@ -1325,7 +1338,7 @@ NUM PEAKS: 1
             untargeted: true,
             ..Default::default()
         };
-        let none = PreparedLibrary::new(&[], &s.search);
+        let none = PreparedLibrary::new(&[], &s.analysis.search);
         let one = scan_chromatogram(two_substances(), &none, &s).unwrap();
         assert!(one.found.is_empty());
         assert_eq!(one.unknown.len(), 2);
@@ -1368,9 +1381,13 @@ NUM PEAKS: 1
         crate::andi::write(&b, &two_substances()).unwrap();
         let lib = two_substances_library();
         let s = ScanSettings::default();
-        let found = scan_chromatogram(two_substances(), &PreparedLibrary::new(&lib, &s.search), &s)
-            .unwrap()
-            .found;
+        let found = scan_chromatogram(
+            two_substances(),
+            &PreparedLibrary::new(&lib, &s.analysis.search),
+            &s,
+        )
+        .unwrap()
+        .found;
         let run = |path, found| RunResult {
             path,
             found,
@@ -1382,9 +1399,9 @@ NUM PEAKS: 1
     #[test]
     fn rescan_fills_the_ions_a_run_lacks() {
         let (dir, mut runs, lib) = rescan_fixture("fill");
-        let (s, q) = (ScanSettings::default(), QuantSettings::default());
+        let s = ScanSettings::default();
         let cancel = Cancel::default();
-        let (added, errors) = rescan(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
+        let (added, errors) = rescan(&mut runs, &lib, &[], &s, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
         let t = tbl(&runs, &lib, &[], &TableSettings::default()).unwrap();
@@ -1402,23 +1419,23 @@ NUM PEAKS: 1
         };
         assert!(tbl(&runs, &lib, &[], &all).unwrap().rows.is_empty());
         cancel.cancel();
-        assert!(rescan(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
+        assert!(rescan(&mut runs, &lib, &[], &s, 1, &cancel).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn rescan_needs_a_quarter_of_the_runs_and_does_not_count_for_reproducibility() {
         let (dir, runs, lib) = rescan_fixture("limit");
-        let (s, q) = (ScanSettings::default(), QuantSettings::default());
+        let s = ScanSettings::default();
         let cancel = Cancel::default();
         // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
         let mut again = vec![runs[0].clone()];
         again.extend((0..5).map(|_| runs[1].clone()));
-        let (added, _) = rescan(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan(&mut again, &lib, &[], &s, 1, &cancel).unwrap();
         assert_eq!(added, 0);
         // At the limit (2 of 6) it is rescanned.
         again[1] = runs[0].clone();
-        let (added, _) = rescan(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan(&mut again, &lib, &[], &s, 1, &cancel).unwrap();
         assert!(added > 0);
         // Ions added to an identified component do not count for reproducibility either.
         let mut partial = vec![runs[0].clone(), runs[0].clone()];
@@ -1434,7 +1451,7 @@ NUM PEAKS: 1
         };
         let rows = |runs: &[RunResult], s: &TableSettings| tbl(runs, &lib, &[], s).unwrap().rows;
         assert!(rows(&partial, &all).is_empty());
-        rescan(&mut partial, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        rescan(&mut partial, &lib, &[], &s, 1, &cancel).unwrap();
         assert!(partial[1].found.iter().all(|f| !f.ions.is_empty()));
         assert!(rows(&partial, &all).is_empty());
         assert!(!rows(&partial, &TableSettings::default()).is_empty());
@@ -1451,14 +1468,15 @@ NUM PEAKS: 1
             Cancel::default(),
             Progress::default(),
         );
-        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
         let direct = scan_chromatogram(run.clone(), &prepared, &s).unwrap();
         assert_eq!(direct.found.len(), 2);
 
         let a = analyze_run(
             &run,
-            &s.peaks,
-            &s.deconv,
+            &s.analysis.peaks,
+            s.analysis.fwhm,
+            &s.analysis.deconv,
             PeakPass::Fresh,
             &Cancel::default(),
         )
@@ -1495,16 +1513,7 @@ NUM PEAKS: 1
         // The rescan has no raw data to look into and leaves a `.cmp` run alone.
         let mut runs = runs;
         runs[0].found.clear();
-        let (added, errors) = rescan(
-            &mut runs,
-            &lib,
-            &[],
-            &s,
-            &QuantSettings::default(),
-            1,
-            &cancel,
-        )
-        .unwrap();
+        let (added, errors) = rescan(&mut runs, &lib, &[], &s, 1, &cancel).unwrap();
         assert_eq!((added, errors.len()), (0, 0));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1554,7 +1563,7 @@ NUM PEAKS: 1
             save_cmp: Some(CmpTarget::BesideRun),
             ..Default::default()
         };
-        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
         let (done, cancel) = (Progress::default(), Cancel::default());
         let (raw, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
@@ -1564,8 +1573,9 @@ NUM PEAKS: 1
         // The saved components are those of the deconvolution, with the RI of the search.
         let comps = (analyze_run(
             &run,
-            &s.peaks,
-            &s.deconv,
+            &s.analysis.peaks,
+            s.analysis.fwhm,
+            &s.analysis.deconv,
             PeakPass::Reordered,
             &Cancel::default(),
         )
@@ -1632,7 +1642,7 @@ NUM PEAKS: 1
             save_cmp: Some(CmpTarget::BesideRun),
             ..Default::default()
         };
-        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
         let (done, cancel) = (Progress::default(), Cancel::default());
         // The run's .cmp is also an input: it is left as it is.
         let runs = [a.join("x.cdf"), a.join("x.cmp")];
@@ -1729,25 +1739,21 @@ NUM PEAKS: 1
         crate::andi::write(&b, &two_substances()).unwrap();
         let paths = [a, dir.join("missing.cdf"), b];
         let lib = two_substances_library();
-        let s = ScanSettings::default();
-        let prepared = PreparedLibrary::new(&lib, &s.search);
-        let quant = QuantSettings {
-            ion_number: 2,
-            ..Default::default()
-        };
+        let mut s = ScanSettings::default();
+        s.analysis.quant.ion_number = 2;
+        let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
         let study = Study {
             runs: &paths,
             library: &lib,
             prepared: &prepared,
             scan: &s,
-            quant: &quant,
             rescan: false,
             parallel: 2,
         };
         let r = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
         assert_eq!(r.runs.iter().map(|r| r.input).collect::<Vec<_>>(), [0, 2]);
         assert_eq!(r.errors.len(), 1);
-        assert_eq!(r.quant, quant);
+        assert_eq!(r.quant, s.analysis.quant);
         assert!(table(&r, &lib, &TableSettings::default()).is_ok());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1764,18 +1770,14 @@ NUM PEAKS: 1
             untargeted: true,
             ..Default::default()
         };
-        s.peaks.detector = detector;
-        let (prepared, q) = (
-            PreparedLibrary::new(lib, &s.search),
-            QuantSettings::default(),
-        );
+        s.analysis.peaks.detector = detector;
+        let prepared = PreparedLibrary::new(lib, &s.analysis.search);
         let (done, cancel) = (Progress::default(), Cancel::default());
         let study = Study {
             runs: paths,
             library: lib,
             prepared: &prepared,
             scan: &s,
-            quant: &q,
             rescan: true,
             parallel,
         };
@@ -1783,7 +1785,7 @@ NUM PEAKS: 1
         assert_eq!((done.done(), r.runs.len()), (paths.len(), paths.len()));
         let (mut runs, errors) = scan_runs(paths, &prepared, &s, parallel, &done, &cancel).unwrap();
         let extra = add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap();
-        let (added, more) = rescan(&mut runs, lib, &extra, &s, &q, parallel, &cancel).unwrap();
+        let (added, more) = rescan(&mut runs, lib, &extra, &s, parallel, &cancel).unwrap();
         assert!(errors.is_empty() && more.is_empty() && r.errors.is_empty());
         assert_eq!((r.rescanned, &r.extra, &r.runs), (added, &extra, &runs));
         let ts = TableSettings::default();

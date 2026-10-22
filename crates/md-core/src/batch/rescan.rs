@@ -67,11 +67,13 @@ pub fn rescan_runs(
     lists: &[Option<PeakList>],
     cancel: &Cancel,
 ) -> Option<(usize, Vec<String>)> {
-    let (lib, s, q, parallel) = (study.library, study.scan, study.quant, study.parallel);
+    let (lib, s, parallel) = (study.library, study.scan, study.parallel);
+    let q = &s.analysis.quant;
     // A `.cmp` input has no raw data to look into.
-    let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, s.search.ri_diff).into_iter())
-        .filter(|(i, _)| !crate::cmp::is_cmp(&runs[*i].path))
-        .collect();
+    let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, s.analysis.search.ri_diff)
+        .into_iter())
+    .filter(|(i, _)| !crate::cmp::is_cmp(&runs[*i].path))
+    .collect();
     let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
     let next = AtomicUsize::new(0);
     let mut done: Vec<(usize, Result<Vec<Rescued>, String>)> = std::thread::scope(|scope| {
@@ -242,14 +244,20 @@ fn rescan_run(
     let (traces, times, peaks) = match list {
         // The default detector leaves the traces as they are, so pass 1's peaks are what it would
         // find again; the matched filter rewrites the traces it detects on.
-        Some(l) if !matches!(s.peaks.detector, Detector::Matched { .. }) => {
+        Some(l) if !matches!(s.analysis.peaks.detector, Detector::Matched { .. }) => {
             // The run itself, which `find_run_peaks` drops too, is not needed any more.
-            let traces = IonTraces::new(&c, s.peaks.fwhm)?;
+            let traces = IonTraces::new(&c, s.analysis.fwhm)?;
             drop(c);
             (traces, l.times.clone(), l.peaks.clone())
         }
         _ => {
-            let r = find_run_peaks(c, &s.peaks, PeakPass::Fresh, cancel)?;
+            let r = find_run_peaks(
+                c,
+                &s.analysis.peaks,
+                s.analysis.fwhm,
+                PeakPass::Fresh,
+                cancel,
+            )?;
             (r.traces, r.times, r.peaks)
         }
     };
@@ -264,8 +272,8 @@ fn rescan_run(
     // At least one peak per component and twice the width, as in the old rescan (§4.0).
     let local = DeconvSettings {
         min_peak_number: 1,
-        width: Some(s.deconv.width_scans(&times) * 2.0),
-        ..s.deconv.clone()
+        width: Some(s.analysis.deconv.width_scans(&times) * 2.0),
+        ..s.analysis.deconv.clone()
     };
     let mut out = Vec::new();
     for t in todo {
@@ -373,7 +381,14 @@ mod tests {
             calibration: None,
         };
         let (s, cancel) = (ScanSettings::default(), Cancel::default());
-        let r = find_run_peaks(&c, &s.peaks, PeakPass::Fresh, &cancel).unwrap();
+        let r = find_run_peaks(
+            &c,
+            &s.analysis.peaks,
+            s.analysis.fwhm,
+            PeakPass::Fresh,
+            &cancel,
+        )
+        .unwrap();
         let list = PeakList {
             masses: (r.peaks.iter())
                 .map(|p| r.traces.masses[p.row as usize])
@@ -508,14 +523,14 @@ mod tests {
         let c = run(80, &[73.0], &[(0, 40.0, 50000.0)]);
         // A filter wider than the run finds no component, so no peak has a fit.
         let mut s = ScanSettings::default();
-        s.deconv.width = Some(25.0);
-        let mut traces = IonTraces::new(&c, s.peaks.fwhm).unwrap();
-        let peaks = traces.detect_peaks(&s.peaks);
+        s.analysis.deconv.width = Some(25.0);
+        let mut traces = IonTraces::new(&c, s.analysis.fwhm).unwrap();
+        let peaks = traces.detect_peaks(&s.analysis.peaks);
         assert_eq!(peaks.len(), 1);
         let local = DeconvSettings {
             min_peak_number: 1,
             width: Some(50.0),
-            ..s.deconv.clone()
+            ..s.analysis.deconv.clone()
         };
         assert!(deconvolute(&traces, &peaks, &c.scan_times_s, &local).is_empty());
         let p = &peaks[0];

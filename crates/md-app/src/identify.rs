@@ -195,7 +195,7 @@ impl App {
     }
 
     pub fn open_library(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let s = self.settings.applied.search();
+        let s = self.settings.applied.analysis().search;
         self.library_job = Some(Job::spawn(ctx, move |_, c| {
             load(&path, s, false, c).map(Arc::new)
         }));
@@ -215,7 +215,7 @@ impl App {
     }
 
     pub fn open_nist(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let s = self.settings.applied.search();
+        let s = self.settings.applied.analysis().search;
         self.nist.hits = None;
         self.nist.search = None;
         self.nist.job = Some(Job::spawn(ctx, move |_, c| {
@@ -225,7 +225,7 @@ impl App {
 
     /// Takes a loaded NIST library and prepares it again when the search settings change.
     pub fn update_nist(&mut self, ctx: &egui::Context) {
-        let wanted = self.settings.applied.search();
+        let wanted = self.settings.applied.analysis().search;
         if let Some(job) = &self.nist.job
             && let Some(result) = job.poll(|| t("NIST library", "NIST-Bibliothek").into())
         {
@@ -294,7 +294,7 @@ impl App {
     /// The settings the library is prepared with. The fragment values steer only the NIST
     /// pre-filter, so changing them does not search a library without it again.
     fn wanted_search(&self) -> SearchSettings {
-        let mut s = self.settings.applied.search();
+        let mut s = self.settings.applied.analysis().search;
         if let Some(lib) = &self.library
             && !md_core::library::is_nist(&lib.path)
         {
@@ -540,7 +540,7 @@ mod tests {
     fn a_cancelled_library_load_stops_before_preparing() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
-        let s = App::default().settings.applied.search();
+        let s = App::default().settings.applied.analysis().search;
         let cancel = Cancel::default();
         cancel.cancel();
         assert_eq!(
@@ -557,7 +557,7 @@ mod tests {
         let mut app = App::default();
         let nist = load(
             &path,
-            app.settings.applied.search(),
+            app.settings.applied.analysis().search,
             true,
             &Cancel::default(),
         )
@@ -634,7 +634,7 @@ mod tests {
         app.settings.applied.sql_minimal_number_equal_fragments = 0;
         let lib = load(
             &path,
-            app.settings.applied.search(),
+            app.settings.applied.analysis().search,
             false,
             &Cancel::default(),
         )

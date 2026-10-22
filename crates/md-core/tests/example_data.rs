@@ -463,7 +463,7 @@ fn targetsearch_library_finds_its_targets() {
         ("3.3 defaults (width 1 scan)", DeconvSettings::default()),
         (
             "defaults (automatic width, #279)",
-            md_core::settings::GcmsSettings::default().deconv(),
+            md_core::settings::GcmsSettings::default().analysis().deconv,
         ),
         (
             "width 10, 5 ions",
@@ -567,7 +567,7 @@ fn result_table_of_a_real_run() {
 /// are taken out. Runs the whole pipeline: MID library, batch scan with rescan, `determine`.
 #[test]
 fn unlabelled_runs_give_m0_by_sum_formula() {
-    use md_core::batch::{QuantSettings, ScanSettings, Study, run_study};
+    use md_core::batch::{ScanSettings, Study, run_study};
     use md_core::isotope::IsotopeTable;
     use md_core::job::{Cancel, Progress};
     use md_core::mid::{Method, determine, mid_library};
@@ -587,13 +587,13 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
     assert_eq!(lib.len(), 1);
     let mut s = ScanSettings::default();
     // Without RI calibration the spectra alone decide; the weaker matches still are Glycine.
-    s.search.cutoff = 0.6;
+    s.analysis.search.cutoff = 0.6;
     // #327: since #133 the rescan window of an uncalibrated run is ΔRI seconds wide, as in the old
     // program. The default 20 s (303..323 s) also takes in the large m/z 177 peak of another substance
     // at about 321 s, so the M+3 of Glycine came out as 0.81. 3.3 takes that peak too (#336,
     // batch-quantification.md). 6 s is the window this test used before #133.
-    s.search.ri_diff = 6.0;
-    let prepared = PreparedLibrary::new(&lib, &s.search);
+    s.analysis.search.ri_diff = 6.0;
+    let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
     let no = Cancel::default();
     // Few runs find the substance without RI calibration; rescan the fragment ions in the others.
     let study = Study {
@@ -601,7 +601,6 @@ fn unlabelled_runs_give_m0_by_sum_formula() {
         library: &lib,
         prepared: &prepared,
         scan: &s,
-        quant: &QuantSettings::default(),
         rescan: true,
         parallel: 4,
     };
