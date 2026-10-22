@@ -131,13 +131,14 @@ pub fn deconvolute(
             members[fill[b]] = k;
             fill[b] += 1;
             let p = &peaks[k];
-            sum[b] += traces.trace(p.row as usize)[p.apex_scan as usize] as f64;
+            sum[b] += traces.value(p.row as usize, p.apex_scan as usize) as f64;
         }
     }
     let f = matched_filter(&sum, (nb as f64 * s.width_scans(scan_times_s)) as usize);
     regions(&f, &start, &members)
         .into_par_iter()
-        .filter_map(|t| fit_component(traces, peaks, t, s))
+        .map_init(Vec::new, |buf, t| fit_component(traces, peaks, t, s, buf))
+        .flatten()
         .collect()
 }
 
@@ -196,6 +197,7 @@ fn fit_component(
     peaks: &[Peak],
     mut t: Vec<usize>,
     s: &DeconvSettings,
+    buf: &mut Vec<f32>,
 ) -> Option<Component> {
     if t.is_empty() || t.len() < s.min_peak_number {
         return None;
@@ -230,9 +232,10 @@ fn fit_component(
     let mut model = vec![0.0f64; (last - first + 1) as usize];
     for k in &m {
         let p = &peaks[*k];
-        let trace = traces.trace(p.row as usize);
-        for sc in p.first_scan..=p.last_scan {
-            model[(sc - first) as usize] += trace[sc as usize] as f64;
+        let (lo, hi) = (p.first_scan as usize, p.last_scan as usize + 1);
+        let trace = traces.trace(p.row as usize, lo..hi, buf);
+        for (x, v) in model[lo - first as usize..].iter_mut().zip(trace) {
+            *x += *v as f64;
         }
     }
     let apex = (0..model.len()).fold(0, |a, k| if model[k] > model[a] { k } else { a });
@@ -246,8 +249,8 @@ fn fit_component(
         if hi < lo + 2 {
             continue;
         }
-        let trace = traces.trace(p.row as usize);
-        let y = |sc: u32| trace[sc as usize] as f64;
+        let trace = traces.trace(p.row as usize, lo as usize..hi as usize + 1, buf);
+        let y = |sc: u32| trace[(sc - lo) as usize] as f64;
         let Some(c2) = model_share(lo..=hi, at, y) else {
             continue;
         };

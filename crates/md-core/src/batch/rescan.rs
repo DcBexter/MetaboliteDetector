@@ -228,7 +228,7 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
         // (batch-quantification.md).
         let pos = |k: usize| t.calibration.as_ref().map_or(at(k), |c| c.ri(at(k)));
         let dist = |k: usize| (pos(k) - t.expected).abs();
-        let height = |k: usize| traces.trace(peaks[k].row as usize)[peaks[k].apex_scan as usize];
+        let height = |k: usize| traces.value(peaks[k].row as usize, peaks[k].apex_scan as usize);
         let (mut ions, mut rts) = (Vec::new(), Vec::new());
         for m in &t.ions {
             // Every trace of that nominal mass (several on exact-mass runs): the old code keeps the
@@ -264,9 +264,8 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
                     // No fit at all: the old code still reports "additional peak areas", the raw sum
                     // of the nearest peak.
                     let p = &local_peaks[order[0]];
-                    let raw = traces.trace(p.row as usize)
-                        [p.first_scan as usize..=p.last_scan as usize]
-                        .iter()
+                    let range = p.first_scan as usize..p.last_scan as usize + 1;
+                    let raw = (traces.trace(p.row as usize, range, &mut Vec::new()).iter())
                         .map(|v| *v as f64)
                         .sum();
                     (order[0], raw)
@@ -418,7 +417,7 @@ mod tests {
         };
         assert!(deconvolute(&traces, &peaks, &c.scan_times_s, &local).is_empty());
         let p = &peaks[0];
-        let raw: f64 = traces.trace(0)[p.first_scan as usize..=p.last_scan as usize]
+        let raw: f64 = traces.row(0)[p.first_scan as usize..=p.last_scan as usize]
             .iter()
             .map(|v| *v as f64)
             .sum();
