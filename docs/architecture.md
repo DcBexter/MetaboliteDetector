@@ -468,7 +468,7 @@ Reusing the pass-1 peaks (#363) takes the rescan of the 15 runs with 4 in parall
 loaded machine, 2026-10-22.
 `examples/batch.rs` on all 15 runs, 4 in parallel, median of 5, same session as the table above (#360): 5 substances
 117 ms before M8 (`f16f0a7`, scan) and 108 ms after (`2fb4769`, `run_study`); untargeted with rescan
-169 ms scan + 238 ms rescan before and 313 ms after.
+375 ms before (scan + pooling + rescan, summed per run, then median) and 313 ms after (`run_study` does all three).
 
 ### Command line (`md-cli`)
 
