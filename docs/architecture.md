@@ -186,7 +186,7 @@ only small windows. `PeakPass` names the one difference: `Reordered` is the main
 (`detect_all_peaks`, old `detectAllPeaks(reorder=true)`), `Fresh` is the rescan (`detect_peaks` only,
 like the old `ResultSeries::scanIons`, algorithms.md §4.0). Both passes also return the `Fresh` peak list
 (`RunPeaks::fresh`, `RunAnalysis::fresh`), which the batch keeps for its rescan. `cancel` is looked at
-between the stages (index, peaks, deconvolution; the batch adds one before the library search), so a
+between the stages (index, peaks, deconvolution; the batch library search then checks before each component), so a
 cancelled run stops at the end of its current stage. The batch passes its run by value so the
 spectra are dropped once the index is built; the app lends its run and keeps it for the plots.
 
@@ -330,7 +330,7 @@ entry: the pure score is a cosine over all peaks of both spectra, the impure sco
 (peaks without a partner are weighted with `LS_SCALE_FACTOR_NO_MATCH`), the spectrum score is
 `0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
 Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
-components in parallel and then assigns library compounds greedily by best overall score, each library compound
+components in parallel (`map_compounds_cancellable` checks `Cancel` before each component and returns `None` once set; the batch scan uses it) and then assigns library compounds greedily by best overall score, each library compound
 and each component at most once. The assignment does not build or sort the list of all (component, hit) pairs:
 each component's hits are already best first, so a heap over the components' current best pairs takes them in
 the same order (ties: lower library index, then lower component index) and gives the same result bit for bit
