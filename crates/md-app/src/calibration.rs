@@ -121,8 +121,8 @@ impl Calibration {
     }
 
     /// The calibration whose RI the run shows, the one rule in `md_core::ri::applicable`: that of its
-    /// identification (shifted, else the one it was searched with), else `base`. None in RT-only mode,
-    /// where "RI" is a time.
+    /// identification (shifted, else the one it was searched with), else `base`. In RT-only mode only an
+    /// identification's calibration applies; there it maps RT to the shifted time.
     pub fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
         let ident = (run.ident.as_ref())
             .map(|((_, used, _), _, shifted)| (used.as_deref(), shifted.as_ref()));

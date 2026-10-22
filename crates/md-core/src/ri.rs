@@ -258,17 +258,17 @@ pub fn saved_calibration(run: &Path) -> Result<Option<RiCalibration>, CalibError
 
 /// The calibration whose RI a run shows: that of its identification (shifted, else the one it was
 /// searched with), else `base`. `ident` is `(used, shifted)` of the stored identification. A new
-/// identification running does not change this: the stored one still applies. RT-only: no calibration.
+/// identification running does not change this: the stored one still applies. RT-only: without an
+/// identification nothing (the base would only repeat the RT); an identification's calibration applies,
+/// and there it maps RT to the shifted time.
 pub fn applicable<'a>(
     ident: Option<(Option<&'a RiCalibration>, Option<&'a RiCalibration>)>,
     base: Option<&'a RiCalibration>,
     rt_only: bool,
 ) -> Option<&'a RiCalibration> {
-    if rt_only {
-        return None;
-    }
     match ident {
         Some((used, shifted)) => shifted.or(used),
+        None if rt_only => None,
         None => base,
     }
 }
@@ -625,9 +625,10 @@ mod tests {
             // Shifted: the shifted one wins.
             (Some((u, s)), b, false, s),
             (Some((None, s)), b, false, s),
-            // RT-only wins over everything.
-            (Some((u, s)), b, true, None),
-            (Some((u, None)), b, true, None),
+            // RT-only: the identification's calibration maps RT to the shifted time; without one, nothing.
+            (Some((u, s)), b, true, s),
+            (Some((u, None)), b, true, u),
+            (Some((None, None)), b, true, None),
         ];
         for (ident, base, rt_only, want) in cases {
             assert_eq!(
