@@ -70,7 +70,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/plot_export.rs    save a plot as PNG, SVG or PDF, or copy it; src/vector.rs writes the SVG/PDF from the frame's shapes
   src/tof_calibration.rs TOF calibration window (FastFlight m/z, saves .mzcalib)
   src/loading.rs        opening files, load polling, SIC jobs
-  src/jobs.rs           `Job<T>`: a worker thread with `Progress`, `Cancel` and panic report; dropping it cancels
+  src/jobs.rs           `Job<T>`: a worker thread with `Progress`, `Cancel` and panic report; dropping it cancels. `Slot<T>` holds one job of a window (start, poll with repaint, cancel); new windows take a `Slot`
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
