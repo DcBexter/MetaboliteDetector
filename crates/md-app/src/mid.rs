@@ -3,8 +3,7 @@
 //! (`md_core::mid`).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::errors;
@@ -20,8 +19,8 @@ use md_core::ri::RiCalibration;
 use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
 
+use crate::Job;
 use crate::identify::Library;
-use crate::spawn;
 
 /// The old method page's choices, in its order.
 #[derive(Clone, Copy, PartialEq)]
@@ -134,12 +133,9 @@ impl Done {
     }
 }
 
-struct Job {
-    total: usize,
-    done: Arc<AtomicUsize>,
-    cancel: Arc<AtomicBool>,
+struct Running {
     started: Instant,
-    rx: mpsc::Receiver<Result<Done, Msg>>,
+    job: Job<Result<Done, Msg>>,
 }
 
 pub struct MidWindow {
@@ -157,7 +153,7 @@ pub struct MidWindow {
     /// The applied settings (Analysis → Settings), set every frame.
     pub applied: GcmsSettings,
     table: IsotopeTable,
-    job: Option<Job>,
+    job: Option<Running>,
     result: Option<Done>,
     note: Msg,
 }
@@ -206,15 +202,15 @@ impl MidWindow {
 
     fn poll(&mut self, ctx: &egui::Context) {
         let Some(job) = &self.job else { return };
-        match job.rx.try_recv() {
-            Ok(Ok(done)) => (self.result, self.note) = (Some(done), Msg::default()),
-            Ok(Err(e)) => self.note = e,
-            Err(mpsc::TryRecvError::Empty) => {
+        match job
+            .job
+            .poll(|| t("MID determination", "Die MID-Bestimmung").into())
+        {
+            Some(Ok(Ok(done))) => (self.result, self.note) = (Some(done), Msg::default()),
+            Some(Ok(Err(e)) | Err(e)) => self.note = e,
+            None => {
                 ctx.request_repaint_after(Duration::from_millis(200));
                 return;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.note = msg!("MID determination crashed.", "MID-Bestimmung abgestürzt.")
             }
         }
         self.job = None;
@@ -267,18 +263,12 @@ impl MidWindow {
         };
         let (nl, nu) = (self.labelled.len(), unlabelled.len());
         let rescan = self.rescan;
-        let (done, cancel) = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicBool::new(false)),
-        );
-        let (l, d, c, tracer, table) = (
+        let (l, tracer, table) = (
             lib.clone(),
-            done.clone(),
-            cancel.clone(),
             self.tracer.trim().to_owned(),
             self.table.clone(),
         );
-        let rx = spawn(ctx, move || {
+        let job = Job::spawn(ctx, move |progress, cancel| {
             let started = Instant::now();
             let mids_lib = mid_library(&l.compounds);
             if mids_lib.is_empty() {
@@ -297,7 +287,7 @@ impl MidWindow {
             };
             let cancelled = || msg!("Cancelled.", "Abgebrochen.");
             let (mut runs, mut errors) =
-                scan_runs(&paths, &prepared, &s, 4, &d, &c).ok_or_else(cancelled)?;
+                scan_runs(&paths, &prepared, &s, 4, progress, cancel).ok_or_else(cancelled)?;
             // The quant ions are the fragment ions, so the rescan fills those that were not deconvoluted.
             let more = complete_scan(
                 &mut runs,
@@ -306,7 +296,7 @@ impl MidWindow {
                 &QuantSettings::default(),
                 rescan,
                 4,
-                &c,
+                cancel,
             )
             .ok_or_else(cancelled)?;
             errors.extend(more.errors);
@@ -357,12 +347,10 @@ impl MidWindow {
             done.refresh();
             Ok(done)
         });
-        self.job = Some(Job {
-            total: nl + nu,
-            done,
-            cancel,
+        job.progress.set_total(nl + nu);
+        self.job = Some(Running {
             started: Instant::now(),
-            rx,
+            job,
         });
     }
 
@@ -391,19 +379,19 @@ impl MidWindow {
     ) {
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
-                let d = job.done.load(Relaxed);
+                let (d, total) = (job.job.progress.done(), job.job.progress.total());
                 ui.add(
-                    egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
+                    egui::ProgressBar::new(d as f32 / total.max(1) as f32)
                         .text(tf!(
                             "{d} / {} runs, {:.0?}",
                             "{d} / {} Läufe, {:.0?}",
-                            job.total,
+                            total,
                             job.started.elapsed()
                         ))
                         .desired_width(300.0),
                 );
                 if ui.button(t("Cancel", "Abbrechen")).clicked() {
-                    job.cancel.store(true, Relaxed);
+                    job.job.cancel.cancel();
                 }
             }
             None => {

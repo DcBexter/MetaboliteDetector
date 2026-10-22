@@ -22,15 +22,17 @@ pub use untargeted::add_unknowns;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+use crate::job::{Cancel, Progress};
 
 use regex::Regex;
 
 use crate::Chromatogram;
-use crate::analysis::{PeakPass, RunAnalysis, analyze_run};
+use crate::analysis::{AnalyzeError, PeakPass, RunAnalysis, analyze_run};
 use crate::deconv::{Component, DeconvSettings};
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, Peak, PeakSettings, TooLarge};
+use crate::peaks::{IonTraces, Peak, PeakSettings};
 use crate::ri::RiCalibration;
 use crate::search::{
     PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
@@ -194,8 +196,8 @@ pub fn scan_chromatogram(
     c: Chromatogram,
     lib: &PreparedLibrary,
     s: &ScanSettings,
-) -> Result<Scanned, TooLarge> {
-    scan_and_save(c, lib, s, None).map(|r| r.0)
+) -> Result<Scanned, AnalyzeError> {
+    scan_and_save(c, lib, s, None, &Cancel::default()).map(|r| r.0)
 }
 
 /// [`scan_chromatogram`] that also writes the components to `cmp`, with the RI of the search (as
@@ -205,7 +207,8 @@ fn scan_and_save(
     lib: &PreparedLibrary,
     s: &ScanSettings,
     cmp: Option<&Path>,
-) -> Result<(Scanned, Option<String>), TooLarge> {
+    cancel: &Cancel,
+) -> Result<(Scanned, Option<String>), AnalyzeError> {
     // The run goes in by value: its spectra are dropped once the ion index is built, which halves the
     // peak memory per run.
     let RunAnalysis {
@@ -213,7 +216,7 @@ fn scan_and_save(
         peaks,
         components: comps,
         masses,
-    } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered)?;
+    } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered, cancel)?;
     let scanned = scan_components(&times, &comps, &peaks, lib, s, |i| masses[i]);
     let failed = cmp.and_then(|path| {
         let ris = (scanned.calibration.as_ref()).map_or_else(
@@ -309,9 +312,10 @@ pub fn scan_runs(
     lib: &PreparedLibrary,
     s: &ScanSettings,
     parallel: usize,
-    done: &AtomicUsize,
-    cancel: &AtomicBool,
+    done: &Progress,
+    cancel: &Cancel,
 ) -> Option<(Vec<RunResult>, Vec<String>)> {
+    done.set_total(paths.len());
     let next = AtomicUsize::new(0);
     let targets: Vec<Option<PathBuf>> = (paths.iter())
         .map(|p| {
@@ -362,7 +366,7 @@ pub fn scan_runs(
                 .map(|_| {
                     scope.spawn(|| {
                         let mut mine = Vec::new();
-                        while !cancel.load(Relaxed) {
+                        while !cancel.is_cancelled() {
                             let i = next.fetch_add(1, Relaxed);
                             let Some(path) = paths.get(i) else { break };
                             let mut failed = clashes[i].clone();
@@ -372,7 +376,7 @@ pub fn scan_runs(
                                 match crate::cmp::is_cmp(path) {
                                     true => scan_saved(path, lib, s),
                                     false => read_scan_run(path, s).and_then(|c| {
-                                        let (r, e) = scan_and_save(c, lib, s, target)
+                                        let (r, e) = scan_and_save(c, lib, s, target, cancel)
                                             .map_err(|e| e.to_string())?;
                                         failed = failed.take().or(e);
                                         Ok(r)
@@ -389,7 +393,7 @@ pub fn scan_runs(
                             .map_err(|e| format!("{}: {e}", path.display()));
                             let failed = failed.map(|e| format!("{}: {e}", path.display()));
                             mine.push((i, r, failed));
-                            done.fetch_add(1, Relaxed);
+                            done.step();
                         }
                         mine
                     })
@@ -400,7 +404,7 @@ pub fn scan_runs(
                 .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
                 .collect()
         });
-    if cancel.load(Relaxed) {
+    if cancel.is_cancelled() {
         return None;
     }
     out.sort_by_key(|r| r.0);
@@ -437,7 +441,7 @@ pub fn complete_scan(
     q: &QuantSettings,
     rescan: bool,
     parallel: usize,
-    cancel: &AtomicBool,
+    cancel: &Cancel,
 ) -> Option<Completed> {
     let extra = if s.untargeted {
         add_unknowns(runs, lib.len(), s, cancel)?
@@ -1238,9 +1242,16 @@ NUM PEAKS: 1
             })
             .collect();
         // A cancelled pooling leaves the components of the runs it did not reach.
-        assert!(add_unknowns(&mut runs.clone(), 0, &s, &AtomicBool::new(true)).is_none());
+        assert!(
+            add_unknowns(&mut runs.clone(), 0, &s, &{
+                let c = Cancel::default();
+                c.cancel();
+                c
+            })
+            .is_none()
+        );
         // Two groups, each with one component of each run.
-        let extra = add_unknowns(&mut runs, 0, &s, &AtomicBool::new(false)).unwrap();
+        let extra = add_unknowns(&mut runs, 0, &s, &Cancel::default()).unwrap();
         assert_eq!(extra.len(), 2);
         assert!(
             runs.iter()
@@ -1277,7 +1288,7 @@ NUM PEAKS: 1
     fn rescan_fills_the_ions_a_run_lacks() {
         let (dir, mut runs, lib) = rescan_fixture("fill");
         let (s, q) = (ScanSettings::default(), QuantSettings::default());
-        let cancel = AtomicBool::new(false);
+        let cancel = Cancel::default();
         let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
@@ -1295,7 +1306,7 @@ NUM PEAKS: 1
             ..Default::default()
         };
         assert!(table(&runs, &lib, &[], &all).unwrap().rows.is_empty());
-        cancel.store(true, Relaxed);
+        cancel.cancel();
         assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1304,7 +1315,7 @@ NUM PEAKS: 1
     fn rescan_needs_a_quarter_of_the_runs_and_does_not_count_for_reproducibility() {
         let (dir, runs, lib) = rescan_fixture("limit");
         let (s, q) = (ScanSettings::default(), QuantSettings::default());
-        let cancel = AtomicBool::new(false);
+        let cancel = Cancel::default();
         // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
         let mut again = vec![runs[0].clone()];
         again.extend((0..5).map(|_| runs[1].clone()));
@@ -1342,14 +1353,21 @@ NUM PEAKS: 1
         let (run, lib) = (two_substances(), two_substances_library());
         let (s, cancel, done) = (
             ScanSettings::default(),
-            AtomicBool::new(false),
-            AtomicUsize::new(0),
+            Cancel::default(),
+            Progress::default(),
         );
         let prepared = PreparedLibrary::new(&lib, &s.search);
         let direct = scan_chromatogram(run.clone(), &prepared, &s).unwrap();
         assert_eq!(direct.found.len(), 2);
 
-        let a = analyze_run(&run, &s.peaks, &s.deconv, PeakPass::Fresh).unwrap();
+        let a = analyze_run(
+            &run,
+            &s.peaks,
+            &s.deconv,
+            PeakPass::Fresh,
+            &Cancel::default(),
+        )
+        .unwrap();
         let compounds = crate::cmp::compounds_of_components(
             &a.components,
             &a.masses,
@@ -1442,15 +1460,22 @@ NUM PEAKS: 1
             ..Default::default()
         };
         let prepared = PreparedLibrary::new(&lib, &s.search);
-        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        let (done, cancel) = (Progress::default(), Cancel::default());
         let (raw, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert!(raw.iter().all(|r| r.found.len() == 2));
         let saved: Vec<PathBuf> = runs.iter().map(|p| p.with_extension("cmp")).collect();
 
         // The saved components are those of the deconvolution, with the RI of the search.
-        let comps =
-            (analyze_run(&run, &s.peaks, &s.deconv, PeakPass::Reordered).unwrap()).components;
+        let comps = (analyze_run(
+            &run,
+            &s.peaks,
+            &s.deconv,
+            PeakPass::Reordered,
+            &Cancel::default(),
+        )
+        .unwrap())
+        .components;
         let (loaded, _, _) =
             crate::cmp::components_from_file(&saved[0], &run.scan_times_s).unwrap();
         let key = |c: &crate::deconv::Component| (c.apex_scan, c.spectrum.clone());
@@ -1513,7 +1538,7 @@ NUM PEAKS: 1
             ..Default::default()
         };
         let prepared = PreparedLibrary::new(&lib, &s.search);
-        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        let (done, cancel) = (Progress::default(), Cancel::default());
         // The run's .cmp is also an input: it is left as it is.
         let runs = [a.join("x.cdf"), a.join("x.cmp")];
         let (scanned, errors) = scan_runs(&runs, &prepared, &s, 2, &done, &cancel).unwrap();
@@ -1555,12 +1580,12 @@ NUM PEAKS: 1
     fn scan_runs_reports_errors_and_cancels() {
         let lib = PreparedLibrary::new(&[], &SearchSettings::default());
         let paths = [PathBuf::from("no such run.cdf")];
-        let (done, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
+        let (done, cancel) = (Progress::default(), Cancel::default());
         let s = ScanSettings::default();
         let (runs, errors) = scan_runs(&paths, &lib, &s, 2, &done, &cancel).unwrap();
         assert!(runs.is_empty() && errors.len() == 1 && errors[0].contains("no such run"));
-        assert_eq!(done.load(Relaxed), 1);
-        cancel.store(true, Relaxed);
+        assert_eq!(done.done(), 1);
+        cancel.cancel();
         assert!(scan_runs(&paths, &lib, &s, 2, &done, &cancel).is_none());
     }
 }

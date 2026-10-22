@@ -2,7 +2,7 @@
 //! `MainWindow::copyRT`, docs/reverse-engineering/algorithms.md §7e). Both work on the library being
 //! edited; saving stays with the editor.
 
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use crate::layout::ToolWindow;
 use eframe::egui;
@@ -18,7 +18,7 @@ use md_core::search::SearchSettings;
 
 use super::LibraryEditor;
 use crate::lang::{t, tf};
-use crate::{Run, poll_job, spawn};
+use crate::{Job, Run};
 
 /// What the editor takes from the active run and the settings.
 pub struct Source<'a> {
@@ -59,7 +59,7 @@ pub struct AddDialog {
 
 pub struct RtDialog {
     /// Searching the components against the library.
-    job: Option<mpsc::Receiver<Vec<RtCopy>>>,
+    job: Option<Job<Vec<RtCopy>>>,
     plan: Vec<RtCopy>,
 }
 
@@ -224,7 +224,7 @@ impl LibraryEditor {
             .ri
             .map(|cal| cal.component_ris(&data.scan_times_s, &comps));
         let (target, s) = (self.compounds.clone(), src.search.clone());
-        let job = spawn(ctx, move || {
+        let job = Job::spawn(ctx, move |_, _| {
             plan_rt_copy(&comps, &data.scan_times_s, ris.as_deref(), &target, &s)
         });
         self.rt = Some(RtDialog {
@@ -290,10 +290,8 @@ impl LibraryEditor {
 
     fn rt_window(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.rt else { return };
-        if let Some(rx) = &d.job
-            && let Some(r) = poll_job(rx, || {
-                t("retention time search", "Retentionszeitsuche").into()
-            })
+        if let Some(job) = &d.job
+            && let Some(r) = job.poll(|| t("retention time search", "Retentionszeitsuche").into())
         {
             d.job = None;
             match r {

@@ -2,24 +2,17 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
 use md_core::Chromatogram;
 use md_core::centroid::{CentroidSettings, ExportKind, reduce};
+use md_core::job::{Cancel, Progress};
 
 use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
-use crate::{App, poll_job, spawn};
-
-struct Job {
-    total: usize,
-    done: Arc<AtomicUsize>,
-    cancel: Arc<AtomicBool>,
-    rx: mpsc::Receiver<Vec<Msg>>,
-}
+use crate::{App, Job};
 
 #[derive(Default)]
 pub struct ExportAll {
@@ -28,7 +21,7 @@ pub struct ExportAll {
     /// Only the runs drawn in the plots.
     only_shown: bool,
     dir: Option<PathBuf>,
-    job: Option<Job>,
+    job: Option<Job<Vec<Msg>>>,
     /// One line per failed file, or the summary of the last export.
     note: Msg,
     errors: Vec<Msg>,
@@ -41,8 +34,8 @@ fn export_runs(
     dir: &Path,
     kind: ExportKind,
     s: &CentroidSettings,
-    done: &AtomicUsize,
-    cancel: &AtomicBool,
+    done: &Progress,
+    cancel: &Cancel,
 ) -> Vec<Msg> {
     let (mut errors, mut used) = (Vec::new(), HashSet::new());
     // Quitting mid-write leaves `<file>.cdf.tmp` behind (the writer renames it when done): clear them and say so.
@@ -56,7 +49,7 @@ fn export_runs(
         }
     }
     for (name, data) in runs {
-        if cancel.load(Relaxed) {
+        if cancel.is_cancelled() {
             break;
         }
         let mut file = format!("{name}{}.cdf", kind.suffix());
@@ -74,7 +67,7 @@ fn export_runs(
                 "{file}: already exists, skipped",
                 "{file}: existiert bereits, übersprungen"
             ));
-            done.fetch_add(1, Relaxed);
+            done.step();
             continue;
         }
         let result = if kind == ExportKind::Profile {
@@ -85,7 +78,7 @@ fn export_runs(
         if let Err(e) = result {
             errors.push(format!("{file}: {e}").into());
         }
-        done.fetch_add(1, Relaxed);
+        done.step();
     }
     errors
 }
@@ -94,12 +87,12 @@ impl App {
     pub fn export_all_window(&mut self, ctx: &egui::Context) {
         let e = &mut self.export_all;
         if let Some(job) = &e.job {
-            match poll_job(&job.rx, || t("NetCDF export", "Der NetCDF-Export").into()) {
+            match job.poll(|| t("NetCDF export", "Der NetCDF-Export").into()) {
                 Some(r) => {
-                    let (done, total) = (job.done.load(Relaxed), job.total);
+                    let (done, total) = (job.progress.done(), job.progress.total());
                     e.errors = r.unwrap_or_else(|m| vec![m]);
                     let failed = e.errors.len();
-                    e.note = if job.cancel.load(Relaxed) && done < total {
+                    e.note = if job.cancel.is_cancelled() && done < total {
                         msg!(
                             "Cancelled: {done} of {total} runs done, {failed} failed.",
                             "Abgebrochen: {done} von {total} Läufen fertig, {failed} fehlgeschlagen."
@@ -163,15 +156,15 @@ impl App {
         });
         match &e.job {
             Some(job) => {
-                let d = job.done.load(Relaxed);
+                let (d, total) = (job.progress.done(), job.progress.total());
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
-                            .text(tf!("{d} / {} runs", "{d} / {} Läufe", job.total))
+                        egui::ProgressBar::new(d as f32 / total.max(1) as f32)
+                            .text(tf!("{d} / {} runs", "{d} / {} Läufe", total))
                             .desired_width(240.0),
                     );
                     if ui.button(t("Cancel", "Abbrechen")).clicked() {
-                        job.cancel.store(true, Relaxed);
+                        job.cancel.cancel();
                     }
                 });
             }
@@ -194,27 +187,14 @@ impl App {
                     .clicked()
                     && let Some(dir) = dir
                 {
-                    let (done, cancel) = (
-                        Arc::new(AtomicUsize::new(0)),
-                        Arc::new(AtomicBool::new(false)),
-                    );
-                    let (d, c, kind, s) = (
-                        done.clone(),
-                        cancel.clone(),
-                        e.kind,
-                        CentroidSettings::from(applied),
-                    );
-                    let total = picked.len();
-                    let rx = spawn(ui.ctx(), move || {
-                        export_runs(&picked, &dir, kind, &s, &d, &c)
-                    });
+                    let (kind, s) = (e.kind, CentroidSettings::from(applied));
                     (e.note, e.errors) = (Msg::default(), Vec::new());
-                    e.job = Some(Job {
-                        total,
-                        done,
-                        cancel,
-                        rx,
+                    let total = picked.len();
+                    let job = Job::spawn(ui.ctx(), move |done, cancel| {
+                        export_runs(&picked, &dir, kind, &s, done, cancel)
                     });
+                    job.progress.set_total(total);
+                    e.job = Some(job);
                 }
             }
         }
@@ -263,14 +243,14 @@ mod tests {
             ("keep".to_string(), c.clone()),
             ("A".to_string(), c),
         ];
-        let done = AtomicUsize::new(0);
+        let done = Progress::default();
         let errors = export_runs(
             &runs,
             &dir,
             ExportKind::Profile,
             &CentroidSettings::from(&md_core::settings::GcmsSettings::default()),
             &done,
-            &AtomicBool::new(false),
+            &Cancel::default(),
         );
         let names: Vec<_> = (std::fs::read_dir(&dir).unwrap())
             .map(|f| f.unwrap().file_name().into_string().unwrap())
@@ -278,7 +258,7 @@ mod tests {
         let kept = std::fs::read(dir.join("keep_profile.cdf")).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(kept, b"old");
-        assert_eq!(done.load(Relaxed), 5);
+        assert_eq!(done.done(), 5);
         assert_eq!(errors.len(), 3);
         assert!(errors[0].starts_with("orphan.cdf.tmp") && errors[0].contains("removed"));
         assert!(errors[1].starts_with("bad_profile.cdf"));
