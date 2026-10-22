@@ -366,12 +366,15 @@ mod tests {
             baseline: Default::default(),
         };
         let path = std::env::temp_dir().join(format!("md-core-cancel-{}.cdf", std::process::id()));
-        // The third check is after the first column, inside the write sequence.
-        assert!(matches!(
-            write_with_tic(&path, &c, &c.tic(), &Cancel::after(3)),
-            Err(AndiError::Cancelled)
-        ));
-        assert!(!path.exists());
+        // The write checks five times, the last one before the file is closed. Cancel at the first,
+        // a middle and the fifth poll: a removed check shifts the count and the fifth no longer fires.
+        for polls in [1, 3, 5] {
+            assert!(matches!(
+                write_with_tic(&path, &c, &c.tic(), &Cancel::after(polls)),
+                Err(AndiError::Cancelled)
+            ));
+            assert!(!path.exists());
+        }
         write_with_tic(&path, &c, &c.tic(), &Cancel::default()).unwrap();
         assert_eq!(read(&path).unwrap().offsets, c.offsets);
         std::fs::remove_file(&path).ok();
