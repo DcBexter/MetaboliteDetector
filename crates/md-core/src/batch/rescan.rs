@@ -11,9 +11,10 @@ use super::{
     hits_by_compound,
 };
 use crate::Chromatogram;
+use crate::analysis::{PeakPass, RunPeaks, find_run_peaks};
 use crate::deconv::{DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
-use crate::peaks::{IonTraces, TooLarge};
+use crate::peaks::TooLarge;
 use crate::ri::RiCalibration;
 
 /// One substance of one run with quant ions to look for, and where.
@@ -202,10 +203,13 @@ fn span(v: &[f64]) -> (f64, f64, f64) {
 }
 
 fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
-    let mut traces = IonTraces::new(&c, s.peaks.fwhm)?;
-    let times = c.scan_times_s.clone();
-    drop(c);
-    let peaks = traces.detect_peaks(&s.peaks);
+    // Fresh, not Reordered: the old rescan (`ResultSeries::scanIons`) builds a fresh
+    // `DefaultPeakDetector` and never calls `reorderPeaks` (reverse-engineering/algorithms.md:268).
+    let RunPeaks {
+        traces,
+        times,
+        peaks,
+    } = find_run_peaks(c, &s.peaks, PeakPass::Fresh)?;
     let at = |k: usize| times[peaks[k].apex_scan as usize];
     let mut by_row: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (k, p) in peaks.iter().enumerate() {
@@ -287,6 +291,7 @@ fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peaks::IonTraces;
     use crate::ri::RiCalibration;
 
     /// A run of `scans` scans at 1 s with traces of masses `mz` and the given Gaussian peaks

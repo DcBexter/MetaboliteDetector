@@ -10,9 +10,9 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Scan** | Ein Spektrum zu einem Zeitpunkt des Runs; m/z innerhalb des Scans sortiert. | `Chromatogram` (flache Arrays mit Scan-Offsets) |
 | **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut. | `md_core::peaks::IonTraces`, `trace(row)` |
 | **Peak** | Ein Maximum in einem Ion trace mit Grenzen, Apex, interpoliertem Apex und S/N. | `md_core::peaks::Peak` |
-| **Peak pass** | Welche Peak-Erkennung ein Aufrufer will: *Reordered* (Hauptfenster und Batch, `detect_all_peaks` mit `reorder_peaks` auf Exact-Mass-Runs) oder *Fresh* (Rescan, `detect_peaks` wie das alte `ResultSeries::scanIons`). | geplant: `md_core::analysis::PeakPass` (#361) |
+| **Peak pass** | Welche Peak-Erkennung ein Aufrufer will: *Reordered* (Hauptfenster und Batch, `detect_all_peaks` mit `reorder_peaks` auf Exact-Mass-Runs) oder *Fresh* (Rescan, `detect_peaks` wie das alte `ResultSeries::scanIons`). | `md_core::analysis::PeakPass` |
 | **Component** | Ein deconvolvierter Stoff: Peaks mehrerer Ion traces mit gemeinsamer Retentionszeit, Modellpeak und Spektrum. | `md_core::deconv::Component` |
-| **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | geplant: `md_core::analysis::analyze_run` (#361) |
+| **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
 | **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins. | `md_core::search` |
 | **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |

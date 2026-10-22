@@ -12,8 +12,9 @@ use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use md_core::Chromatogram;
-use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width, deconvolute};
-use md_core::peaks::{Detector, IonTraces, Peak, PeakSettings};
+use md_core::analysis::{PeakPass, analyze_run};
+use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
+use md_core::peaks::{Detector, Peak, PeakSettings};
 use md_core::settings::{ANY, GcmsSettings, MAX_LEN, limits};
 
 use crate::{Run, spawn};
@@ -95,15 +96,10 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
-    let mut traces = IonTraces::new(data, key.0.fwhm).map_err(|e| e.to_string())?;
-    let peaks = traces.detect_all_peaks(&key.0);
-    let mut components = deconvolute(&traces, &peaks, &data.scan_times_s, &key.1);
-    components.sort_by_key(|k| k.apex_scan);
-    let masses = peaks
-        .iter()
-        .map(|p| traces.masses[p.row as usize])
-        .collect();
-    Ok((components, masses, peaks))
+    let mut a =
+        analyze_run(data, &key.0, &key.1, PeakPass::Reordered).map_err(|e| e.to_string())?;
+    a.components.sort_by_key(|k| k.apex_scan);
+    Ok((a.components, a.masses, a.peaks))
 }
 
 impl Settings {
@@ -512,6 +508,7 @@ impl Settings {
         });
         ranges(
             ui,
+            "QUANT_EXCL_IONS",
             t(
                 "Ions left out of the model peak",
                 "Vom Modellpeak ausgenommene Ionen",
@@ -649,6 +646,7 @@ impl Settings {
         });
         ranges(
             ui,
+            "LS_MASS_FILTER",
             t("Ignored masses", "Ignorierte Massen"),
             &explain(
                 t(
@@ -872,7 +870,14 @@ fn num<N: egui::emath::Numeric>(v: &mut N, range: RangeInclusive<N>) -> egui::Dr
 }
 
 /// Editable list of inclusive m/z ranges.
-pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
+pub(crate) fn ranges(
+    ui: &mut egui::Ui,
+    key: &str,
+    name: &str,
+    hint: &str,
+    list: &mut Vec<(f32, f32)>,
+) {
+    let bounds = limit::<f32>(key);
     ui.add_space(4.0);
     let list_name = ui.horizontal(|ui| {
         let list_name = ui.label(name).on_hover_text(hint);
@@ -892,7 +897,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             let from = ui.label(t("from", "von"));
             ui.add(
                 egui::DragValue::new(lo)
-                    .range(limit::<f32>("LS_MASS_FILTER"))
+                    .range(bounds.clone())
                     .max_decimals(2),
             )
             .labelled_by(list_name)
@@ -901,7 +906,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             let to = ui.label(t("to", "bis"));
             ui.add(
                 egui::DragValue::new(hi)
-                    .range(limit::<f32>("LS_MASS_FILTER"))
+                    .range(bounds.clone())
                     .max_decimals(2),
             )
             .labelled_by(list_name)

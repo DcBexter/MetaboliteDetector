@@ -3,6 +3,7 @@
 
 use rayon::prelude::*;
 
+pub mod analysis;
 pub mod andi;
 pub mod batch;
 pub mod centroid;
