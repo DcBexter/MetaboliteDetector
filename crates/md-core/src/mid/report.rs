@@ -69,19 +69,24 @@ impl MidReport {
                     self.stats.swap(a, b);
                 }
                 if self.stats_text.is_some() {
-                    let mut first = self.mids.clone();
-                    for f in first.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
-                        let mut fits = vec![None; f.fits.len()];
-                        for (j, fit) in std::mem::take(&mut f.fits).into_iter().enumerate() {
-                            fits[self.runs[j]] = fit;
-                        }
-                        f.fits = fits;
-                    }
-                    self.stats_text = Some(first.stats_text(&self.lib));
+                    self.stats_text = Some(self.mids_in_run_order().stats_text(&self.lib));
                 }
             }
         }
         self.text = self.mids_text();
+    }
+
+    /// The MIDs with the fits back in their first run order, the order the statistics sum in.
+    pub fn mids_in_run_order(&self) -> Mids {
+        let mut m = self.mids.clone();
+        for f in m.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
+            let mut fits = vec![None; f.fits.len()];
+            for (j, fit) in std::mem::take(&mut f.fits).into_iter().enumerate() {
+                fits[self.runs[j]] = fit;
+            }
+            f.fits = fits;
+        }
+        m
     }
 
     /// Statistics and text exports of the MIDs as determined.
@@ -189,6 +194,19 @@ mod tests {
 
     /// A run move leaves the statistics and their text bit for bit. A substance move after it gives
     /// what the same substance move gives without the run move, so the text and the table agree.
+    /// The statistics recomputed from the MIDs in their first run order, as a substance move does,
+    /// so a wrong restore of the order shows in the last bit.
+    fn stats_in_run_order(d: &MidReport) -> Vec<Vec<Vec<(f64, f64)>>> {
+        let m = d.mids_in_run_order();
+        (m.compounds.iter())
+            .map(|c| {
+                (c.fragments.iter())
+                    .map(|f| (0..f.isotopomers).map(|k| group_stat(f, k)).collect())
+                    .collect()
+            })
+            .collect()
+    }
+
     #[test]
     fn moving_runs_keeps_the_statistics_bit_for_bit() {
         // Alanine M0 is 0.1, 0.2, 0.3: the mean is 0.20000000000000004, summed backwards 0.19999999999999998.
@@ -200,7 +218,7 @@ mod tests {
         d.apply(Move::Compound(0, 1));
         let mut plain = report(Method::Formula, &["a", "b", "c"]);
         plain.apply(Move::Compound(0, 1));
-        assert_eq!(bits(&d.stats), bits(&plain.stats));
+        assert_eq!(bits(&stats_in_run_order(&d)), bits(&plain.stats));
         assert_eq!(d.stats_text, plain.stats_text);
         d.apply(Move::Compound(1, 0));
         d.apply(Move::Run(2, 0));

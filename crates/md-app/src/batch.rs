@@ -1256,10 +1256,15 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
     for entry in export_set(t, p, &options) {
         let (part, written) = match entry {
             ExportEntry::File(f) => {
-                let written = f
-                    .contents
-                    .and_then(|bytes| write_file(&f.path, bytes, f.text_cols, ex));
-                (f.part, written.map(Some))
+                let written = match f.contents {
+                    Ok(bytes) => write_file(&f.path, bytes, f.text_cols, ex).map(Some),
+                    Err(e) => {
+                        // A failed export must not leave the last export's numbers behind.
+                        let _ = remove_stale(&f.path);
+                        Err(e)
+                    }
+                };
+                (f.part, written)
             }
             ExportEntry::Stale(part, path) => (part, remove_stale(&path)),
         };
