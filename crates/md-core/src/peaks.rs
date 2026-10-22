@@ -309,7 +309,7 @@ const SPARSE_FILL_RATIO: usize = 4;
 /// a corrupt file with huge scan or mass counts must fail instead of exhausting memory.
 pub const MAX_TRACE_BYTES: usize = 8 << 30;
 
-/// Upper bound for masses × scans, sparse or not: detection reads every cell once (about 2 s at the
+/// Upper bound for masses × scans, sparse or not: detection reads every cell once (a few seconds at the
 /// bound), so a corrupt exact-mass file with a distinct m/z per point must fail instead of running O(n²).
 pub const MAX_TRACE_CELLS: usize = 8 << 30;
 
