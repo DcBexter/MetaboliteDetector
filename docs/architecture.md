@@ -788,7 +788,7 @@ against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0
 ## Settings
 
 `md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
-converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. One const table, `settings::KEYS` (old key,
+converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. One const table, `settings::KEYS` (old key, display text (English, German),
 accessor, range, fixed slot in the old file; no macro), drives the app's `KEY=value` lines (`set`, `lines`), the
 old file's fixed-size fields, `validate` (`sanitized` resets the bad ones) and the ranges of the Settings window
 (`limits`); a new value is one table row plus its struct field and default. `an_number_bins` is read once
