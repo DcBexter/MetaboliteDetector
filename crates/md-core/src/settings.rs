@@ -166,6 +166,8 @@ pub enum Field<'a> {
 /// One setting: its old key, where it lives in the struct and what values it accepts.
 pub struct Key {
     pub name: &'static str,
+    /// Display text of the settings window: (English, German).
+    pub label: (&'static str, &'static str),
     pub field: fn(&mut GcmsSettings) -> Field<'_>,
     /// Inclusive bounds (m/z for the range lists, the width for the matched detector); `None`: any
     /// number within ±1e9. `validate`, the app's loader and the settings window all read this.
@@ -176,12 +178,14 @@ pub struct Key {
 
 const fn key(
     name: &'static str,
+    label: (&'static str, &'static str),
     field: fn(&mut GcmsSettings) -> Field<'_>,
     range: Option<(f64, f64)>,
     fixed: bool,
 ) -> Key {
     Key {
         name,
+        label,
         field,
         range,
         fixed,
@@ -194,43 +198,51 @@ const fn key(
 // Rustfmt would put each of the 36 rows on five lines.
 #[rustfmt::skip]
 pub const KEYS: [Key; 36] = [
-    key("SF_PEAK_THRESHOLD_BEGIN", |s| Field::F64(&mut s.sf_peak_threshold_begin), None, true),
-    key("SF_PEAK_THRESHOLD_END", |s| Field::F64(&mut s.sf_peak_threshold_end), None, true),
-    key("SF_MAX_BASE_DEV", |s| Field::F64(&mut s.sf_max_base_dev), None, true),
-    key("SF_FWHM", |s| Field::F64(&mut s.sf_fwhm), Some((0.0, 1.0)), true),
-    key("SF_CENTROID_THRESHOLD_BEGIN", |s| Field::F64(&mut s.sf_centroid_threshold_begin), None, true),
-    key("SF_CENTROID_THRESHOLD_END", |s| Field::F64(&mut s.sf_centroid_threshold_end), None, true),
-    key("SF_CENTROID_MAX_BASE_DEV", |s| Field::F64(&mut s.sf_centroid_max_base_dev), None, true),
-    key("AN_PEAK_THRESHOLD_BEGIN", |s| Field::F64(&mut s.an_peak_threshold_begin), None, true),
-    key("AN_PEAK_THRESHOLD_END", |s| Field::F64(&mut s.an_peak_threshold_end), None, true),
-    key("AN_MAX_BASE_DEV", |s| Field::F64(&mut s.an_max_base_dev), None, true),
-    key("AN_MIN_PEAK_HEIGHT", |s| Field::F64(&mut s.an_min_peak_height), Some((0.0, 1000000000.0)), true),
-    key("AN_DECONVOLUTION_WIDTH", |s| Field::Auto(&mut s.an_deconvolution_width), Some((0.1, 100.0)), true),
-    key("AN_NUMBER_BINS", |s| Field::I32(&mut s.an_number_bins), Some((1.0, 100.0)), true),
-    key("AN_MIN_PEAK_NUMBER", |s| Field::I32(&mut s.an_min_peak_number), Some((1.0, 10000.0)), true),
-    key("AN_MIN_HEIGHT_BP", |s| Field::F64(&mut s.an_min_height_bp), Some((0.0, 1.0)), false),
-    key("AN_MODELED_VALUES_FOR_INTEGRATION", |s| Field::Bool(&mut s.an_modeled_values_for_integration), None, false),
-    key("baseline_correction", |s| Field::Bool(&mut s.baseline_correction), None, false),
-    key("LS_RI_DIFF", |s| Field::F64(&mut s.ls_ri_diff), Some((1e-06, 1000000000.0)), true),
-    key("LS_PURE_FACTOR", |s| Field::F64(&mut s.ls_pure_factor), Some((0.0, 1000000000.0)), true),
-    key("LS_IMPURE_FACTOR", |s| Field::F64(&mut s.ls_impure_factor), Some((0.0, 1000000000.0)), true),
-    key("LS_SCALE_FACTOR_ION", |s| Field::F64(&mut s.ls_scale_factor_ion), None, true),
-    key("LS_SCALE_FACTOR_VALUE", |s| Field::F64(&mut s.ls_scale_factor_value), None, true),
-    key("LS_SCALE_FACTOR_NO_MATCH", |s| Field::F64(&mut s.ls_scale_factor_no_match), None, true),
-    key("LS_RESOLUTION", |s| Field::F32(&mut s.ls_resolution), None, true),
-    key("LS_USE_RI", |s| Field::Bool(&mut s.ls_use_ri), None, true),
-    key("LS_USE_SCALED_LIB", |s| Field::Bool(&mut s.ls_use_scaled_lib), None, true),
-    key("LS_USE_SPEC", |s| Field::Bool(&mut s.ls_use_spec), None, true),
-    key("LS_MASS_FILTER", |s| Field::Ranges(&mut s.ls_mass_filter), Some((0.0, 100000.0)), false),
-    key("LS_CUTOFF", |s| Field::F64(&mut s.ls_cutoff), Some((0.0, 1.0)), false),
-    key("QUANT_ION_NUMBER", |s| Field::I32(&mut s.quant_ion_number), Some((0.0, 10000.0)), true),
-    key("QUANT_MIN_DIST_IONS", |s| Field::F64(&mut s.quant_min_dist_ions), None, true),
-    key("QUANT_QUALITY_CUTOFF", |s| Field::F64(&mut s.quant_quality_cutoff), None, true),
-    key("QUANT_EXCL_IONS", |s| Field::Ranges(&mut s.quant_excl_ions), Some((0.0, 100000.0)), false),
-    key("SQL_MAX_NUMBER_FRAGMENTS", |s| Field::I32(&mut s.sql_max_number_fragments), Some((1.0, 100.0)), false),
-    key("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS", |s| Field::I32(&mut s.sql_minimal_number_equal_fragments), Some((0.0, 100.0)), false),
-    key("PEAK_DETECTOR", |s| Field::Detector(&mut s.peak_detector), Some((1.0, 1000.0)), false),
+    key("SF_PEAK_THRESHOLD_BEGIN", ("Spectrum filter: peak start", "Spektrumfilter: Peakbeginn"), |s| Field::F64(&mut s.sf_peak_threshold_begin), None, true),
+    key("SF_PEAK_THRESHOLD_END", ("Spectrum filter: peak end", "Spektrumfilter: Peakende"), |s| Field::F64(&mut s.sf_peak_threshold_end), None, true),
+    key("SF_MAX_BASE_DEV", ("Spectrum filter: baseline deviation", "Spektrumfilter: Basislinienabweichung"), |s| Field::F64(&mut s.sf_max_base_dev), None, true),
+    key("SF_FWHM", ("Centroid: FWHM share", "Zentroid: FWHM-Anteil"), |s| Field::F64(&mut s.sf_fwhm), Some((0.0, 1.0)), true),
+    key("SF_CENTROID_THRESHOLD_BEGIN", ("Centroid: peak start", "Zentroid: Peakbeginn"), |s| Field::F64(&mut s.sf_centroid_threshold_begin), None, true),
+    key("SF_CENTROID_THRESHOLD_END", ("Centroid: peak end", "Zentroid: Peakende"), |s| Field::F64(&mut s.sf_centroid_threshold_end), None, true),
+    key("SF_CENTROID_MAX_BASE_DEV", ("Centroid: baseline deviation", "Zentroid: Basislinienabweichung"), |s| Field::F64(&mut s.sf_centroid_max_base_dev), None, true),
+    key("AN_PEAK_THRESHOLD_BEGIN", ("Peak start slope", "Steigung am Peakbeginn"), |s| Field::F64(&mut s.an_peak_threshold_begin), None, true),
+    key("AN_PEAK_THRESHOLD_END", ("Peak end slope", "Steigung am Peakende"), |s| Field::F64(&mut s.an_peak_threshold_end), None, true),
+    key("AN_MAX_BASE_DEV", ("Peak baseline deviation", "Peak-Basislinienabweichung"), |s| Field::F64(&mut s.an_max_base_dev), None, true),
+    key("AN_MIN_PEAK_HEIGHT", ("Minimum S/N", "Minimum-S/N"), |s| Field::F64(&mut s.an_min_peak_height), Some((0.0, 1000000000.0)), true),
+    key("AN_DECONVOLUTION_WIDTH", ("Deconvolution width", "Dekonvolutionsbreite"), |s| Field::Auto(&mut s.an_deconvolution_width), Some((0.1, 100.0)), true),
+    key("AN_NUMBER_BINS", ("Apex steps per scan", "Apex-Schritte pro Scan"), |s| Field::I32(&mut s.an_number_bins), Some((1.0, 100.0)), true),
+    key("AN_MIN_PEAK_NUMBER", ("Minimum ions per component", "Mindestzahl Ionen pro Komponente"), |s| Field::I32(&mut s.an_min_peak_number), Some((1.0, 10000.0)), true),
+    key("AN_MIN_HEIGHT_BP", ("Minimum share of base peak", "Mindestanteil am Basispeak"), |s| Field::F64(&mut s.an_min_height_bp), Some((0.0, 1.0)), false),
+    key("AN_MODELED_VALUES_FOR_INTEGRATION", ("Integrate fitted model", "Angepasstes Modell integrieren"), |s| Field::Bool(&mut s.an_modeled_values_for_integration), None, false),
+    key("baseline_correction", ("Baseline correction", "Basislinienkorrektur"), |s| Field::Bool(&mut s.baseline_correction), None, false),
+    key("LS_RI_DIFF", ("RI tolerance (sigma)", "RI-Toleranz (Sigma)"), |s| Field::F64(&mut s.ls_ri_diff), Some((1e-06, 1000000000.0)), true),
+    key("LS_PURE_FACTOR", ("Pure spectrum weight", "Gewicht reines Spektrum"), |s| Field::F64(&mut s.ls_pure_factor), Some((0.0, 1000000000.0)), true),
+    key("LS_IMPURE_FACTOR", ("Impure spectrum weight", "Gewicht unreines Spektrum"), |s| Field::F64(&mut s.ls_impure_factor), Some((0.0, 1000000000.0)), true),
+    key("LS_SCALE_FACTOR_ION", ("Mass exponent", "Massenexponent"), |s| Field::F64(&mut s.ls_scale_factor_ion), None, true),
+    key("LS_SCALE_FACTOR_VALUE", ("Intensity exponent", "Intensitätsexponent"), |s| Field::F64(&mut s.ls_scale_factor_value), None, true),
+    key("LS_SCALE_FACTOR_NO_MATCH", ("Unmatched peak factor", "Faktor für Peaks ohne Partner"), |s| Field::F64(&mut s.ls_scale_factor_no_match), None, true),
+    key("LS_RESOLUTION", ("Search resolution", "Suchauflösung"), |s| Field::F32(&mut s.ls_resolution), None, true),
+    key("LS_USE_RI", ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_ri), None, true),
+    key("LS_USE_SCALED_LIB", ("Use scaled library", "Skalierte Bibliothek verwenden"), |s| Field::Bool(&mut s.ls_use_scaled_lib), None, true),
+    key("LS_USE_SPEC", ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_spec), None, true),
+    key("LS_MASS_FILTER", ("Ignored masses", "Ignorierte Massen"), |s| Field::Ranges(&mut s.ls_mass_filter), Some((0.0, 100000.0)), false),
+    key("LS_CUTOFF", ("Cutoff score", "Mindest-Score"), |s| Field::F64(&mut s.ls_cutoff), Some((0.0, 1.0)), false),
+    key("QUANT_ION_NUMBER", ("Quant ions", "Quant-Ionen"), |s| Field::I32(&mut s.quant_ion_number), Some((0.0, 10000.0)), true),
+    key("QUANT_MIN_DIST_IONS", ("Quant ion minimum distance", "Mindestabstand der Quant-Ionen"), |s| Field::F64(&mut s.quant_min_dist_ions), None, true),
+    key("QUANT_QUALITY_CUTOFF", ("Quant quality cutoff", "Quant-Qualitätsschwelle"), |s| Field::F64(&mut s.quant_quality_cutoff), None, true),
+    key("QUANT_EXCL_IONS", ("Ions left out of the model peak", "Vom Modellpeak ausgenommene Ionen"), |s| Field::Ranges(&mut s.quant_excl_ions), Some((0.0, 100000.0)), false),
+    key("SQL_MAX_NUMBER_FRAGMENTS", ("Number of fragments", "Anzahl Fragmente"), |s| Field::I32(&mut s.sql_max_number_fragments), Some((1.0, 100.0)), false),
+    key("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS", ("Minimum number of identical frag.", "Mindestzahl gleicher Fragmente"), |s| Field::I32(&mut s.sql_minimal_number_equal_fragments), Some((0.0, 100.0)), false),
+    key("PEAK_DETECTOR", ("Peak detection method", "Peakerkennungsmethode"), |s| Field::Detector(&mut s.peak_detector), Some((1.0, 1000.0)), false),
 ];
+
+/// Display text of a setting (English, German); panics on a key that is not in the table.
+pub fn label(name: &str) -> (&'static str, &'static str) {
+    KEYS.iter()
+        .find(|k| k.name == name)
+        .expect("a key of the table")
+        .label
+}
 
 /// Bounds of a setting for an input widget; panics on a key that is not in the table.
 pub fn limits(name: &str) -> (f64, f64) {
@@ -694,6 +706,10 @@ mod tests {
         };
         let names: std::collections::HashSet<_> = KEYS.iter().map(|k| k.name).collect();
         assert_eq!(names.len(), KEYS.len(), "a key twice");
+        assert!(
+            KEYS.iter()
+                .all(|k| !k.label.0.is_empty() && !k.label.1.is_empty())
+        );
         for k in &KEYS {
             // Default: the text of every key reads back to the same value.
             let mut back = GcmsSettings::default();

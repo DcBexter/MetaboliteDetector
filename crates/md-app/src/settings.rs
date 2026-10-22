@@ -380,7 +380,7 @@ impl Settings {
                 "Standard: der Steigungsdetektor der alten Version. \
                  Matched Filtering: der Matched-Peak-Detektor des alten Calibration Setter.",
             );
-            let label = ui.label(t("Peak detection method", "Peakerkennungsmethode")).on_hover_text(hint);
+            let label = ui.label(name_of("PEAK_DETECTOR")).on_hover_text(hint);
             egui::ComboBox::from_id_salt("detector")
                 .selected_text(match d.peak_detector {
                     Detector::Default => t("Default", "Standard"),
@@ -426,7 +426,7 @@ impl Settings {
             }
             row(
                 ui,
-                t("Peak start slope", "Steigung am Peakbeginn"),
+                name_of("AN_PEAK_THRESHOLD_BEGIN"),
                 "AN_PEAK_THRESHOLD_BEGIN",
                 t(
                     "Smoothed slope that starts a peak.",
@@ -436,7 +436,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Peak end slope", "Steigung am Peakende"),
+                name_of("AN_PEAK_THRESHOLD_END"),
                 "AN_PEAK_THRESHOLD_END",
                 t(
                     "The falling flank ends once the slope stays above this.",
@@ -446,7 +446,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Minimum S/N", "Minimum-S/N"),
+                name_of("AN_MIN_PEAK_HEIGHT"),
                 "AN_MIN_PEAK_HEIGHT",
                 t(
                     "Minimum height above the baseline, in noise units.",
@@ -456,7 +456,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Apex steps per scan", "Apex-Schritte pro Scan"),
+                name_of("AN_NUMBER_BINS"),
                 "AN_NUMBER_BINS",
                 t(
                     "Sub-scan steps for locating the precise apex.",
@@ -467,7 +467,7 @@ impl Settings {
             width_row(ui, &mut d.an_deconvolution_width, times);
             row(
                 ui,
-                t("Minimum ions per component", "Mindestzahl Ionen pro Komponente"),
+                name_of("AN_MIN_PEAK_NUMBER"),
                 "AN_MIN_PEAK_NUMBER",
                 t(
                     "Components with fewer ion peaks are dropped.",
@@ -477,7 +477,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Minimum share of base peak", "Mindestanteil am Basispeak"),
+                name_of("AN_MIN_HEIGHT_BP"),
                 "AN_MIN_HEIGHT_BP",
                 t(
                     "Ions below this fraction of the base peak leave the spectrum (0 = keep all).",
@@ -487,7 +487,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Integrate fitted model", "Angepasstes Modell integrieren"),
+                name_of("AN_MODELED_VALUES_FOR_INTEGRATION"),
                 "AN_MODELED_VALUES_FOR_INTEGRATION",
                 t(
                     "Integrate the fitted model instead of the raw trace.",
@@ -497,7 +497,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Baseline correction", "Basislinienkorrektur"),
+                name_of("baseline_correction"),
                 "baseline_correction",
                 t(
                     "Subtract each scan's stored baseline from its intensities. Only old type 1 caches (FastFlight .bin/.idx) store one; other runs stay unchanged.",
@@ -509,10 +509,7 @@ impl Settings {
         ranges(
             ui,
             "QUANT_EXCL_IONS",
-            t(
-                "Ions left out of the model peak",
-                "Vom Modellpeak ausgenommene Ionen",
-            ),
+            name_of("QUANT_EXCL_IONS"),
             &explain(
                 t(
                     "Ion ranges (m/z from–to) not used for the model peak.",
@@ -528,7 +525,7 @@ impl Settings {
         egui::Grid::new("ls").num_columns(2).show(ui, |ui| {
             row(
                 ui,
-                t("RI tolerance (sigma)", "RI-Toleranz (Sigma)"),
+                name_of("LS_RI_DIFF"),
                 "LS_RI_DIFF",
                 t(
                     "Sigma of the RI score; differences above 3 sigma score 0.",
@@ -538,7 +535,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Pure spectrum weight", "Gewicht reines Spektrum"),
+                name_of("LS_PURE_FACTOR"),
                 "LS_PURE_FACTOR",
                 t(
                     "Weight of the pure spectrum score.",
@@ -548,7 +545,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Impure spectrum weight", "Gewicht unreines Spektrum"),
+                name_of("LS_IMPURE_FACTOR"),
                 "LS_IMPURE_FACTOR",
                 t(
                     "Weight of the impure spectrum score.",
@@ -558,7 +555,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Mass exponent", "Massenexponent"),
+                name_of("LS_SCALE_FACTOR_ION"),
                 "LS_SCALE_FACTOR_ION",
                 t(
                     "Peaks are weighted as mass^a · intensity^b: this is a.",
@@ -568,7 +565,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Intensity exponent", "Intensitätsexponent"),
+                name_of("LS_SCALE_FACTOR_VALUE"),
                 "LS_SCALE_FACTOR_VALUE",
                 t(
                     "Peaks are weighted as mass^a · intensity^b: this is b.",
@@ -578,7 +575,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Unmatched peak factor", "Faktor für Peaks ohne Partner"),
+                name_of("LS_SCALE_FACTOR_NO_MATCH"),
                 "LS_SCALE_FACTOR_NO_MATCH",
                 t(
                     "Factor for peaks without a partner in the other spectrum.",
@@ -593,7 +590,7 @@ impl Settings {
                 ),
                 t("LS_USE_SPEC and LS_USE_RI", "LS_USE_SPEC und LS_USE_RI"),
             );
-            let label = ui.label(t("Score", "Score")).on_hover_text(&hint);
+            let label = ui.label(name_of("LS_USE_SPEC")).on_hover_text(&hint);
             let now = (d.ls_use_spec, d.ls_use_ri);
             // An old file can switch both off: then every hit scores 1.
             let name = (scores().iter().find(|m| (m.0, m.1) == now)).map_or(
@@ -615,7 +612,7 @@ impl Settings {
             ui.end_row();
             row(
                 ui,
-                t("Cutoff score", "Mindest-Score"),
+                name_of("LS_CUTOFF"),
                 "LS_CUTOFF",
                 t(
                     "A hit below this overall score counts as no match: in the component list, Find substance and the batch.",
@@ -625,7 +622,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Number of fragments", "Anzahl Fragmente"),
+                name_of("SQL_MAX_NUMBER_FRAGMENTS"),
                 "SQL_MAX_NUMBER_FRAGMENTS",
                 t(
                     "NIST search: how many of the component's strongest fragments are compared.",
@@ -635,7 +632,7 @@ impl Settings {
             );
             row(
                 ui,
-                t("Minimum number of identical frag.", "Mindestzahl gleicher Fragmente"),
+                name_of("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS"),
                 "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS",
                 t(
                     "NIST search: a library entry is scored only if it shares more than this many of them.",
@@ -647,7 +644,7 @@ impl Settings {
         ranges(
             ui,
             "LS_MASS_FILTER",
-            t("Ignored masses", "Ignorierte Massen"),
+            name_of("LS_MASS_FILTER"),
             &explain(
                 t(
                     "Mass ranges (m/z from–to) ignored in both spectra.",
@@ -667,17 +664,17 @@ impl Settings {
             );
             for (name, key, v) in [
                 (
-                    t("Centroid: peak start", "Zentroid: Peakbeginn"),
+                    name_of("SF_CENTROID_THRESHOLD_BEGIN"),
                     "SF_CENTROID_THRESHOLD_BEGIN",
                     &mut d.sf_centroid_threshold_begin,
                 ),
                 (
-                    t("Centroid: peak end", "Zentroid: Peakende"),
+                    name_of("SF_CENTROID_THRESHOLD_END"),
                     "SF_CENTROID_THRESHOLD_END",
                     &mut d.sf_centroid_threshold_end,
                 ),
                 (
-                    t("Centroid: baseline deviation", "Zentroid: Basislinienabweichung"),
+                    name_of("SF_CENTROID_MAX_BASE_DEV"),
                     "SF_CENTROID_MAX_BASE_DEV",
                     &mut d.sf_centroid_max_base_dev,
                 ),
@@ -686,7 +683,7 @@ impl Settings {
             }
             row(
                 ui,
-                t("Centroid: FWHM share", "Zentroid: FWHM-Anteil"),
+                name_of("SF_FWHM"),
                 "SF_FWHM",
                 t(
                     "Points at or above this share of a peak's maximum make up its centroid mass, \
@@ -717,20 +714,17 @@ impl Settings {
             egui::Grid::new("stored").num_columns(2).show(ui, |ui| {
                 for (name, key, v) in [
                     (
-                        t("Spectrum filter: peak start", "Spektrumfilter: Peakbeginn"),
+                        name_of("SF_PEAK_THRESHOLD_BEGIN"),
                         "SF_PEAK_THRESHOLD_BEGIN",
                         &mut d.sf_peak_threshold_begin,
                     ),
                     (
-                        t("Spectrum filter: peak end", "Spektrumfilter: Peakende"),
+                        name_of("SF_PEAK_THRESHOLD_END"),
                         "SF_PEAK_THRESHOLD_END",
                         &mut d.sf_peak_threshold_end,
                     ),
                     (
-                        t(
-                            "Spectrum filter: baseline deviation",
-                            "Spektrumfilter: Basislinienabweichung",
-                        ),
+                        name_of("SF_MAX_BASE_DEV"),
                         "SF_MAX_BASE_DEV",
                         &mut d.sf_max_base_dev,
                     ),
@@ -739,20 +733,17 @@ impl Settings {
                 }
                 let stored: [(&str, &str, &mut f64); 3] = [
                     (
-                        t("Peak baseline deviation", "Peak-Basislinienabweichung"),
+                        name_of("AN_MAX_BASE_DEV"),
                         "AN_MAX_BASE_DEV",
                         &mut d.an_max_base_dev,
                     ),
                     (
-                        t(
-                            "Quant ion minimum distance",
-                            "Mindestabstand der Quant-Ionen",
-                        ),
+                        name_of("QUANT_MIN_DIST_IONS"),
                         "QUANT_MIN_DIST_IONS",
                         &mut d.quant_min_dist_ions,
                     ),
                     (
-                        t("Quant quality cutoff", "Quant-Qualitätsschwelle"),
+                        name_of("QUANT_QUALITY_CUTOFF"),
                         "QUANT_QUALITY_CUTOFF",
                         &mut d.quant_quality_cutoff,
                     ),
@@ -762,21 +753,21 @@ impl Settings {
                 }
                 row(
                     ui,
-                    t("Search resolution", "Suchauflösung"),
+                    name_of("LS_RESOLUTION"),
                     "LS_RESOLUTION",
                     unused,
                     num(&mut d.ls_resolution, limit("LS_RESOLUTION")),
                 );
                 row(
                     ui,
-                    t("Use scaled library", "Skalierte Bibliothek verwenden"),
+                    name_of("LS_USE_SCALED_LIB"),
                     "LS_USE_SCALED_LIB",
                     dead,
                     egui::Checkbox::without_text(&mut d.ls_use_scaled_lib),
                 );
                 row(
                     ui,
-                    t("Quant ions", "Quant-Ionen"),
+                    name_of("QUANT_ION_NUMBER"),
                     "QUANT_ION_NUMBER",
                     unused,
                     egui::DragValue::new(&mut d.quant_ion_number)
@@ -790,6 +781,12 @@ impl Settings {
 /// The old file has no extension convention.
 fn dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
+}
+
+/// Display text of a setting from the settings table, in the current language.
+pub(crate) fn name_of(key: &str) -> &'static str {
+    let (en, de) = md_core::settings::label(key);
+    t(en, de)
 }
 
 /// The range of an input as the settings table has it (`md_core::settings::KEYS`), so window and
@@ -832,7 +829,7 @@ fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) 
         "AN_DECONVOLUTION_WIDTH",
     );
     let label = ui
-        .label(t("Deconvolution width", "Dekonvolutionsbreite"))
+        .label(name_of("AN_DECONVOLUTION_WIDTH"))
         .on_hover_text(&hint);
     ui.horizontal(|ui| {
         let mut auto = width.is_none();

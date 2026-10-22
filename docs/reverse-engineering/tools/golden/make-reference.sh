@@ -15,6 +15,8 @@
 # With MD_RESULTS=DIR it also saves DIR/<run>.cmp per run, a known calibration as DIR/harness.calib
 # (text) and DIR/harness.calib.bin (binary), and the raw dump DIR/raw.tsv. These come from the old
 # program: keep them local (example-data/old-results/ is ignored by git).
+# With --stages it only writes the stage fixtures of the 15 runs (default detector) to
+# crates/md-core/tests/fixtures/legacy/, see stages.py; tests/legacy_stages.rs reads them.
 # With --reread IN OUT [IN OUT]... it only reads each .cmp, .calib or .calib.bin with the old code
 # and writes it again to OUT (checks that the old program accepts files written by md-core).
 set -euo pipefail
@@ -57,6 +59,11 @@ nm "$app" | awk '
     want["_ZNK4gcms8SpectrumIifE9getMassesEv"] = "SPEC_MASSES"
     want["_ZNK4gcms8SpectrumIifE9getValuesEv"] = "SPEC_VALUES"
     want["_ZNK4gcms8CompoundIifE17getPeakEssentialsEv"] = "COMPOUND_PEAKS"
+    want["_ZNK4gcms8CompoundIifE12getModelPeakEv"] = "COMPOUND_MODEL"
+    want["_ZNK4gcms13PeakEssentialIsE12getFirstScanEv"] = "MODEL_FIRST"
+    want["_ZNK4gcms13PeakEssentialIsE11getLastScanEv"] = "MODEL_LAST"
+    want["_ZNK4gcms13PeakEssentialIsE10getMaxScanEv"] = "MODEL_MAX"
+    want["_ZNK4gcms4PeakIdsE9getValuesEv"] = "MODEL_VALUES"
     want["_ZN4gcms8CompoundIifE6toDiskERKSt6vectorIPS1_SaIS3_EEPKc"] = "COMPOUND_TO_DISK"
     want["_ZN4gcms8CompoundIifE8fromDiskEPKc"] = "COMPOUND_FROM_DISK"
     want["_ZN4gcms12RICalculatorC1ERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE"] = "RI_CTOR"
@@ -97,8 +104,13 @@ if [[ "${1:-}" == --exact-masses ]]; then
   python3 "$here/golden.py" "static default settings, exact-mass cache (DataType 1) made from 7235eg04" < "$work/raw.tsv" > "$out/old-md-3.3-exact-masses.tsv"
   exit
 fi
-LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
-python3 "$here/golden.py" "static default settings" < "$work/raw.tsv" > "$out/old-md-3.3.tsv"
+# Default detector: an MD_MATCHED left in the environment must not reach this run.
+env -u MD_MATCHED LD_PRELOAD="$work/old_md_dump.so" "$app" "$work" "$work/raw.tsv" "$data"/*.cdf > "$work/old.log" 2>&1 || { tail "$work/old.log"; exit 1; }
+if [[ "${1:-}" == --stages ]]; then
+  python3 "$here/stages.py" < "$work/raw.tsv"
+  exit
+fi
+python3 "$here/golden.py" "static default settings"< "$work/raw.tsv" > "$out/old-md-3.3.tsv"
 # The raw dump has every peak field with 9 digits; the .cmp test compares against it.
 if [[ -n "${MD_RESULTS:-}" ]]; then cp "$work/raw.tsv" "$MD_RESULTS/raw.tsv"; fi
 # The .cmp files keep the default detector's results.

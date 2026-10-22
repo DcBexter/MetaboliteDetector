@@ -7,6 +7,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | Begriff | Bedeutung | Code |
 |---------|-----------|------|
 | **Run** | Ein GC-MS-Lauf: eine Datei (ANDI-MS `.cdf`, FastFlight, alter Cache) mit Scans, Zeiten und Spektren. | `md_core::Chromatogram` |
+| **Derivative cache** | Erste Ableitung von TIC/SIC, je Run einmal beim ersten Zeichnen berechnet; das SIC-Feld wird mit einem neuen SIC geleert. | `Run::d_tic`, `Run::d_sic` (md-app) |
 | **Scan** | Ein Spektrum zu einem Zeitpunkt des Runs; m/z innerhalb des Scans sortiert. | `Chromatogram` (flache Arrays mit Scan-Offsets) |
 | **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut. | `md_core::peaks::IonTraces`, `trace(row)` |
 | **Peak** | Ein Maximum in einem Ion trace mit Grenzen, Apex, interpoliertem Apex und S/N. | `md_core::peaks::Peak` |
@@ -26,4 +27,5 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`) |
 | **Legacy numeric** | Benannte Rundungen und Rechenwege, die 3.3 bit für bit nachbilden (C-Trunkierung, `round_sig`, glibc `pow`/`hypot`). | geplant: `md_core::legacy_numeric` (#365) |
 | **Golden test** | Vergleich der neuen Kette gegen Ergebnisse des alten Binary 3.3 auf den Beispiel-Runs. | `crates/md-core/tests/golden_old_md.rs` |
-| **Settings** | Die `AN_*`/`LS_*`-Parameter der Analyse; eine Quelle in md-core. | `md_core::settings::GcmsSettings`, `KEYS` (Key-Tabelle) |
+| **Stage fixture** | Zwischenausgabe einer Stufe von 3.3 (Peaks, Regionen, Components mit Modellpeak) je Beispiel-Run als TSV, für den Vergleich Stufe für Stufe. | `crates/md-core/tests/fixtures/legacy/`, Test `legacy_stages.rs` |
+| **Settings** | Die `AN_*`/`LS_*`-Parameter der Analyse; eine Quelle in md-core. | `md_core::settings::GcmsSettings`, `KEYS` (Key-Tabelle: Schlüssel, Anzeigetext, Bereich) |
