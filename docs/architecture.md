@@ -47,6 +47,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/centroid.rs       centroided and nominal-mass spectra (NetCDF and MSL export)
   src/fastflight.rs     FastFlight TOF raw data (MsData.FFT/.FFC) import; src/tof.rs: its m/z calibration (.mzcalib)
   src/quadfit.rs        clean-room parabola fit that reproduces the old rounding of precise apexes (gsl-clean-room.md)
+  src/legacy_numeric.rs the deliberate 3.3 roundings: C `(int)`, SG truncation, `roundSignificantFigures`, glibc pow(x, 2) and hypot
   src/library_add.rs    add a found component to a library, copy RTs into a target library
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
@@ -195,13 +196,18 @@ peaks of the example runs:
   `analyzeBaseline(values, 100)` statistics set the noise factor (§2.3). The noise factor and MAD of
   `analyzeBaseline` are not computed because the detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
-  to integers like the old int filters. S/N is not rounded to 8 significant digits.
+  to integers like the old int filters (`legacy_numeric::sg_trunc` and `c_int`, the x86 `(int)`
+  with `INT_MIN` out of range). S/N and sharpness are not rounded to 8 significant digits.
+- **Two `analyzeBaseline`.** The old program has two functions of that name: the peak detector's
+  (`peaks::trace_baseline`, segments of 15 scans accepted by slope) and the spectrum one
+  (`centroid::spectrum_baseline`, segments of 25 points accepted by mean crossings). They stay
+  separate; a test shows a ramp where they disagree.
 - **Precise apex: not a deviation.** The old app fits the parabola with `gsl_multifit_linear` in absolute
   bin coordinates; at an exact half-bin tie and on a flat top (three equal values) the fit's rounding
   decides the result. `quadfit` rebuilds that fit bit for bit from black-box outputs of the old binary,
   without GSL code (`docs/reverse-engineering/gsl-clean-room.md`), so ties and flat tops land where the
   old app puts them, for every bin count while bins × scan stays below 9.4e7. Above, the x² entry may
-  round differently from the old `pow` (shortcut in `quadfit.rs`).
+  round differently from the old `pow` (shortcut in `legacy_numeric::glibc_pow2`).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -235,8 +241,11 @@ Conscious deviations:
   detector, whose peaks can start at their apex.
 - **Collinear fits drop the peak.** The old code uses an SVD (`gsl_multifit_linear`), which also returns a
   minimum-norm fit when model and scan are collinear; here those peaks are skipped.
-- **Filter edges are zero-padded** (old edge handling unknown, §4.11), and `roundSignificantFigures` is
-  re-implemented (round to 8 significant digits).
+- **Filter edges are zero-padded** (old edge handling unknown, §4.11).
+- **Not a deviation: `roundSignificantFigures`.** `legacy_numeric::round_sig8` follows the old code
+  step by step: round half up to one digit more, then floor, so a share below 1 keeps 8 significant
+  digits and one from 1 up keeps 9. With it every model share, height and integral of the stage
+  fixtures matches (a plain round to 8 digits missed 1938 of 4366 shares by one unit).
 - **No `reorderPeaks`** (unit-mass data only, see peak detection).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
 
@@ -579,7 +588,7 @@ intermediate output for each of the 15 runs (default detector, static `AN_*` def
 `detectAllPeaks` in list order, every region of `detectComponents` (§4.5, rejected ones too, as peak
 lines), and every compound with its model peak and per-ion fit. `make-reference.sh --stages` writes them
 (the same driver, plus `stages.py`; format there), about 1.3 MB. `tests/legacy_stages.rs` compares
-`find_run_peaks` and `analyze_run` against them, in order:
+`find_run_peaks`, `deconv::component_regions` and `analyze_run` against them, in order:
 
 | Compared | Tolerance | Reason |
 |---|---|---|
@@ -587,10 +596,9 @@ lines), and every compound with its model peak and per-ion fit. `make-reference.
 | Interpolated apex | 5e-4 scan | md-core keeps it as f32 |
 | Peak S/N, quality, sharpness | 1e-6 relative | md-core computes them in f32 |
 | Component count, order, apex; model peak bounds and values | exact | integer sums |
-| Ion height | ±1 | as in the golden test |
-| Model share `c2` and ion integral | 2e-7 relative | 1938 of 4366 shares land on the neighbouring 8th digit (issue #365) |
-
-The regions are only recorded so far; md-core does not expose them.
+| Regions (`deconv::component_regions`): count, order, peak lines | exact | same algorithm; bin bounds not compared |
+| Ion height, model share `c2` | exact | `legacy_numeric::round_sig8` (#365) |
+| Ion integral | 5e-9 relative | the dump's 9 digits |
 
 The golden test found three porting errors in peak detection, now fixed:
 

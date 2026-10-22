@@ -2,6 +2,7 @@
 //! and `Spectrum<int,float>::getBinnedSpectrum` that the NetCDF export uses (algorithms.md §4.2).
 
 use crate::Chromatogram;
+use crate::legacy_numeric::c_int;
 use crate::settings::GcmsSettings;
 
 /// A centroided spectrum: one entry per detected peak.
@@ -55,24 +56,25 @@ const SEGMENT: usize = 25;
 fn slope(v: &[i32]) -> Vec<i32> {
     let mut d = vec![0; v.len()];
     for (k, w) in v.windows(5).enumerate() {
-        let [a, b, c, e, f] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
-        let _ = c;
-        d[k + 2] = ((-2.0 * a - b + e + 2.0 * f) / 10.0) as i32;
+        let [a, b, _, e, f] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
+        d[k + 2] = c_int((-2.0 * a - b + e + 2.0 * f) / 10.0);
     }
     d
 }
 
-struct Baseline {
-    mean: f64,
-    sd: f64,
+pub(crate) struct Baseline {
+    pub(crate) mean: f64,
+    pub(crate) sd: f64,
 }
 
 /// Old `SpectrumFunctions::analyzeBaseline<int>`: pooled mean and standard deviation of the
-/// non-overlapping segments of 25 points that cross their own mean at least 12 times.
+/// non-overlapping segments of 25 points that cross their own mean at least 12 times. The peak
+/// detector's function of the same name (`peaks::trace_baseline`) accepts segments by slope instead.
+/// Both pool alike in exact arithmetic but with different operation orders, so they stay separate.
 /// A spectrum shorter than a segment makes the old code fall back to segments of one point, whose
 /// variance is 0/0: the deviation is NaN, so no peak end is ever accepted. With no accepted
 /// segment at all, mean and deviation are 0.
-fn analyze_baseline(v: &[i32]) -> Baseline {
+pub(crate) fn spectrum_baseline(v: &[i32]) -> Baseline {
     if v.len() < SEGMENT {
         return Baseline {
             mean: 0.0,
@@ -126,7 +128,7 @@ pub fn centroid(mz: &[f32], intensity: &[i32], s: &CentroidSettings) -> Centroid
         return out;
     }
     let d = slope(v);
-    let base = analyze_baseline(v);
+    let base = spectrum_baseline(v);
     let mut i = 2;
     while i < n - 2 {
         if f64::from(d[i]) > s.threshold_begin {
@@ -191,7 +193,7 @@ fn peak(
     }
     out.mz.push((weighted / total) as f32);
     out.intensity
-        .push(w.iter().map(|y| f64::from(*y)).sum::<f64>() as i32);
+        .push(c_int(w.iter().map(|y| f64::from(*y)).sum::<f64>()));
     out.fwhm.push(count);
 }
 
@@ -204,7 +206,7 @@ pub fn nominal(mz: &[f32], intensity: &[i32], width: f32) -> (Vec<f32>, Vec<i32>
         return (bins, values);
     }
     let half = f64::from(width) / 2.0;
-    let centre = |m: f32| (((f64::from(m) + half) / f64::from(width)) as i32) as f32 * width;
+    let centre = |m: f32| c_int((f64::from(m) + half) / f64::from(width)) as f32 * width;
     let (mut bin, mut best) = (centre(mz[0]), intensity[0]);
     for i in 0..n {
         if f64::from(mz[i]) >= f64::from(bin) + half {

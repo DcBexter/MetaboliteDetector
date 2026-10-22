@@ -4,6 +4,7 @@
 use rayon::prelude::*;
 
 use crate::Chromatogram;
+use crate::legacy_numeric::{c_int, sg_trunc};
 
 /// The old `AN_*` settings; defaults are the old static values (file-formats.md §5.1).
 /// `AN_MAX_BASE_DEV` is not read by the old peak detector, so it has no field here.
@@ -213,7 +214,7 @@ fn centroid_scan(m: &[f32], v: &[f32], fwhm: f64, out: &mut Vec<(f32, f32)>) {
             (mz, sum)
         };
         if mz >= 0.0 {
-            out.push((mz as f32, (sum + 0.5).trunc() as f32)); // C `(int)` truncates
+            out.push((mz as f32, c_int(sum + 0.5) as f32));
         }
         i += 1;
     }
@@ -457,8 +458,8 @@ fn savitzky_golay(v: &[f32], smooth: &mut Vec<f32>, slope: &mut Vec<f32>) {
     slope.clear();
     slope.resize(n, 0.0);
     for (k, w) in v.windows(5).enumerate() {
-        let [a, b, c, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
-        smooth[k + 2] = ((-3.0 * (a + e) + 12.0 * (b + d) + 17.0 * c) / 35.0).trunc() as f32;
+        smooth[k + 2] = sg_trunc(w);
+        let [a, b, _, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
         slope[k + 2] = ((-2.0 * a - b + d + 2.0 * e) / 10.0) as f32;
     }
     (smooth[0], smooth[1]) = (smooth[2], smooth[2]);
@@ -470,10 +471,12 @@ struct Baseline {
     sd: f64,
 }
 
-/// Old `analyzeBaseline` (§2.1): pooled mean and standard deviation of the non-overlapping
-/// segments of `len` scans whose slopes all stay inside the peak thresholds. The old function
-/// also returns a noise factor and MAD, which the detector never reads, so they are not computed.
-fn analyze_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings) -> Baseline {
+/// Old `AbstractPeakDetector::analyzeBaseline<int,float>` (§2.1): pooled mean and standard deviation
+/// of the non-overlapping segments of `len` scans whose slopes all stay inside the peak thresholds.
+/// The old function also returns a noise factor and MAD, which the detector never reads, so they
+/// are not computed. Not the same as [`crate::centroid::spectrum_baseline`], the old spectrum
+/// function of the same name: that one accepts segments by mean crossings, not by slope.
+fn trace_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings) -> Baseline {
     let (mut count, mut mean, mut m2) = (0.0f64, 0.0f64, 0.0f64);
     let mut start = 0;
     while start + len < smooth.len() {
@@ -519,7 +522,7 @@ pub fn detect_peaks(
     }
     savitzky_golay(v, smooth, slope);
     let (sm, d) = (&smooth[..], &slope[..]);
-    let base = analyze_baseline(sm, d, 15, s);
+    let base = trace_baseline(sm, d, 15, s);
 
     let mut tailing = false;
     let mut i = 2;
@@ -859,7 +862,7 @@ fn matched_peaks(
     out: &mut Vec<Peak>,
 ) {
     for (i, y) in f.iter_mut().enumerate() {
-        *y = correlate(v, kernel, i).trunc() as f32;
+        *y = c_int(correlate(v, kernel, i)) as f32;
     }
     hold_edges(f, kernel.len() / 2);
     let thr = threshold as f32;
@@ -908,12 +911,8 @@ fn precise_apex(v: &[f32], first: usize, apex: usize, bins: u32) -> Option<f32> 
     let x = [-1.0, 0.0, 1.0].map(|k| bins * (scan + k));
     let y = [0, 1, 2].map(|k| v[apex - 1 + k] as f64);
     let c = crate::quadfit::quadratic(x, y);
-    let q = c[1] / (c[2] * -2.0) + 0.5;
-    // C's `(int)q`; outside the int range (or NaN) x86 gives INT_MIN, never within a scan.
-    if q.is_nan() || q.abs() >= 2_147_483_648.0 {
-        return None;
-    }
-    let t = q.trunc() / bins;
+    // Outside the int range (or NaN) `c_int` gives INT_MIN, never within a scan.
+    let t = f64::from(c_int(c[1] / (c[2] * -2.0) + 0.5)) / bins;
     ((t - scan).abs() < 1.0).then_some(t as f32)
 }
 
@@ -956,6 +955,25 @@ fn sharpness(w: &[f32], apex: usize, nu: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two old `analyzeBaseline` disagree on a slow ramp: its slope stays inside the trace
+    /// thresholds, but each segment crosses its own mean only once, so the spectrum one rejects all.
+    #[test]
+    fn trace_and_spectrum_baselines_differ() {
+        let ramp: Vec<i32> = (0..100).collect();
+        let spectrum = crate::centroid::spectrum_baseline(&ramp);
+        assert_eq!((spectrum.mean, spectrum.sd), (0.0, 0.0));
+        let v: Vec<f32> = ramp.iter().map(|x| *x as f32).collect();
+        let (mut smooth, mut slope) = (Vec::new(), Vec::new());
+        savitzky_golay(&v, &mut smooth, &mut slope);
+        let trace = trace_baseline(&smooth, &slope, 15, &PeakSettings::default());
+        // Segments 0..15 to 75..90 of the smoothed ramp (its two first values copy the third).
+        assert!(
+            (trace.mean - 44.5).abs() < 0.1 && trace.sd > 20.0,
+            "{}",
+            trace.mean
+        );
+    }
 
     #[test]
     fn precise_apex_breaks_ties_like_the_old_fit() {
