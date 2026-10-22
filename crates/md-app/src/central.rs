@@ -329,6 +329,10 @@ impl App {
             ui.add_space(ui.available_height() / 3.0);
             if !self.loading.is_empty() {
                 ui.spinner();
+                // Dropping the jobs cancels them.
+                if ui.button(t("Cancel", "Abbrechen")).clicked() {
+                    (self.loading, self.load_started) = (Vec::new(), None);
+                }
                 return;
             }
             ui.label(t(

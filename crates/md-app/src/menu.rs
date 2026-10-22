@@ -2,9 +2,9 @@
 
 use eframe::egui;
 
-use crate::App;
-use crate::lang::{t, tf};
+use crate::lang::{Msg, t, tf};
 use crate::shortcuts::{Action, REPO};
+use crate::{App, Job};
 
 impl App {
     pub fn menu_bar(&mut self, ui: &mut egui::Ui) {
@@ -282,26 +282,32 @@ impl App {
             let Some(r) = self.runs.get(self.active) else {
                 return;
             };
-            if ui.button(label).on_hover_text(hint).clicked()
+            if ui
+                .add_enabled(self.export_job.is_none(), egui::Button::new(label))
+                .on_hover_text(hint)
+                .clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("NetCDF (ANDI-MS)", &["cdf"])
                     .set_file_name(format!("{}{}.cdf", r.name, kind.suffix()))
                     .save_file()
             {
-                // shortcut: writes on the UI thread (~0.2 s per 10M points); spawn if runs grow.
-                let result = if kind == ExportKind::Profile {
-                    md_core::andi::write(&path, &r.data)
-                } else {
-                    let reduced = reduce(
-                        &r.data,
-                        kind,
-                        &CentroidSettings::from(&self.settings.applied),
-                    );
-                    md_core::andi::write_with_tic(&path, &reduced, &r.data.tic())
-                };
-                self.error = result
-                    .err()
-                    .map(|e| format!("{}: {e}", path.display()).into());
+                let (data, s) = (
+                    r.data.clone(),
+                    CentroidSettings::from(&self.settings.applied),
+                );
+                self.export_job = Some(Job::spawn(ui.ctx(), move |_, cancel| {
+                    // The write itself cannot be interrupted (~0.2 s per 10M points).
+                    if cancel.is_cancelled() {
+                        return Ok(());
+                    }
+                    let result = if kind == ExportKind::Profile {
+                        md_core::andi::write(&path, &data)
+                    } else {
+                        let reduced = reduce(&data, kind, &s);
+                        md_core::andi::write_with_tic(&path, &reduced, &data.tic())
+                    };
+                    result.map_err(|e| Msg::from(format!("{}: {e}", path.display())))
+                }));
                 ui.close();
             }
         }

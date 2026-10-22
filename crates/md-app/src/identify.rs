@@ -4,9 +4,10 @@
 //! selected component on request only (old "NIST search...").
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use eframe::egui;
+use md_core::job::Cancel;
 use md_core::library::LibraryCompound;
 use md_core::ri::RiCalibration;
 use md_core::search::{
@@ -16,7 +17,7 @@ use md_core::search::{
 
 use crate::lang::{t, tf};
 use crate::settings::Pick;
-use crate::{App, Run, poll_job, spawn};
+use crate::{App, Job, Run};
 
 pub struct Library {
     pub path: PathBuf,
@@ -60,8 +61,12 @@ pub fn is_library(path: &Path) -> bool {
     }) || md_core::library::is_targetsearch(path)
 }
 
-fn load(path: &Path, s: SearchSettings, nist: bool) -> Result<Library, String> {
+/// Reads and prepares a library. The read cannot be interrupted; `cancel` stops before the preparation.
+fn load(path: &Path, s: SearchSettings, nist: bool, cancel: &Cancel) -> Result<Library, String> {
     let compounds = md_core::library::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if cancel.is_cancelled() {
+        return Err("cancelled".into());
+    }
     Ok(Library {
         path: path.to_path_buf(),
         name: path
@@ -189,7 +194,9 @@ impl App {
 
     pub fn open_library(&mut self, ctx: &egui::Context, path: PathBuf) {
         let s = self.settings.applied.search();
-        self.library_job = Some(spawn(ctx, move || load(&path, s, false).map(Arc::new)));
+        self.library_job = Some(Job::spawn(ctx, move |_, c| {
+            load(&path, s, false, c).map(Arc::new)
+        }));
     }
 
     pub fn open_nist_button(&mut self, ui: &mut egui::Ui) {
@@ -208,14 +215,16 @@ impl App {
     pub fn open_nist(&mut self, ctx: &egui::Context, path: PathBuf) {
         let s = self.settings.applied.search();
         self.nist.hits = None;
-        self.nist.job = Some(spawn(ctx, move || load(&path, s, true).map(Arc::new)));
+        self.nist.job = Some(Job::spawn(ctx, move |_, c| {
+            load(&path, s, true, c).map(Arc::new)
+        }));
     }
 
     /// Takes a loaded NIST library and prepares it again when the search settings change.
     pub fn update_nist(&mut self, ctx: &egui::Context) {
         let wanted = self.settings.applied.search();
-        if let Some(rx) = &self.nist.job
-            && let Some(result) = poll_job(rx, || t("NIST library", "NIST-Bibliothek").into())
+        if let Some(job) = &self.nist.job
+            && let Some(result) = job.poll(|| t("NIST library", "NIST-Bibliothek").into())
         {
             match result {
                 Ok(Ok(lib)) => {
@@ -237,7 +246,7 @@ impl App {
         {
             let lib = lib.clone();
             self.nist.hits = None;
-            self.nist.job = Some(spawn(ctx, move || {
+            self.nist.job = Some(Job::spawn(ctx, move |_, _| {
                 Ok(Arc::new(reprepare(&lib, wanted, false, true)))
             }));
         }
@@ -288,8 +297,8 @@ impl App {
     /// Takes a loaded library and (re)identifies every run that was not searched with the current
     /// library, RI calibration and reference.
     pub fn update_identification(&mut self, ctx: &egui::Context) {
-        if let Some(rx) = &self.library_job
-            && let Some(result) = poll_job(rx, || t("library search", "Bibliothekssuche").into())
+        if let Some(job) = &self.library_job
+            && let Some(result) = job.poll(|| t("library search", "Bibliothekssuche").into())
         {
             match result {
                 Ok(Ok(lib)) => self.library = Some(lib),
@@ -311,7 +320,7 @@ impl App {
             if self.library_job.is_none() && self.library_failed.as_ref() != Some(&wanted) {
                 let lib = lib.clone();
                 let filter = md_core::library::is_nist(&lib.path);
-                self.library_job = Some(spawn(ctx, move || {
+                self.library_job = Some(Job::spawn(ctx, move |_, _| {
                     Ok(Arc::new(reprepare(&lib, wanted, rt_only, filter)))
                 }));
             }
@@ -331,8 +340,8 @@ impl App {
                     && k.1.as_ref().map(Arc::as_ptr) == cal.as_ref().map(Arc::as_ptr)
                     && k.2 == reference
             };
-            if let Some((k, rx)) = &run.ident_job
-                && let Some(result) = poll_job(rx, || {
+            if let Some((k, job)) = &run.ident_job
+                && let Some(result) = job.poll(|| {
                     let name = &run.name;
                     tf!("{name}: identification", "{name}: Identifizierung")
                 })
@@ -356,7 +365,7 @@ impl App {
             {
                 let key: Key = (lib.clone(), cal.clone(), reference);
                 let (k, comps, times) = (key.clone(), run.components.clone(), run.data.clone());
-                let rx = spawn(ctx, move || {
+                let job = Job::spawn(ctx, move |_, _| {
                     let (lib, times, s) =
                         (&k.0.prepared, &times.scan_times_s, k.0.settings.clone());
                     let shifted = k.1.as_ref().zip(k.2).and_then(|(c, (r, cutoff))| {
@@ -367,7 +376,7 @@ impl App {
                     let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s);
                     (id, shifted)
                 });
-                run.ident_job = Some((key, rx));
+                run.ident_job = Some((key, job));
             }
         }
     }
@@ -491,8 +500,8 @@ pub fn nist_list(ui: &mut egui::Ui, run: &Run, k: usize, nist: &Nist) -> bool {
     clicked
 }
 
-pub type LibraryJob = mpsc::Receiver<Result<Arc<Library>, String>>;
-pub type IdentJob = (Key, mpsc::Receiver<(Identification, Option<RiCalibration>)>);
+pub type LibraryJob = Job<Result<Arc<Library>, String>>;
+pub type IdentJob = (Key, Job<(Identification, Option<RiCalibration>)>);
 
 /// Which labels stay visible when they are drawn left-aligned at `starts` (pixels) with the
 /// given `widths`: the highest score wins, a label overlapping a kept one is hidden.
@@ -517,13 +526,32 @@ pub fn visible_labels(starts: &[f32], widths: &[f32], scores: &[f64]) -> Vec<boo
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_cancelled_library_load_stops_before_preparing() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
+        let s = App::default().settings.applied.search();
+        let cancel = Cancel::default();
+        cancel.cancel();
+        assert_eq!(
+            load(&path, s, true, &cancel).err().as_deref(),
+            Some("cancelled")
+        );
+    }
+
     /// NIST search fills its own hit list for the selected component; the library hits stay.
     #[test]
     fn nist_search_keeps_the_library_hits() {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
         let mut app = App::default();
-        let nist = load(&path, app.settings.applied.search(), true).unwrap();
+        let nist = load(
+            &path,
+            app.settings.applied.search(),
+            true,
+            &Cancel::default(),
+        )
+        .unwrap();
         let alpha = &nist.compounds[0].spectrum;
         let mut run = crate::results::tests::run();
         run.component = Some(0);

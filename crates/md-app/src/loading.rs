@@ -1,13 +1,13 @@
 //! Opening files and keeping the per-run background results (loading, SIC) up to date.
 
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
 
-use crate::lang::{Msg, msg};
-use crate::{App, Run, poll_job, settings, spawn};
+use crate::lang::{Msg, msg, t};
+use crate::{App, Job, Run, settings};
 
 impl App {
     /// Every file loads on its own thread, so many runs load in parallel.
@@ -15,7 +15,7 @@ impl App {
         let p = path.clone();
         let key = self.settings.key();
         let correct = self.settings.applied.baseline_correction;
-        let rx = spawn(ctx, move || {
+        let job = Job::spawn(ctx, move |_, cancel| {
             md_core::read_run(&p)
                 .map(|mut data| {
                     data.set_baseline_correction(correct);
@@ -23,6 +23,8 @@ impl App {
                 })
                 .and_then(|data| match data.scan_count() {
                     0 => Err("no scans".into()),
+                    // The read itself cannot be interrupted; the analysis after it is not started.
+                    _ if cancel.is_cancelled() => Err("cancelled".into()),
                     _ => {
                         // Results the old program saved next to the run replace the analysis
                         // until the settings change. A broken side file only gives a warning.
@@ -34,7 +36,7 @@ impl App {
                             });
                         let (components, peak_masses, peaks) = match saved {
                             Some(saved) => saved,
-                            None => settings::analyze(&data, &key)?,
+                            None => settings::analyze(&data, &key, cancel)?,
                         };
                         let saved_calibration =
                             md_core::ri::saved_calibration(&p).unwrap_or_else(|e| {
@@ -68,7 +70,7 @@ impl App {
                 .map_err(|e| Msg::from(format!("{}: {e}", p.display())))
         });
         self.load_started.get_or_insert_with(Instant::now);
-        self.loading.push((path, rx));
+        self.loading.push((path, job));
     }
 
     pub fn poll_loading(&mut self) {
@@ -76,9 +78,9 @@ impl App {
             self.runs.len(),
             self.runs.get(self.active).map(|r| r.path.clone()),
         );
-        self.loading.retain(|(_, rx)| {
-            match rx.try_recv() {
-                Ok(Ok((mut run, warnings))) => {
+        self.loading.retain(|(path, job)| {
+            match job.poll(|| format!("{}: {}", path.display(), t("opening", "Öffnen"))) {
+                Some(Ok(Ok((mut run, warnings)))) => {
                     if let Some(cal) = run.saved_calibration.take() {
                         self.ri.set_own(run.path.clone(), cal);
                     }
@@ -91,11 +93,8 @@ impl App {
                     self.saved.remember(run.path.clone());
                     self.runs.push(run);
                 }
-                Ok(Err(e)) => self.error = Some(e),
-                Err(mpsc::TryRecvError::Empty) => return true,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.error = Some(msg!("loader crashed", "Laden abgestürzt"))
-                }
+                Some(Ok(Err(e)) | Err(e)) => self.error = Some(e),
+                None => return true,
             }
             false
         });
@@ -127,8 +126,8 @@ impl App {
     pub fn update_sics(&mut self, ctx: &egui::Context) {
         let key = (self.mz, self.tolerance);
         for run in &mut self.runs {
-            if let Some((k, rx)) = &run.sic_job
-                && let Some(result) = poll_job(rx, || format!("{}: SIC", run.name))
+            if let Some((k, job)) = &run.sic_job
+                && let Some(result) = job.poll(|| format!("{}: SIC", run.name))
             {
                 // A crashed SIC is not retried for this key; the trace stays empty.
                 let sic = result.unwrap_or_else(|e| {
@@ -140,7 +139,7 @@ impl App {
             }
             if run.sic_for != Some(key) && run.sic_job.as_ref().map(|j| j.0) != Some(key) {
                 let data = run.data.clone();
-                run.sic_job = Some((key, spawn(ctx, move || data.sic(key.0, key.1))));
+                run.sic_job = Some((key, Job::spawn(ctx, move |_, _| data.sic(key.0, key.1))));
             }
         }
     }
