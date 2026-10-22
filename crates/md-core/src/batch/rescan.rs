@@ -4,17 +4,18 @@
 //! (old `LS_RI_DIFF`); pinned behaviour: docs/reverse-engineering/batch-quantification.md.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+use crate::job::Cancel;
 
 use super::{
     Found, IonPeak, QuantSettings, RunResult, ScanSettings, compound_ions, compound_of,
     hits_by_compound,
 };
 use crate::Chromatogram;
-use crate::analysis::{PeakPass, RunPeaks, find_run_peaks};
+use crate::analysis::{AnalyzeError, PeakPass, RunPeaks, find_run_peaks};
 use crate::deconv::{DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
-use crate::peaks::TooLarge;
 use crate::ri::RiCalibration;
 
 /// One substance of one run with quant ions to look for, and where.
@@ -45,7 +46,7 @@ pub fn rescan_runs(
     s: &ScanSettings,
     q: &QuantSettings,
     parallel: usize,
-    cancel: &AtomicBool,
+    cancel: &Cancel,
 ) -> Option<(usize, Vec<String>)> {
     // A `.cmp` input has no raw data to look into.
     let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, s.search.ri_diff).into_iter())
@@ -58,15 +59,16 @@ pub fn rescan_runs(
             .map(|_| {
                 scope.spawn(|| {
                     let mut mine = Vec::new();
-                    while !cancel.load(Relaxed) {
+                    while !cancel.is_cancelled() {
                         let Some((i, todo)) = work.get(next.fetch_add(1, Relaxed)) else {
                             break;
                         };
                         let path = &paths[*i];
                         // A panic in one file becomes its error, so the other files are kept.
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            super::read_scan_run(path, s)
-                                .and_then(|c| rescan_run(c, todo, s).map_err(|e| e.to_string()))
+                            super::read_scan_run(path, s).and_then(|c| {
+                                rescan_run(c, todo, s, cancel).map_err(|e| e.to_string())
+                            })
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
                         .map_err(|e| format!("{}: {e}", path.display()));
@@ -81,7 +83,7 @@ pub fn rescan_runs(
             .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
             .collect()
     });
-    if cancel.load(Relaxed) {
+    if cancel.is_cancelled() {
         return None;
     }
     done.sort_by_key(|d| d.0);
@@ -202,14 +204,19 @@ fn span(v: &[f64]) -> (f64, f64, f64) {
     (lo, hi, v.iter().sum::<f64>() / v.len() as f64)
 }
 
-fn rescan_run(c: Chromatogram, todo: &[Todo], s: &ScanSettings) -> Result<Vec<Rescued>, TooLarge> {
+fn rescan_run(
+    c: Chromatogram,
+    todo: &[Todo],
+    s: &ScanSettings,
+    cancel: &Cancel,
+) -> Result<Vec<Rescued>, AnalyzeError> {
     // Fresh, not Reordered: the old rescan (`ResultSeries::scanIons`) builds a fresh
     // `DefaultPeakDetector` and never calls `reorderPeaks` (reverse-engineering/algorithms.md:268).
     let RunPeaks {
         traces,
         times,
         peaks,
-    } = find_run_peaks(c, &s.peaks, PeakPass::Fresh)?;
+    } = find_run_peaks(c, &s.peaks, PeakPass::Fresh, cancel)?;
     let at = |k: usize| times[peaks[k].apex_scan as usize];
     let mut by_row: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (k, p) in peaks.iter().enumerate() {
@@ -329,7 +336,7 @@ mod tests {
             expected: 50.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
+        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1[0].mass, 73);
         assert!((out[0].2 - 50.0).abs() <= 1.0, "{}", out[0].2);
@@ -348,11 +355,11 @@ mod tests {
             calibration: None,
         };
         let c = run(80, &[73.0], &[(0, 31.0, 50000.0), (0, 38.0, 50000.0)]);
-        let out = rescan_run(c, &[todo()], &ScanSettings::default()).unwrap();
+        let out = rescan_run(c, &[todo()], &ScanSettings::default(), &Cancel::default()).unwrap();
         assert!((out[0].2 - 31.0).abs() <= 1.0, "{}", out[0].2);
         // On equal distance the higher peak wins.
         let c = run(80, &[73.0], &[(0, 30.0, 20000.0), (0, 38.0, 50000.0)]);
-        let out = rescan_run(c, &[todo()], &ScanSettings::default()).unwrap();
+        let out = rescan_run(c, &[todo()], &ScanSettings::default(), &Cancel::default()).unwrap();
         assert!((out[0].2 - 38.0).abs() <= 1.0, "{}", out[0].2);
     }
 
@@ -371,7 +378,7 @@ mod tests {
             expected: 30.0,
             calibration: Some(cal),
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
+        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
         assert!((out[0].2 - 20.0).abs() <= 1.0, "{}", out[0].2);
     }
 
@@ -390,14 +397,14 @@ mod tests {
         let s = ScanSettings::default();
         // Alone, the weak peak has a fit and wins.
         let c = run(80, &[73.047, 73.08], &[(1, 41.0, 3000.0)]);
-        let out = rescan_run(c, std::slice::from_ref(&todo), &s).unwrap();
+        let out = rescan_run(c, std::slice::from_ref(&todo), &s, &Cancel::default()).unwrap();
         assert!((out[0].2 - 41.0).abs() <= 0.5, "{}", out[0].2);
         let c = run(
             80,
             &[73.047, 73.08],
             &[(0, 42.0, 50000.0), (1, 41.0, 3000.0)],
         );
-        let out = rescan_run(c, &[todo], &s).unwrap();
+        let out = rescan_run(c, &[todo], &s, &Cancel::default()).unwrap();
         assert!((out[0].2 - 42.0).abs() <= 0.5, "{}", out[0].2);
         assert!(out[0].1[0].integral > 100_000.0, "{}", out[0].1[0].integral);
     }
@@ -430,7 +437,7 @@ mod tests {
             expected: 40.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &s).unwrap();
+        let out = rescan_run(c, &[todo], &s, &Cancel::default()).unwrap();
         assert_eq!(out[0].1[0].integral, raw);
         assert!((out[0].2 - 40.0).abs() <= 0.5, "{}", out[0].2);
     }
@@ -456,7 +463,7 @@ mod tests {
             expected: 313.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default()).unwrap();
+        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
         assert!((out[0].2 - apex).abs() < 0.11, "{} vs {apex}", out[0].2);
     }
 

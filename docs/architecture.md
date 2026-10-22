@@ -32,6 +32,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/analysis.rs       analyze run: ion traces, peaks (PeakPass) and deconvolution of one run, the one
                         chain behind the app, the batch and its rescan
+  src/job.rs            `Cancel` (cooperative stop flag) and `Progress` (done/total steps) of long jobs
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file,
                         binary RICalculator record
@@ -67,7 +68,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/plot_export.rs    save a plot as PNG, SVG or PDF, or copy it; src/vector.rs writes the SVG/PDF from the frame's shapes
   src/tof_calibration.rs TOF calibration window (FastFlight m/z, saves .mzcalib)
   src/loading.rs        opening files, load polling, SIC jobs
-  src/jobs.rs           `spawn` and `poll_job` for background threads
+  src/jobs.rs           `Job<T>`: a worker thread with `Progress`, `Cancel` and panic report; dropping it cancels
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
@@ -113,7 +114,8 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
 1. **Compact storage.** Spectra are flat `f32` arrays with scan offsets (≈ 8 bytes per data point),
    matching the old `GCMSDiskScan<int, float>`. Accumulate sums in `f64`.
 2. **Never block the UI.** File loading and every analysis step run on worker threads; the UI polls
-   results and shows progress. Long jobs must be cancellable.
+   results and shows progress. Long jobs must be cancellable: every background job is a `jobs::Job`
+   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, so one md-core call (file read or write, summing a run) runs to its end; closing a job's window or dropping the `Job` discards its result.
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
@@ -362,7 +364,7 @@ Conscious deviations:
 passes. `scan_runs` reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
 a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
 `parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
-well. Progress is an atomic counter, cancelling stops before the next file, unreadable files are listed
+well. Progress and cancel are `md_core::job::Progress` and `Cancel`; cancelling stops before the next file, unreadable files are listed
 and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
 rescan:
 
@@ -785,7 +787,11 @@ against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0
 ## Settings
 
 `md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
-converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. It reads and writes the old settings
+converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. One const table, `settings::KEYS` (old key,
+accessor, range, fixed slot in the old file; no macro), drives the app's `KEY=value` lines (`set`, `lines`), the
+old file's fixed-size fields, `validate` (`sanitized` resets the bad ones) and the ranges of the Settings window
+(`limits`); a new value is one table row plus its struct field and default. `an_number_bins` is read once
+(`number_bins`) for both `peak()` and `deconv()`. It reads and writes the old settings
 file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because algorithms.md §1 reports
 one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
 every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read
@@ -821,7 +827,7 @@ language other than the system's; without it the app follows the system language
 S8, #257. `md-app/src/lang.rs`: every UI text is an English/German pair at its call site, `lang::t` for
 fixed texts and `lang::tf!` for formatted ones, so no text can miss a language. The language is per
 thread (a thread starts in English, so parallel tests do not see each other's choice); `main` sets the
-system language (`sys-locale`), `persist` the saved one, and `jobs::spawn` hands it to its worker. CSV
+system language (`sys-locale`), `persist` the saved one, and `Job::spawn` hands it to its worker. CSV
 headers, file contents, default file names and saved keys stay English literals; where md-core's English
 text is shown (`Normalization::label`, "No match: N") md-app translates at the display site. A window
 whose title is translated keeps the English title as its id. `every_ui_text_is_translated` scans the
@@ -854,7 +860,7 @@ the window". Each step draws a building block of the expert window (`Calibration
 string of the module is in `guided::text` for the translation (S8).
 
 Every value is checked at start: a bad value keeps its default, and each field `GcmsSettings::validate`
-names falls back to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
+names falls back (`sanitized`, in md-core) to its default until the settings pass. Then, or when eframe could not parse `app.ron` (our
 key is missing from an existing file), the file is copied to `app.ron.<unix s>.bak` and the Settings window
 opens with the message. A library that is missing at start (a drive not mounted) is not opened but kept.
 Paths are saved absolute; a recent run that is clicked leaves the list until it loads again.

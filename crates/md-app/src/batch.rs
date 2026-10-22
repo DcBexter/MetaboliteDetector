@@ -3,8 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::errors;
@@ -25,18 +24,15 @@ use md_core::ri::RiCalibration;
 use md_core::settings::GcmsSettings;
 use md_core::view::{self, BatchView, BatchViewCache, Line, Mode, Stat, Title};
 
+use crate::Job;
 use crate::identify::Library;
-use crate::spawn;
 
 type Scanned = Option<(Vec<RunResult>, Vec<String>, Completed)>;
 
-struct Job {
-    total: usize,
-    done: Arc<AtomicUsize>,
-    cancel: Arc<AtomicBool>,
+struct Running {
     started: Instant,
     lib: Arc<Library>,
-    rx: mpsc::Receiver<Scanned>,
+    job: Job<Scanned>,
 }
 
 struct Scan {
@@ -199,7 +195,7 @@ pub struct Batch {
     applied: GcmsSettings,
     /// Whether the search is by retention time only (Analysis → RI calibration).
     rt_only: bool,
-    job: Option<Job>,
+    job: Option<Running>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
     table: Option<(TableSettings, Result<Table, String>)>,
@@ -217,7 +213,7 @@ pub struct Batch {
     times: Option<(Vec<i64>, usize)>,
     note: Msg,
     /// FRAG export being written; its note replaces `note` when done.
-    frag_job: Option<mpsc::Receiver<Msg>>,
+    frag_job: Option<Job<Msg>>,
 }
 
 /// A loaded sample table and the two columns that give run and group.
@@ -585,14 +581,14 @@ impl Batch {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(rx) = &self.frag_job
-            && let Some(r) = crate::poll_job(rx, || lang::t("MID export", "MID-Export").into())
+        if let Some(job) = &self.frag_job
+            && let Some(r) = job.poll(|| lang::t("MID export", "MID-Export").into())
         {
             (self.note, self.frag_job) = (r.unwrap_or_else(|e| e), None);
         }
         let Some(job) = &self.job else { return };
-        match job.rx.try_recv() {
-            Ok(Some((runs, mut errors, done))) => {
+        match job.job.poll(|| lang::t("Batch", "Der Batch").into()) {
+            Some(Ok(Some((runs, mut errors, done)))) => {
                 errors.extend(done.errors);
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
@@ -605,15 +601,13 @@ impl Batch {
                 });
                 (self.table, self.note) = (None, Msg::default());
             }
-            Ok(None) => self.note = msg!("Cancelled.", "Abgebrochen."),
-            Err(mpsc::TryRecvError::Empty) => {
+            Some(Ok(None)) => self.note = msg!("Cancelled.", "Abgebrochen."),
+            None => {
                 // Keeps the progress bar moving.
                 ctx.request_repaint_after(Duration::from_millis(200));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.note = msg!("Batch crashed.", "Batch abgestürzt.")
-            }
+            Some(Err(e)) => self.note = e,
         }
         self.job = None;
     }
@@ -625,10 +619,6 @@ impl Batch {
         cal: Option<&RiCalibration>,
         reference: Option<(&str, f64)>,
     ) {
-        let (done, cancel) = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicBool::new(false)),
-        );
         let s = ScanSettings {
             // Like the single-run search: only a substance with an RI can be the reference.
             shift: cal
@@ -641,25 +631,26 @@ impl Batch {
         };
         let rescan = self.options.rescan;
         let quant = self.settings.quant.clone();
-        let (paths, l, d, c, parallel) = (
-            self.paths.clone(),
-            lib.clone(),
-            done.clone(),
-            cancel.clone(),
-            self.parallel,
-        );
-        let rx = spawn(ctx, move || {
-            let (mut runs, errors) = scan_runs(&paths, &l.prepared, &s, parallel, &d, &c)?;
-            let more = complete_scan(&mut runs, &l.compounds, &s, &quant, rescan, parallel, &c)?;
+        let (paths, l, parallel) = (self.paths.clone(), lib.clone(), self.parallel);
+        let total = paths.len();
+        let job = Job::spawn(ctx, move |done, cancel| {
+            let (mut runs, errors) = scan_runs(&paths, &l.prepared, &s, parallel, done, cancel)?;
+            let more = complete_scan(
+                &mut runs,
+                &l.compounds,
+                &s,
+                &quant,
+                rescan,
+                parallel,
+                cancel,
+            )?;
             Some((runs, errors, more))
         });
-        self.job = Some(Job {
-            total: self.paths.len(),
-            done,
-            cancel,
+        job.progress.set_total(total);
+        self.job = Some(Running {
             started: Instant::now(),
             lib: lib.clone(),
-            rx,
+            job,
         });
     }
 
@@ -855,6 +846,7 @@ impl Batch {
             });
             crate::settings::ranges(
                 ui,
+                "QUANT_EXCL_IONS",
                 lang::t(
                     "Ions avoided as quant ions",
                     "Als Quant-Ionen gemiedene Ionen",
@@ -883,20 +875,20 @@ impl Batch {
     ) {
         ui.horizontal(|ui| match &self.job {
             Some(job) => {
-                let d = job.done.load(Relaxed);
-                let text = match d >= job.total {
+                let (d, total) = (job.job.progress.done(), job.job.progress.total());
+                let text = match d >= total {
                     // Pooling and the rescan run after the last file.
                     true => lang::t("pooling and rescanning…", "zusammenfassen und erneut suchen…")
                         .into(),
-                    false => tf!("{d} / {} runs", "{d} / {} Läufe", job.total),
+                    false => tf!("{d} / {} runs", "{d} / {} Läufe", total),
                 };
                 ui.add(
-                    egui::ProgressBar::new(d as f32 / job.total.max(1) as f32)
+                    egui::ProgressBar::new(d as f32 / total.max(1) as f32)
                         .text(text)
                         .desired_width(300.0),
                 );
                 if ui.button(lang::t("Cancel", "Abbrechen")).clicked() {
-                    job.cancel.store(true, Relaxed);
+                    job.job.cancel.cancel();
                 }
             }
             None => {
@@ -1142,7 +1134,7 @@ impl Batch {
 
 /// "Export MIDs" of the old batch table: isotopomer shares of the fragments in each shown
 /// substance's `FRAG` feature, written on a worker thread that sends back a note.
-fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiver<Msg>> {
+fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<Job<Msg>> {
     if !ui
         .button(lang::t("Export MIDs (FRAG)…", "MIDs exportieren (FRAG)…"))
         .on_hover_text(lang::t(
@@ -1160,7 +1152,7 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<mpsc::Receiv
     let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
     let sources = t.sources.clone();
     let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
-    Some(spawn(ui.ctx(), move || {
+    Some(Job::spawn(ui.ctx(), move |_, _| {
         let n = lib.compounds.len();
         // Unknowns of an untargeted scan follow the library's entries.
         let compounds: Vec<(usize, &LibraryCompound)> = (rows.into_iter())

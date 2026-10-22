@@ -8,8 +8,8 @@
 //! shortcut: the old code builds one library per replicate group and merges those; the port pools all
 //! runs into one library and leaves the groups to `table`. Upgrade if group-wise libraries matter.
 
+use crate::job::Cancel;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
@@ -26,12 +26,12 @@ pub fn add_unknowns(
     runs: &mut [RunResult],
     first_index: usize,
     s: &ScanSettings,
-    cancel: &AtomicBool,
+    cancel: &Cancel,
 ) -> Option<Vec<LibraryCompound>> {
     let mut lib: Vec<LibraryCompound> = Vec::new();
     let mut prepared = PreparedLibrary::new(&[], &s.search);
     for run in runs {
-        if cancel.load(Relaxed) {
+        if cancel.is_cancelled() {
             return None;
         }
         let unknown = std::mem::take(&mut run.unknown);
@@ -157,12 +157,7 @@ mod tests {
                 .build()
                 .unwrap()
                 .install(|| {
-                    add_unknowns(
-                        &mut runs,
-                        3,
-                        &ScanSettings::default(),
-                        &AtomicBool::new(false),
-                    )
+                    add_unknowns(&mut runs, 3, &ScanSettings::default(), &Cancel::default())
                 })
                 .unwrap();
             (lib, runs.into_iter().map(|r| r.found).collect::<Vec<_>>())
@@ -182,13 +177,7 @@ mod tests {
         let mut runs: Vec<RunResult> = [(10.0, None), (20.0, Some(100.0)), (30.0, Some(110.0))]
             .map(|(t, ri)| run(vec![with_ri(t, ri)]))
             .into();
-        let lib = add_unknowns(
-            &mut runs,
-            0,
-            &ScanSettings::default(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let lib = add_unknowns(&mut runs, 0, &ScanSettings::default(), &Cancel::default()).unwrap();
         assert_eq!(lib.len(), 1);
         // The first known RI is taken over; the next is weighted by the two spectra so far.
         assert!((lib[0].spectrum.ri - (2.0 * 100.0 + 110.0) / 3.0).abs() < 1e-9);
@@ -209,13 +198,7 @@ mod tests {
                 unknown(20.0, &b),
             ]),
         ];
-        let lib = add_unknowns(
-            &mut runs,
-            5,
-            &ScanSettings::default(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let lib = add_unknowns(&mut runs, 5, &ScanSettings::default(), &Cancel::default()).unwrap();
         assert_eq!(lib.len(), 2);
         let groups: Vec<usize> = runs[1].found.iter().map(|f| f.compound).collect();
         assert_eq!(groups, [6, 5]);

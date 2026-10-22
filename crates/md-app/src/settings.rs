@@ -5,7 +5,6 @@
 use std::io::Read;
 use std::ops::RangeInclusive;
 use std::path::Path;
-use std::sync::mpsc;
 
 use crate::errors;
 use crate::lang::{Msg, msg, t, tf};
@@ -14,10 +13,11 @@ use eframe::egui;
 use md_core::Chromatogram;
 use md_core::analysis::{PeakPass, analyze_run};
 use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
+use md_core::job::Cancel;
 use md_core::peaks::{Detector, Peak, PeakSettings};
-use md_core::settings::{GcmsSettings, MAX_LEN};
+use md_core::settings::{ANY, GcmsSettings, MAX_LEN, limits};
 
-use crate::{Run, spawn};
+use crate::{Job, Run};
 
 /// What the components of a run were computed with.
 pub type Key = (PeakSettings, DeconvSettings);
@@ -78,7 +78,7 @@ type Analyzed = Result<(Vec<Component>, Vec<u32>, Vec<Peak>), String>;
 pub struct Analysis {
     /// Settings behind `Run::components`.
     pub key: Option<Key>,
-    job: Option<(Key, mpsc::Receiver<Analyzed>)>,
+    job: Option<(Key, Job<Analyzed>)>,
 }
 
 impl Analysis {
@@ -95,9 +95,9 @@ impl Analysis {
 }
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
-pub fn analyze(data: &Chromatogram, key: &Key) -> Analyzed {
-    let mut a =
-        analyze_run(data, &key.0, &key.1, PeakPass::Reordered).map_err(|e| e.to_string())?;
+pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
+    let mut a = analyze_run(data, &key.0, &key.1, PeakPass::Reordered, cancel)
+        .map_err(|e| e.to_string())?;
     a.components.sort_by_key(|k| k.apex_scan);
     Ok((a.components, a.masses, a.peaks))
 }
@@ -134,9 +134,10 @@ impl Settings {
                 (run.sic_for, run.sic_job) = (None, None);
             }
             let a = &mut run.analysis;
-            if let Some((key, rx)) = &a.job {
-                match rx.try_recv() {
-                    Ok(result) => {
+            if let Some((key, job)) = &a.job {
+                let what = || format!("{}: {}", run.name, t("analysis", "Analyse"));
+                match job.poll(what) {
+                    Some(Ok(result)) => {
                         match result {
                             Ok((components, masses, peaks)) => {
                                 (run.components, run.peak_masses, run.peaks) =
@@ -150,14 +151,10 @@ impl Settings {
                         a.key = Some(key.clone());
                         a.job = None;
                     }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => {
+                    None => {}
+                    Some(Err(e)) => {
                         // Panicked: keep the old components and do not retry these settings.
-                        error = Some(msg!(
-                            "{}: analysis crashed",
-                            "{}: Analyse abgestürzt",
-                            run.name
-                        ));
+                        error = Some(e);
                         a.key = Some(key.clone());
                         a.job = None;
                     }
@@ -168,7 +165,10 @@ impl Settings {
                 a.job = None;
             } else if a.job.as_ref().map(|j| &j.0) != Some(&wanted) {
                 let (data, key) = (run.data.clone(), wanted.clone());
-                a.job = Some((wanted.clone(), spawn(ctx, move || analyze(&data, &key))));
+                a.job = Some((
+                    wanted.clone(),
+                    Job::spawn(ctx, move |_, cancel| analyze(&data, &key, cancel)),
+                ));
             }
         }
         error
@@ -411,7 +411,7 @@ impl Settings {
                         "Scans; the filter density is 4 × width. The slopes and Minimum S/N below are not used.",
                         "Scans; die Filterdichte ist 4 × Breite. Die Steigungen und das Minimum-S/N unten werden nicht verwendet.",
                     ),
-                    egui::DragValue::new(width).range(1..=1000),
+                    egui::DragValue::new(width).range(limit::<u32>("PEAK_DETECTOR")),
                 );
                 row(
                     ui,
@@ -421,7 +421,7 @@ impl Settings {
                         "A peak is a region where the filtered trace lies above this.",
                         "Ein Peak ist ein Bereich, in dem die gefilterte Spur darüber liegt.",
                     ),
-                    egui::DragValue::new(threshold).range(-1_000_000_000..=1_000_000_000),
+                    egui::DragValue::new(threshold).range(bounds::<i32>(ANY)),
                 );
             }
             row(
@@ -432,7 +432,7 @@ impl Settings {
                     "Smoothed slope that starts a peak.",
                     "Geglättete Steigung, mit der ein Peak beginnt.",
                 ),
-                num(&mut d.an_peak_threshold_begin, ANY),
+                num(&mut d.an_peak_threshold_begin, limit("AN_PEAK_THRESHOLD_BEGIN")),
             );
             row(
                 ui,
@@ -442,7 +442,7 @@ impl Settings {
                     "The falling flank ends once the slope stays above this.",
                     "Die fallende Flanke endet, sobald die Steigung darüber bleibt.",
                 ),
-                num(&mut d.an_peak_threshold_end, ANY),
+                num(&mut d.an_peak_threshold_end, limit("AN_PEAK_THRESHOLD_END")),
             );
             row(
                 ui,
@@ -452,7 +452,7 @@ impl Settings {
                     "Minimum height above the baseline, in noise units.",
                     "Mindesthöhe über der Basislinie, in Rauscheinheiten.",
                 ),
-                num(&mut d.an_min_peak_height, 0.0..=1e9),
+                num(&mut d.an_min_peak_height, limit("AN_MIN_PEAK_HEIGHT")),
             );
             row(
                 ui,
@@ -462,7 +462,7 @@ impl Settings {
                     "Sub-scan steps for locating the precise apex.",
                     "Teilschritte innerhalb eines Scans, um den Apex genau zu finden.",
                 ),
-                egui::DragValue::new(&mut d.an_number_bins).range(1..=100),
+                egui::DragValue::new(&mut d.an_number_bins).range(limit::<i32>("AN_NUMBER_BINS")),
             );
             width_row(ui, &mut d.an_deconvolution_width, times);
             row(
@@ -473,7 +473,7 @@ impl Settings {
                     "Components with fewer ion peaks are dropped.",
                     "Komponenten mit weniger Ionen-Peaks werden verworfen.",
                 ),
-                egui::DragValue::new(&mut d.an_min_peak_number).range(1..=10_000),
+                egui::DragValue::new(&mut d.an_min_peak_number).range(limit::<i32>("AN_MIN_PEAK_NUMBER")),
             );
             row(
                 ui,
@@ -483,7 +483,7 @@ impl Settings {
                     "Ions below this fraction of the base peak leave the spectrum (0 = keep all).",
                     "Ionen unter diesem Anteil am Basispeak fallen aus dem Spektrum (0 = alle behalten).",
                 ),
-                num(&mut d.an_min_height_bp, 0.0..=1.0),
+                num(&mut d.an_min_height_bp, limit("AN_MIN_HEIGHT_BP")),
             );
             row(
                 ui,
@@ -508,6 +508,7 @@ impl Settings {
         });
         ranges(
             ui,
+            "QUANT_EXCL_IONS",
             t(
                 "Ions left out of the model peak",
                 "Vom Modellpeak ausgenommene Ionen",
@@ -533,7 +534,7 @@ impl Settings {
                     "Sigma of the RI score; differences above 3 sigma score 0.",
                     "Sigma des RI-Scores; Abweichungen über 3 Sigma ergeben 0.",
                 ),
-                num(&mut d.ls_ri_diff, 1e-6..=1e9),
+                num(&mut d.ls_ri_diff, limit("LS_RI_DIFF")),
             );
             row(
                 ui,
@@ -543,7 +544,7 @@ impl Settings {
                     "Weight of the pure spectrum score.",
                     "Gewicht des Scores des reinen Spektrums.",
                 ),
-                num(&mut d.ls_pure_factor, 0.0..=1e9),
+                num(&mut d.ls_pure_factor, limit("LS_PURE_FACTOR")),
             );
             row(
                 ui,
@@ -553,7 +554,7 @@ impl Settings {
                     "Weight of the impure spectrum score.",
                     "Gewicht des Scores des unreinen Spektrums.",
                 ),
-                num(&mut d.ls_impure_factor, 0.0..=1e9),
+                num(&mut d.ls_impure_factor, limit("LS_IMPURE_FACTOR")),
             );
             row(
                 ui,
@@ -563,7 +564,7 @@ impl Settings {
                     "Peaks are weighted as mass^a · intensity^b: this is a.",
                     "Peaks werden als Masse^a · Intensität^b gewichtet: dies ist a.",
                 ),
-                num(&mut d.ls_scale_factor_ion, ANY),
+                num(&mut d.ls_scale_factor_ion, limit("LS_SCALE_FACTOR_ION")),
             );
             row(
                 ui,
@@ -573,7 +574,7 @@ impl Settings {
                     "Peaks are weighted as mass^a · intensity^b: this is b.",
                     "Peaks werden als Masse^a · Intensität^b gewichtet: dies ist b.",
                 ),
-                num(&mut d.ls_scale_factor_value, ANY),
+                num(&mut d.ls_scale_factor_value, limit("LS_SCALE_FACTOR_VALUE")),
             );
             row(
                 ui,
@@ -583,7 +584,7 @@ impl Settings {
                     "Factor for peaks without a partner in the other spectrum.",
                     "Faktor für Peaks ohne Partner im anderen Spektrum.",
                 ),
-                num(&mut d.ls_scale_factor_no_match, ANY),
+                num(&mut d.ls_scale_factor_no_match, limit("LS_SCALE_FACTOR_NO_MATCH")),
             );
             let hint = explain(
                 t(
@@ -620,7 +621,7 @@ impl Settings {
                     "A hit below this overall score counts as no match: in the component list, Find substance and the batch.",
                     "Ein Treffer unter diesem Gesamt-Score gilt als kein Treffer: in der Komponentenliste, bei Substanz finden und im Batch.",
                 ),
-                num(&mut d.ls_cutoff, 0.0..=1.0),
+                num(&mut d.ls_cutoff, limit("LS_CUTOFF")),
             );
             row(
                 ui,
@@ -630,7 +631,7 @@ impl Settings {
                     "NIST search: how many of the component's strongest fragments are compared.",
                     "NIST-Suche: wie viele der stärksten Fragmente der Komponente verglichen werden.",
                 ),
-                num(&mut d.sql_max_number_fragments, 1..=100),
+                num(&mut d.sql_max_number_fragments, limit("SQL_MAX_NUMBER_FRAGMENTS")),
             );
             row(
                 ui,
@@ -640,11 +641,12 @@ impl Settings {
                     "NIST search: a library entry is scored only if it shares more than this many of them.",
                     "NIST-Suche: ein Bibliothekseintrag wird nur bewertet, wenn er mehr als so viele davon teilt.",
                 ),
-                num(&mut d.sql_minimal_number_equal_fragments, 0..=100),
+                num(&mut d.sql_minimal_number_equal_fragments, limit("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS")),
             );
         });
         ranges(
             ui,
+            "LS_MASS_FILTER",
             t("Ignored masses", "Ignorierte Massen"),
             &explain(
                 t(
@@ -680,7 +682,7 @@ impl Settings {
                     &mut d.sf_centroid_max_base_dev,
                 ),
             ] {
-                row(ui, name, key, used, num(v, ANY));
+                row(ui, name, key, used, num(v, limit(key)));
             }
             row(
                 ui,
@@ -692,7 +694,7 @@ impl Settings {
                     "Punkte ab diesem Anteil am Maximum eines Peaks bilden seine Zentroidmasse, \
                      bei jeder Zentroidierung (hochauflösender CDF-Import, Zentroid-Export, MSL-Export, TOF-Kalibrierung).",
                 ),
-                num(&mut d.sf_fwhm, 0.0..=1.0).speed(0.01),
+                num(&mut d.sf_fwhm, limit("SF_FWHM")).speed(0.01),
             );
         });
 
@@ -733,7 +735,7 @@ impl Settings {
                         &mut d.sf_max_base_dev,
                     ),
                 ] {
-                    row(ui, name, key, dead, num(v, ANY));
+                    row(ui, name, key, dead, num(v, limit(key)));
                 }
                 let stored: [(&str, &str, &mut f64); 3] = [
                     (
@@ -756,14 +758,14 @@ impl Settings {
                     ),
                 ];
                 for (name, key, v) in stored {
-                    row(ui, name, key, unused, num(v, ANY));
+                    row(ui, name, key, unused, num(v, limit(key)));
                 }
                 row(
                     ui,
                     t("Search resolution", "Suchauflösung"),
                     "LS_RESOLUTION",
                     unused,
-                    num(&mut d.ls_resolution, -1e9..=1e9),
+                    num(&mut d.ls_resolution, limit("LS_RESOLUTION")),
                 );
                 row(
                     ui,
@@ -777,7 +779,8 @@ impl Settings {
                     t("Quant ions", "Quant-Ionen"),
                     "QUANT_ION_NUMBER",
                     unused,
-                    egui::DragValue::new(&mut d.quant_ion_number).range(0..=10_000),
+                    egui::DragValue::new(&mut d.quant_ion_number)
+                        .range(limit::<i32>("QUANT_ION_NUMBER")),
                 );
             });
         });
@@ -789,7 +792,15 @@ fn dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
 }
 
-const ANY: RangeInclusive<f64> = -1e9..=1e9;
+/// The range of an input as the settings table has it (`md_core::settings::KEYS`), so window and
+/// `validate` cannot disagree.
+fn limit<N: egui::emath::Numeric>(key: &str) -> RangeInclusive<N> {
+    bounds(limits(key))
+}
+
+fn bounds<N: egui::emath::Numeric>((lo, hi): (f64, f64)) -> RangeInclusive<N> {
+    N::from_f64(lo)..=N::from_f64(hi)
+}
 
 /// What a setting does, then its key in the old 3.3 settings file.
 fn explain(hint: &str, key: &str) -> String {
@@ -831,7 +842,9 @@ fn width_row(ui: &mut egui::Ui, width: &mut Option<f64>, times: Option<&[f64]>) 
             *width = (!auto).then(|| auto_width(times.unwrap_or_default()));
         }
         match width {
-            Some(w) => ui.add(num(w, 0.1..=100.0)).labelled_by(label.id),
+            Some(w) => ui
+                .add(num(w, limit("AN_DECONVOLUTION_WIDTH")))
+                .labelled_by(label.id),
             None => match times {
                 Some(s) => ui.label(tf!(
                     "{} scans in the shown run",
@@ -857,7 +870,14 @@ fn num<N: egui::emath::Numeric>(v: &mut N, range: RangeInclusive<N>) -> egui::Dr
 }
 
 /// Editable list of inclusive m/z ranges.
-pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(f32, f32)>) {
+pub(crate) fn ranges(
+    ui: &mut egui::Ui,
+    key: &str,
+    name: &str,
+    hint: &str,
+    list: &mut Vec<(f32, f32)>,
+) {
+    let bounds = limit::<f32>(key);
     ui.add_space(4.0);
     let list_name = ui.horizontal(|ui| {
         let list_name = ui.label(name).on_hover_text(hint);
@@ -877,7 +897,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             let from = ui.label(t("from", "von"));
             ui.add(
                 egui::DragValue::new(lo)
-                    .range(0.0..=100_000.0)
+                    .range(bounds.clone())
                     .max_decimals(2),
             )
             .labelled_by(list_name)
@@ -886,7 +906,7 @@ pub(crate) fn ranges(ui: &mut egui::Ui, name: &str, hint: &str, list: &mut Vec<(
             let to = ui.label(t("to", "bis"));
             ui.add(
                 egui::DragValue::new(hi)
-                    .range(0.0..=100_000.0)
+                    .range(bounds.clone())
                     .max_decimals(2),
             )
             .labelled_by(list_name)
@@ -911,6 +931,19 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn a_cancelled_analysis_is_an_error_not_a_result() {
+        let run = crate::results::tests::run();
+        let cancel = Cancel::default();
+        let key = Settings::default().key();
+        assert!(analyze(&run.data, &key, &cancel).is_ok());
+        cancel.cancel();
+        assert_eq!(
+            analyze(&run.data, &key, &cancel).err().as_deref(),
+            Some("cancelled")
+        );
+    }
 
     /// #303: in Guided mode "Advanced" is closed, but an invalid draft opens it.
     #[test]

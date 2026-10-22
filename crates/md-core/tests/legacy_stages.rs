@@ -8,6 +8,7 @@ use std::path::Path;
 
 use md_core::analysis::{PeakPass, analyze_run, find_run_peaks};
 use md_core::deconv::DeconvSettings;
+use md_core::job::Cancel;
 use md_core::peaks::PeakSettings;
 
 /// Interpolated apex, in scans: md-core keeps it as f32 (ulp 2.4e-4 at 2048..4096 scans, 4.9e-4 above).
@@ -87,7 +88,13 @@ fn peaks_match_old_version() {
     for run in RUNS {
         let Some(path) = run_path(run) else { return };
         let c = md_core::andi::read(path).unwrap();
-        let p = find_run_peaks(c, &PeakSettings::default(), PeakPass::Reordered).unwrap();
+        let p = find_run_peaks(
+            c,
+            &PeakSettings::default(),
+            PeakPass::Reordered,
+            &Cancel::default(),
+        )
+        .unwrap();
         let old = fixture(run, "peaks");
         assert_eq!(old.len(), p.peaks.len(), "{run}: peak count");
         for (k, (o, n)) in old.iter().zip(&p.peaks).enumerate() {
@@ -137,6 +144,7 @@ fn components_match_old_version() {
             &PeakSettings::default(),
             &DeconvSettings::default(),
             PeakPass::Reordered,
+            &Cancel::default(),
         )
         .unwrap();
         let mut old = fixture(run, "components").into_iter().peekable();
@@ -211,5 +219,8 @@ fn components_match_old_version() {
     eprintln!("{eighth_digit} of {fitted} model shares differ in the 8th digit");
     // Known count (architecture.md, "Stage fixtures"): fails when it grows; lower it when #365 fixes some.
     assert_eq!(fitted, 4366);
-    assert!(eighth_digit <= 1938, "{eighth_digit} shares off, 1938 known");
+    assert!(
+        eighth_digit <= 1938,
+        "{eighth_digit} shares off, 1938 known"
+    );
 }
