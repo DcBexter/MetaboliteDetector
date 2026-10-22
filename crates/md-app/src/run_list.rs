@@ -31,7 +31,7 @@ impl App {
             }
             if p.components {
                 let cal = (self.runs.get(self.active)).and_then(|r| self.ri.for_run(r).cloned());
-                let cutoff = self.settings.applied.ls_cutoff;
+                let cutoff = self.settings.applied().ls_cutoff;
                 (self.results).panel(ui, self.runs.get_mut(self.active), cal.as_ref(), cutoff);
             }
         });

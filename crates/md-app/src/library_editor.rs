@@ -628,8 +628,8 @@ impl App {
         let src = Source {
             run,
             ri: self.ri.for_library(run),
-            quant: self.settings.applied.analysis().quant,
-            search: self.settings.applied.analysis().search,
+            quant: &self.settings.analysis().quant,
+            search: &self.settings.analysis().search,
         };
         self.editor.start_add(&src);
         self.editor.start_rt_copy(ctx, &src);
@@ -643,8 +643,8 @@ impl App {
         let source = Source {
             run,
             ri: self.ri.for_library(run),
-            quant: self.settings.applied.analysis().quant,
-            search: self.settings.applied.analysis().search,
+            quant: &self.settings.analysis().quant,
+            search: &self.settings.analysis().search,
         };
         if source.component().is_some() {
             self.editor.open = true;
@@ -660,10 +660,10 @@ impl App {
         let source = run.map(|run| Source {
             run,
             ri: self.ri.for_library(run),
-            quant: self.settings.applied.analysis().quant,
-            search: self.settings.applied.analysis().search,
+            quant: &self.settings.analysis().quant,
+            search: &self.settings.analysis().search,
         });
-        let fwhm = self.settings.applied.sf_fwhm;
+        let fwhm = self.settings.applied().sf_fwhm;
         let ed = &mut self.editor;
         let name = if ed.name.is_empty() {
             t("new library", "neue Bibliothek")

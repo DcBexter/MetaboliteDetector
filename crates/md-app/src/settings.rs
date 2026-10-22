@@ -15,13 +15,18 @@ use md_core::analysis::{PeakPass, analyze_run};
 use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
 use md_core::job::Cancel;
 use md_core::peaks::{Detector, Peak, PeakSettings};
-use md_core::settings::{ANY, GcmsSettings, MAX_LEN, keys, limits};
+use md_core::settings::{ANY, AnalysisSettings, GcmsSettings, MAX_LEN, keys, limits};
 use md_core::view::LABELLED_PEAKS;
 
 use crate::{Job, Run};
 
 /// What the analysis of a run depends on: peak detection, deconvolution and the centroid `fwhm`.
-pub type Key = (PeakSettings, DeconvSettings, f64);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Key {
+    pub peaks: PeakSettings,
+    pub deconv: DeconvSettings,
+    pub fwhm: f64,
+}
 
 /// The old Appearance options (QSettings `GUI/axes_label` and `GUI/peak_label`, both on by default).
 /// They only change the drawing, so they apply at once.
@@ -58,15 +63,31 @@ fn scores() -> [(bool, bool, &'static str); 3] {
     ]
 }
 
-#[derive(Default)]
 pub struct Settings {
-    /// In use: new runs open with it and open runs are re-analysed to match it.
-    pub applied: GcmsSettings,
+    /// In use: new runs open with it and open runs are re-analysed to match it. Written only by
+    /// `restore`, `set_applied` and `load`, which keep `analysis` in step.
+    applied: GcmsSettings,
+    /// `applied.analysis()`, derived once when `applied` is set. The UI reads this instead of deriving per row or frame.
+    analysis: AnalysisSettings,
     /// Being edited in the dialog until "Apply".
     draft: GcmsSettings,
     pub appearance: Appearance,
     pub open: bool,
     note: Option<Result<Msg, Msg>>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        let applied = GcmsSettings::default();
+        Self {
+            analysis: applied.analysis(),
+            applied,
+            draft: GcmsSettings::default(),
+            appearance: Appearance::default(),
+            open: false,
+            note: None,
+        }
+    }
 }
 
 type Analyzed = Result<(Vec<Component>, Vec<u32>, Vec<Peak>), String>;
@@ -94,8 +115,15 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components in deconvolution order.
 pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
-    let a = analyze_run(data, &key.0, key.2, &key.1, PeakPass::Reordered, cancel)
-        .map_err(|e| e.to_string())?;
+    let a = analyze_run(
+        data,
+        &key.peaks,
+        key.fwhm,
+        &key.deconv,
+        PeakPass::Reordered,
+        cancel,
+    )
+    .map_err(|e| e.to_string())?;
     Ok((a.components, a.masses, a.peaks))
 }
 
@@ -103,7 +131,31 @@ impl Settings {
     /// The saved settings at start, checked by `persist`.
     pub fn restore(&mut self, s: GcmsSettings) {
         self.draft = s.clone();
+        self.set_applied(s);
+    }
+
+    /// The applied settings (Analysis → Settings).
+    pub fn applied(&self) -> &GcmsSettings {
+        &self.applied
+    }
+
+    /// `applied.analysis()`, derived once when the settings are applied.
+    pub fn analysis(&self) -> &AnalysisSettings {
+        &self.analysis
+    }
+
+    /// Takes `s` as the applied settings and derives `analysis` from it.
+    pub fn set_applied(&mut self, s: GcmsSettings) {
+        self.analysis = s.analysis();
         self.applied = s;
+    }
+
+    /// Edits the applied settings in place (tests use this instead of writing `applied`).
+    #[cfg(test)]
+    pub fn edit_applied(&mut self, f: impl FnOnce(&mut GcmsSettings)) {
+        let mut s = self.applied.clone();
+        f(&mut s);
+        self.set_applied(s);
     }
 
     /// Opens the dialog with a message about the saved or imported settings.
@@ -112,8 +164,12 @@ impl Settings {
     }
 
     pub fn key(&self) -> Key {
-        let a = self.applied.analysis();
-        (a.peaks, a.deconv, a.fwhm)
+        let a = &self.analysis;
+        Key {
+            peaks: a.peaks,
+            deconv: a.deconv.clone(),
+            fwhm: a.fwhm,
+        }
     }
 
     /// Collects finished analyses and starts one for every run whose components are stale.
@@ -286,7 +342,7 @@ impl Settings {
                 })
                 .clicked()
             {
-                self.applied = self.draft.clone();
+                self.set_applied(self.draft.clone());
                 self.note = None;
             }
             if ui
@@ -361,7 +417,7 @@ impl Settings {
             ));
         }
         self.draft = self.applied.from_bytes(&bytes).map_err(|e| err(&e))?;
-        self.applied = self.draft.clone();
+        self.set_applied(self.draft.clone());
         Ok(msg!("Loaded {}", "Geladen: {}", path.display()))
     }
 
@@ -986,5 +1042,38 @@ mod tests {
             .click();
         h.run();
         assert_eq!(h.state().draft.an_deconvolution_width, Some(10.0));
+    }
+
+    /// `analysis` is derived when the settings are applied, so the UI never reads a stale copy (#415).
+    #[test]
+    fn stored_analysis_follows_every_way_of_applying() {
+        let mut s = Settings::default();
+        s.restore(GcmsSettings {
+            ls_cutoff: 0.5,
+            ..GcmsSettings::default()
+        });
+        assert_eq!(s.analysis, s.applied.analysis());
+        s.edit_applied(|g| g.quant_ion_number = 4);
+        assert_eq!(s.analysis, s.applied.analysis());
+        assert_eq!(s.analysis.quant.ion_number, 4);
+    }
+
+    /// Load puts the file's settings in `applied` and derives `analysis` from them (#415).
+    #[test]
+    fn load_updates_the_stored_analysis() {
+        let mut s = Settings::default();
+        let file = GcmsSettings {
+            ls_cutoff: 0.6,
+            quant_ion_number: 4,
+            ..GcmsSettings::default()
+        };
+        let path = std::env::temp_dir().join(format!("md-load-415-{}.set", std::process::id()));
+        std::fs::write(&path, file.to_bytes()).unwrap();
+        let loaded = s.load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(loaded.is_ok());
+        // The file format rounds some values, so compare with what was loaded.
+        assert_eq!(s.applied().quant_ion_number, 4);
+        assert_eq!(s.analysis(), &s.applied().analysis());
     }
 }

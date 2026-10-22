@@ -18,10 +18,11 @@ use md_core::isotope::IsotopeTable;
 use md_core::mid::{FragmentMid, Method, MidReport, Move, determine, mid_library};
 use md_core::ri::RiCalibration;
 use md_core::search::PreparedLibrary;
-use md_core::settings::GcmsSettings;
+use md_core::settings::{AnalysisSettings, GcmsSettings};
 
 use crate::Job;
 use crate::identify::Library;
+use crate::settings::Settings;
 
 /// The old method page's choices, in its order.
 #[derive(Clone, Copy, PartialEq)]
@@ -84,8 +85,10 @@ pub struct MidWindow {
     /// Tracer `abundance` was last filled in for.
     abundance_for: String,
     rescan: bool,
-    /// The applied settings (Analysis → Settings), set every frame.
-    pub applied: GcmsSettings,
+    /// The applied settings (Analysis → Settings), copied every frame by `use_settings`.
+    applied: GcmsSettings,
+    /// `applied.analysis()`, copied with `applied`; the rows read it instead of deriving it.
+    analysis: AnalysisSettings,
     table: IsotopeTable,
     job: Option<Running>,
     result: Option<Done>,
@@ -105,6 +108,7 @@ impl Default for MidWindow {
             abundance_for: String::new(),
             rescan: true,
             applied: GcmsSettings::default(),
+            analysis: GcmsSettings::default().analysis(),
             table: IsotopeTable::standard(),
             job: None,
             result: None,
@@ -160,6 +164,12 @@ impl MidWindow {
             Kind::Library => Method::Library,
             Kind::Formula => Method::Formula,
         }
+    }
+
+    /// Takes the applied settings and their analysis, every frame.
+    pub fn use_settings(&mut self, settings: &Settings) {
+        self.applied.clone_from(settings.applied());
+        self.analysis.clone_from(settings.analysis());
     }
 
     fn start(
@@ -340,8 +350,7 @@ impl MidWindow {
             None => {
                 let problem = self.problem();
                 // Not while the library is rebuilt for new search settings, as in the batch window.
-                let ready = lib
-                    .filter(|l| problem.is_none() && l.settings == self.applied.analysis().search);
+                let ready = lib.filter(|l| problem.is_none() && l.settings == self.analysis.search);
                 if ui
                     .add_enabled(ready.is_some(), egui::Button::new(t("Start", "Starten")))
                     .clicked()
@@ -355,7 +364,7 @@ impl MidWindow {
                         "Erst eine Bibliothek öffnen (Datei → Bibliothek öffnen).",
                     )),
                     (_, Some(p)) => ui.label(p),
-                    (Some(l), None) if l.settings != self.applied.analysis().search => ui.label(t(
+                    (Some(l), None) if l.settings != self.analysis.search => ui.label(t(
                         "Library is being prepared for the new search settings.",
                         "Die Bibliothek wird für die neuen Sucheinstellungen vorbereitet.",
                     )),

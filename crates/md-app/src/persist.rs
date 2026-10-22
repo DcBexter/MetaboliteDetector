@@ -269,7 +269,7 @@ fn path(v: &str) -> Option<PathBuf> {
 
 /// Applies saved lines to a fresh app. Returns the keys whose values were bad (they keep the default).
 fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String> {
-    let mut s = app.settings.applied.clone();
+    let mut s = app.settings.applied().clone();
     let mut bad = Vec::new();
     let mut recent = Vec::new();
     for (section, key, v) in entries {
@@ -350,8 +350,8 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
 /// a width 1 chosen afterwards. Only start-up calls this; settings files from Load… keep their value.
 fn width_once(app: &mut App) {
     let done = std::mem::replace(&mut app.saved.width_once, true);
-    if !done && app.settings.applied.an_deconvolution_width == Some(1.0) {
-        let mut s = app.settings.applied.clone();
+    if !done && app.settings.applied().an_deconvolution_width == Some(1.0) {
+        let mut s = app.settings.applied().clone();
         s.an_deconvolution_width = None;
         app.settings.restore(s);
     }
@@ -359,7 +359,7 @@ fn width_once(app: &mut App) {
 
 /// The lines saved under [`KEY`].
 pub fn text(app: &App) -> String {
-    let mut lines: Vec<(String, String)> = (app.settings.applied.lines().into_iter())
+    let mut lines: Vec<(String, String)> = (app.settings.applied().lines().into_iter())
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
     let mut panels = app.panels;
@@ -653,7 +653,7 @@ size=@Size(1591 800)
     fn old_conf_values_win_over_defaults() {
         let (app, bad) = apply_text(OLD, ini_entries);
         assert!(bad.is_empty(), "{bad:?}");
-        let s = &app.settings.applied;
+        let s = &app.settings.applied();
         assert_eq!(
             s.ls_ri_diff, 10.0,
             "a saved LS_RI_DIFF beats the default 20"
@@ -680,7 +680,7 @@ size=@Size(1591 800)
     /// chosen afterwards stays.
     #[test]
     fn saved_width_one_becomes_auto_once() {
-        let width = |a: &App| a.settings.applied.an_deconvolution_width;
+        let width = |a: &App| a.settings.applied().an_deconvolution_width;
         let width_one = format!("{}=1\n", keys::AN_DECONVOLUTION_WIDTH);
         for (text, entries) in [
             (width_one.as_str(), own_entries as fn(&str) -> Vec<Entry>),
@@ -722,7 +722,7 @@ size=@Size(1591 800)
         let ctx = egui::Context::default();
         let fake = Fake(format!("{}=1\n", keys::AN_DECONVOLUTION_WIDTH));
         restore(&mut app, &ctx, Some(&fake), None, None);
-        assert_eq!(app.settings.applied.an_deconvolution_width, None);
+        assert_eq!(app.settings.applied().an_deconvolution_width, None);
         assert!(text(&app).contains("\nauto_width_once=true\n"));
     }
 
@@ -737,8 +737,8 @@ size=@Size(1591 800)
         };
         let (app, bad) = apply_text(&text, ini_entries);
         assert!(bad.is_empty(), "{bad:?}");
-        assert_eq!(app.settings.applied.ls_ri_diff, 10.0);
-        assert_eq!(app.settings.applied.ls_resolution, 0.3);
+        assert_eq!(app.settings.applied().ls_ri_diff, 10.0);
+        assert_eq!(app.settings.applied().ls_resolution, 0.3);
         assert_eq!(app.saved.recent.len(), 1);
     }
 
@@ -752,23 +752,24 @@ size=@Size(1591 800)
         );
         let (app, bad) = apply_text(&reg, reg_entries);
         assert!(bad.is_empty(), "{bad:?}");
-        assert_eq!(app.settings.applied.ls_ri_diff, 10.0);
-        assert_eq!(app.settings.applied.quant_ion_number, 4);
-        assert_eq!(app.settings.applied.ls_resolution, 0.25);
+        assert_eq!(app.settings.applied().ls_ri_diff, 10.0);
+        assert_eq!(app.settings.applied().quant_ion_number, 4);
+        assert_eq!(app.settings.applied().ls_resolution, 0.25);
         assert_eq!(app.saved.extra, [("rc_save_file".into(), String::new())]);
     }
 
     #[test]
     fn own_lines_round_trip_and_keep_unknown_keys() {
         let mut app = App::default();
-        let s = &mut app.settings.applied;
-        (s.ls_ri_diff, s.ls_use_ri, s.ls_cutoff) = (12.5, false, 0.7);
+        app.settings.edit_applied(|s| {
+            (s.ls_ri_diff, s.ls_use_ri, s.ls_cutoff) = (12.5, false, 0.7);
+            s.ls_mass_filter = vec![(73.0, 75.0), (147.0, 148.5)];
+            s.peak_detector = Detector::Matched {
+                width: 7,
+                threshold: -3,
+            };
+        });
         app.settings.appearance.peak_labels = false;
-        s.ls_mass_filter = vec![(73.0, 75.0), (147.0, 148.5)];
-        s.peak_detector = Detector::Matched {
-            width: 7,
-            threshold: -3,
-        };
         app.panels.info = false;
         // Absolute on every platform, with a '=' the line format must keep.
         app.saved.remember(std::env::temp_dir().join("a=b.cdf"));
@@ -787,13 +788,13 @@ size=@Size(1591 800)
         // An unanswered first-start question is not saved, so the next start asks again.
         back.guided.ask = true;
         assert!(!super::text(&back).contains("mode="));
-        assert_eq!(back.settings.applied, app.settings.applied);
+        assert_eq!(back.settings.applied(), app.settings.applied());
         let set = apply_text(
             &format!("{}=2.5\n", keys::AN_DECONVOLUTION_WIDTH),
             own_entries,
         )
         .0;
-        assert_eq!(set.settings.applied.an_deconvolution_width, Some(2.5));
+        assert_eq!(set.settings.applied().an_deconvolution_width, Some(2.5));
         assert_eq!(back.settings.appearance, app.settings.appearance);
         assert_eq!(back.panels, app.panels);
         assert_eq!(back.saved.recent, app.saved.recent);
@@ -861,7 +862,7 @@ size=@Size(1591 800)
             ls_pure_factor: 0.7,
             ..GcmsSettings::default()
         };
-        assert_eq!(app.settings.applied, expected);
+        assert_eq!(*app.settings.applied(), expected);
         assert!(app.panels.runs);
     }
 
