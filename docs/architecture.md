@@ -331,6 +331,13 @@ unshifted calibration). Reference and cutoff are part of the `run.ident` key. Te
 late (`search.rs`) and the example runs made 4 s late, where Glycine 3TMS lands on its `lib_aa` RI again and
 the shift grows by exactly 4 s (`tests/example_data.rs`).
 
+One precedence rule for the RI a run shows (`md_core::ri::applicable`, called by `Calibration::for_run`; the
+component list, the calibration window and identify labels read its result): the identification's calibration
+(shifted, else the one it was searched with) applies, also while a new identification runs; without one, the
+base applies. RT-only: without an identification nothing; with one, its calibration maps RT to the shifted
+time. Table-driven test in `ri.rs`. Behaviour change (#407): in RT-only mode the detail panel and the run list of identified runs now show the
+time as RI, where before they showed nothing; the component list is unchanged.
+
 Conscious deviations:
 
 - **At least two points, RI rising with RT.** The old code accepted any table and returned -1 below two
