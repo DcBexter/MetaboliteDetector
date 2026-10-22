@@ -35,7 +35,7 @@ use crate::library::LibraryCompound;
 use crate::peaks::{IonTraces, Peak, PeakSettings};
 use crate::ri::RiCalibration;
 use crate::search::{
-    PreparedLibrary, SearchSettings, map_compounds_to_library, shift_to_reference,
+    PreparedLibrary, SearchSettings, map_compounds_cancellable, shift_to_reference,
 };
 
 /// Settings of the per-run pass: the single-run defaults, one calibration for every run.
@@ -217,7 +217,8 @@ fn scan_and_save(
         components: comps,
         masses,
     } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered, cancel)?;
-    let scanned = scan_components(&times, &comps, &peaks, lib, s, |i| masses[i]);
+    let scanned = scan_components(&times, &comps, &peaks, lib, s, cancel, |i| masses[i])
+        .ok_or(AnalyzeError::Cancelled)?;
     let failed = cmp.and_then(|path| {
         let ris = (scanned.calibration.as_ref()).map_or_else(
             || vec![-1.0; comps.len()],
@@ -232,12 +233,16 @@ fn scan_and_save(
 
 /// The run behind a `.cmp` input: its saved components instead of a deconvolution. The scan times
 /// are right at the apex scans only, which is all the later passes read.
-fn scan_saved(path: &Path, lib: &PreparedLibrary, s: &ScanSettings) -> Result<Scanned, String> {
+fn scan_saved(
+    path: &Path,
+    lib: &PreparedLibrary,
+    s: &ScanSettings,
+    cancel: &Cancel,
+) -> Result<Scanned, String> {
     let ((comps, masses, peaks), times) =
         crate::cmp::standalone_components(path).map_err(|e| e.to_string())?;
-    Ok(scan_components(&times, &comps, &peaks, lib, s, |i| {
-        masses[i]
-    }))
+    scan_components(&times, &comps, &peaks, lib, s, cancel, |i| masses[i])
+        .ok_or_else(|| AnalyzeError::Cancelled.to_string())
 }
 
 /// Calibration, library search and ion peaks of the components of one run.
@@ -247,8 +252,9 @@ fn scan_components(
     peaks: &[Peak],
     lib: &PreparedLibrary,
     s: &ScanSettings,
+    cancel: &Cancel,
     mass_of: impl Fn(usize) -> u32,
-) -> Scanned {
+) -> Option<Scanned> {
     let calibration = s.calibration.as_ref().map(|cal| {
         let shifted = s.shift.and_then(|r| {
             shift_to_reference(cal, times, comps, lib, r.compound, r.cutoff, &s.search)
@@ -258,7 +264,7 @@ fn scan_components(
     let ris = calibration
         .as_ref()
         .map(|cal| cal.component_ris(times, comps));
-    let id = map_compounds_to_library(comps, ris.as_deref(), lib, &s.search);
+    let id = map_compounds_cancellable(comps, ris.as_deref(), lib, &s.search, cancel)?;
     let (mut found, mut unknown) = (Vec::new(), Vec::new());
     for (i, (k, hit)) in comps.iter().zip(&id.assigned).enumerate() {
         if hit.is_none() && !s.untargeted {
@@ -287,11 +293,11 @@ fn scan_components(
             }),
         }
     }
-    Scanned {
+    Some(Scanned {
         found,
         unknown,
         calibration,
-    }
+    })
 }
 
 /// Reads a run the way the wizard's detection opens it: with its baseline switch applied.
@@ -374,7 +380,7 @@ pub fn scan_runs(
                             // A panic in one file becomes its error, so the other files are kept.
                             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 match crate::cmp::is_cmp(path) {
-                                    true => scan_saved(path, lib, s),
+                                    true => scan_saved(path, lib, s, cancel),
                                     false => read_scan_run(path, s).and_then(|c| {
                                         let (r, e) = scan_and_save(c, lib, s, target, cancel)
                                             .map_err(|e| e.to_string())?;
