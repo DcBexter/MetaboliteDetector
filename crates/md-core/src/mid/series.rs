@@ -263,6 +263,7 @@ mod tests {
 
     fn run(ions: &[(u32, f64)]) -> RunResult {
         RunResult {
+            input: 0,
             path: "r".into(),
             found: vec![Found {
                 compound: 0,

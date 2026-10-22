@@ -229,8 +229,8 @@ fn run(a: Args) -> Result<bool, String> {
     let prepared = PreparedLibrary::new(&compounds, &settings.search())
         .with_fragment_filter(library::is_nist(&a.library));
 
+    let mut quant = settings.quant();
     let mut ts = TableSettings {
-        quant: settings.quant(),
         replicates: a.replicates,
         ..Default::default()
     };
@@ -257,12 +257,12 @@ fn run(a: Args) -> Result<bool, String> {
             t.columns[group]
         ));
     }
-    ts.quant.ion_number = a.ions.unwrap_or(ts.quant.ion_number);
-    ts.quant.min_dist = a.min_dist.unwrap_or(ts.quant.min_dist);
-    ts.quant.quality_cutoff = a.quality_cutoff.unwrap_or(ts.quant.quality_cutoff);
+    quant.ion_number = a.ions.unwrap_or(quant.ion_number);
+    quant.min_dist = a.min_dist.unwrap_or(quant.min_dist);
+    quant.quality_cutoff = a.quality_cutoff.unwrap_or(quant.quality_cutoff);
     ts.min_reproducibility = a.min_reproducibility.unwrap_or(ts.min_reproducibility);
     ts.min_ions = a.min_ions.unwrap_or(ts.min_ions);
-    ts.quant.excluded = a.exclude_ions.unwrap_or(ts.quant.excluded);
+    quant.excluded = a.exclude_ions.unwrap_or(quant.excluded);
     ts.min_sn = a.min_sn.unwrap_or(ts.min_sn);
     ts.max_discrepancy = a.max_discrepancy.unwrap_or(ts.max_discrepancy);
     let mut scan = settings.scan(calibration);
@@ -318,17 +318,19 @@ fn run(a: Args) -> Result<bool, String> {
         library: &compounds,
         prepared: &prepared,
         scan: &scan,
-        quant: &ts.quant,
+        quant: &quant,
         rescan,
         parallel: a.parallel,
     };
+    let found = run_study(&study, &Progress::default(), &Cancel::default()).ok_or("cancelled")?;
+    let table = table(&found, &compounds, &ts).map_err(|e| format!("--replicates: {e}"))?;
     let StudyResult {
         runs,
         extra,
         rescanned,
         errors,
-    } = run_study(&study, &Progress::default(), &Cancel::default()).ok_or("cancelled")?;
-    let table = table(&runs, &compounds, &extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
+        ..
+    } = found;
 
     let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
     how.extend([
@@ -357,7 +359,7 @@ fn run(a: Args) -> Result<bool, String> {
         written.extend(stats.map(|f| (f, 1)));
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
-        ts.write_csv(&how, f).map_err(io)?;
+        ts.write_csv(&quant, &how, f).map_err(io)?;
         written.push((settings_path(p), 2));
         if !a.ion_integrals {
             // An older ions file would not match this results file.

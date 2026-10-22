@@ -154,6 +154,7 @@ mod tests {
             signal_to_noise: 0.0,
         };
         let run = |name: &str, found: Vec<Found>| RunResult {
+            input: 0,
             path: PathBuf::from(name),
             found,
             unknown: Vec::new(),

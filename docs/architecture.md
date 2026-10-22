@@ -415,8 +415,10 @@ default `DEFAULT_PARALLEL` = 4). Pass 1 reads each file, runs ion traces, peaks,
 a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
 `parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
 well. Progress and cancel are `md_core::job::Progress` and `Cancel`; cancelling stops the runs in work at their
-next stage and starts no further file; unreadable files are listed and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
-rescan:
+next stage and starts no further file; unreadable files are listed and skipped. Each `RunResult` carries its
+`input` (position in `Study::runs`), so callers match results to inputs by position, not by path. The quant ions
+of the study are kept in `StudyResult::quant`; `table(&StudyResult, library, TableSettings)` builds the substance
+× run table from them and is cheap, so the app re-filters without a rescan:
 
 - **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
   `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a

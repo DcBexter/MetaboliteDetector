@@ -13,8 +13,8 @@ use crate::settings::{name_of, row};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    DEFAULT_PARALLEL, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference,
-    Study, StudyResult, Table, TableSettings, path_key, run_key, run_study, table,
+    DEFAULT_PARALLEL, Found, QuantSettings, RunResult, SampleGroups, SampleTable, ScanSettings,
+    ShiftReference, Study, StudyResult, Table, TableSettings, path_key, run_key, run_study, table,
 };
 use md_core::batch::{cell_ions, group_stats_path, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
@@ -37,11 +37,8 @@ struct Running {
 
 struct Scan {
     lib: Arc<Library>,
-    runs: Arc<Vec<RunResult>>,
-    /// Unknown substances pooled by an untargeted scan; they follow the library's entries.
-    extra: Arc<Vec<LibraryCompound>>,
-    rescanned: usize,
-    errors: Vec<String>,
+    /// The runs, the pooled unknown substances (an untargeted scan), the scan errors and the quant ions.
+    study: StudyResult,
     took: Duration,
     /// Per run: library index of a substance -> position in `RunResult::found`, so the details
     /// behind a cell are found without searching every frame.
@@ -189,6 +186,8 @@ pub struct Batch {
     /// Runs in memory at once; each run is analysed in parallel anyway.
     parallel: usize,
     pub settings: TableSettings,
+    /// The quant ions of the window; a change reaches the table of the scan (`results`).
+    quant: QuantSettings,
     /// The sample table behind `settings.sample_groups`.
     samples: Option<Samples>,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
@@ -505,6 +504,7 @@ impl Default for Batch {
                 baseline_correction: false,
             },
             settings: TableSettings::default(),
+            quant: QuantSettings::default(),
             samples: None,
             applied: GcmsSettings::default(),
             rt_only: false,
@@ -531,7 +531,7 @@ impl Batch {
         if self.applied != *applied {
             let quant = applied.quant();
             if quant != self.applied.quant() {
-                self.settings.quant = quant;
+                self.quant = quant;
             }
             self.applied = applied.clone();
         }
@@ -548,10 +548,10 @@ impl Batch {
         self.scan = Some(Scan {
             lib,
             index: hit_index(&runs),
-            runs: Arc::new(runs),
-            extra: Arc::default(),
-            rescanned: 0,
-            errors: Vec::new(),
+            study: StudyResult {
+                runs,
+                ..Default::default()
+            },
             took: Duration::ZERO,
         });
     }
@@ -592,10 +592,7 @@ impl Batch {
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
                     index: hit_index(&done.runs),
-                    runs: Arc::new(done.runs),
-                    extra: Arc::new(done.extra),
-                    rescanned: done.rescanned,
-                    errors: done.errors,
+                    study: done,
                     took: job.started.elapsed(),
                 });
                 (self.table, self.note) = (None, Msg::default());
@@ -629,7 +626,7 @@ impl Batch {
             ..self.applied.scan(cal.cloned())
         };
         let rescan = self.options.rescan;
-        let quant = self.settings.quant.clone();
+        let quant = self.quant.clone();
         let (paths, l, parallel) = (self.paths.clone(), lib.clone(), self.parallel);
         let total = paths.len();
         let job = Job::spawn(ctx, move |done, cancel| {
@@ -655,6 +652,7 @@ impl Batch {
     /// Scan options, quant ions and the filters of the table.
     pub fn settings_grid(&mut self, ui: &mut egui::Ui) {
         let s = &mut self.settings;
+        let quant = &mut self.quant;
         egui::Grid::new("batch settings").show(ui, |ui| {
             row(
                 ui,
@@ -751,7 +749,7 @@ impl Batch {
                         "How many ions of each substance are integrated and summed. Only for substances whose library entry names no quant ions.",
                         "Wie viele Ionen jeder Substanz integriert und summiert werden. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
                     ),
-                    egui::DragValue::new(&mut s.quant.ion_number).range(1..=20),
+                    egui::DragValue::new(&mut quant.ion_number).range(1..=20),
                 );
                 row(
                     ui,
@@ -761,7 +759,7 @@ impl Batch {
                         "Quant ions of one substance are preferably at least this many m/z apart. Only for substances whose library entry names no quant ions.",
                         "Quant-Ionen einer Substanz liegen möglichst mindestens so viele m/z auseinander. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
                     ),
-                    egui::DragValue::new(&mut s.quant.min_dist)
+                    egui::DragValue::new(&mut quant.min_dist)
                         .range(0.0..=100.0)
                         .speed(0.1),
                 );
@@ -773,7 +771,7 @@ impl Batch {
                         "Ions whose peak quality is below this (lower is better) are picked first. Only for substances whose library entry names no quant ions.",
                         "Ionen, deren Peak-Qualität darunter liegt (niedriger ist besser), werden zuerst gewählt. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.",
                     ),
-                    egui::DragValue::new(&mut s.quant.quality_cutoff)
+                    egui::DragValue::new(&mut quant.quality_cutoff)
                         .range(0.0..=100.0)
                         .speed(0.1),
                 );
@@ -853,7 +851,7 @@ impl Batch {
                     "Ion ranges (m/z from–to) not picked as quant ions while other ions are left. Only for substances whose library entry names no quant ions.\nOld key: QUANT_EXCL_IONS",
                     "Ionenbereiche (m/z von–bis), die nicht als Quant-Ionen gewählt werden, solange andere Ionen übrig sind. Nur für Substanzen, deren Bibliothekseintrag keine Quant-Ionen nennt.\nAlter Schlüssel: QUANT_EXCL_IONS",
                 ),
-                &mut s.quant.excluded,
+                &mut quant.excluded,
             );
         });
     }
@@ -948,7 +946,9 @@ impl Batch {
 
     /// Runs scanned and errors of the last scan, for the guided Start step.
     pub fn summary(&self) -> Option<(usize, usize)> {
-        self.scan.as_ref().map(|s| (s.runs.len(), s.errors.len()))
+        self.scan
+            .as_ref()
+            .map(|s| (s.study.runs.len(), s.study.errors.len()))
     }
 
     /// Whether runs are chosen; the guided steps go on once they are.
@@ -1018,10 +1018,16 @@ impl Batch {
 
     /// The last scan: its summary, normalisation, exports and the table.
     fn results(&mut self, ui: &mut egui::Ui) {
+        if let Some(scan) = self.scan.as_mut()
+            && scan.study.quant != self.quant
+        {
+            scan.study.quant = self.quant.clone();
+            self.table = None;
+        }
         let Some(scan) = &self.scan else { return };
         if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
-            let t = table(&scan.runs, &scan.lib.compounds, &scan.extra, &self.settings)
-                .map_err(|e| e.to_string());
+            let t =
+                table(&scan.study, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
             self.table = Some((self.settings.clone(), t));
             (self.shown, self.times, self.norm.edits) = (None, None, Edits::default());
         }
@@ -1029,19 +1035,19 @@ impl Batch {
         ui.label(tf!(
             "{} runs scanned in {} against {}; {} unknown substances, {} ions added by the rescan",
             "{} Läufe in {} gegen {} durchsucht; {} unbekannte Substanzen, {} Ionen durch die erneute Suche ergänzt",
-            scan.runs.len(),
+            scan.study.runs.len(),
             crate::view::took(scan.took),
             scan.lib.name,
-            scan.extra.len(),
-            scan.rescanned
+            scan.study.extra.len(),
+            scan.study.rescanned
         ));
-        for e in &scan.errors {
+        for e in &scan.study.errors {
             ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
         }
         match self.table.as_ref().map(|t| &t.1) {
             Some(Ok(t)) => {
                 norm_controls(ui, &mut self.norm, t);
-                pool_notes(ui, &self.norm, t, &scan.runs, &mut self.times);
+                pool_notes(ui, &self.norm, t, &scan.study.runs, &mut self.times);
                 if self.shown.as_ref().is_none_or(|s| s.0 != self.norm) {
                     let times = self.times.as_ref().map(|t| t.0.as_slice());
                     self.shown = Some((self.norm.clone(), shown_table(t, &self.norm, times)));
@@ -1058,6 +1064,7 @@ impl Batch {
                                     self.settings.group_source(
                                         self.samples.as_ref().and_then(Samples::source).as_deref(),
                                         &scan
+                                            .study
                                             .runs
                                             .iter()
                                             .map(|r| r.path.clone())
@@ -1149,7 +1156,11 @@ fn frag_button(ui: &mut egui::Ui, t: &Table, scan: &Scan) -> Option<Job<Msg>> {
         .save_file()?;
     let rows: Vec<usize> = t.rows.iter().map(|r| r.compound).collect();
     let sources = t.sources.clone();
-    let (lib, extra, runs) = (scan.lib.clone(), scan.extra.clone(), scan.runs.clone());
+    let (lib, extra, runs) = (
+        scan.lib.clone(),
+        scan.study.extra.clone(),
+        scan.study.runs.clone(),
+    );
     Some(Job::spawn(ui.ctx(), move |_, _| {
         let n = lib.compounds.len();
         // Unknowns of an untargeted scan follow the library's entries.
@@ -1246,9 +1257,9 @@ fn scan_settings(scan: &Scan) -> Vec<(&'static str, String)> {
         ("LIBRARY", scan.lib.name.clone()),
         ("RT_ONLY", scan.lib.prepared.is_rt_only().to_string()),
         ("SEARCH_CUTOFF", scan.lib.settings.cutoff.to_string()),
-        ("RUNS_SCANNED", scan.runs.len().to_string()),
-        ("UNKNOWN_SUBSTANCES", scan.extra.len().to_string()),
-        ("IONS_ADDED_BY_RESCAN", scan.rescanned.to_string()),
+        ("RUNS_SCANNED", scan.study.runs.len().to_string()),
+        ("UNKNOWN_SUBSTANCES", scan.study.extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", scan.study.rescanned.to_string()),
     ]
 }
 
@@ -1319,7 +1330,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
             msg!("settings", "Einstellungen"),
             Some(
                 create(&sp)
-                    .and_then(|f| ex.settings.write_csv(&ex.extra, f))
+                    .and_then(|f| ex.settings.write_csv(&ex.scan.study.quant, &ex.extra, f))
                     .map(|()| sp),
             ),
         ),
@@ -1333,7 +1344,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
     } else {
         let ip = ions_path(p);
         let runs: Vec<&RunResult> = (t.sources.iter())
-            .filter_map(|i| ex.scan.runs.get(*i))
+            .filter_map(|i| ex.scan.study.runs.get(*i))
             .collect();
         let r = create(&ip).and_then(|f| t.write_ions_csv(&runs, ex.settings, f));
         results.push((2, quant_ions, Some(r.map(|()| ip))));
@@ -1592,7 +1603,7 @@ impl Detail<'_> {
     fn found(&self, t: &Table, col: usize, compound: usize) -> Option<&Found> {
         let run = *t.sources.get(col)?;
         let hit = *self.scan.index.get(run)?.get(&compound)?;
-        self.scan.runs.get(run)?.found.get(hit)
+        self.scan.study.runs.get(run)?.found.get(hit)
     }
 
     /// The library hits of the component behind a cell: the assigned one first (red), then the
@@ -1606,7 +1617,10 @@ impl Detail<'_> {
             return;
         };
         let lib = &self.scan.lib.compounds;
-        for (k, (name, score)) in hit_list(f, lib, &self.scan.extra).into_iter().enumerate() {
+        for (k, (name, score)) in hit_list(f, lib, &self.scan.study.extra)
+            .into_iter()
+            .enumerate()
+        {
             let text = format!("{name} ({score:.3})");
             match k {
                 0 => ui.colored_label(ui.visuals().error_fg_color, text),
@@ -1967,16 +1981,16 @@ mod tests {
             ..Default::default()
         };
         b.use_settings(&applied, false);
-        assert_eq!(b.settings.quant.ion_number, 5);
+        assert_eq!(b.quant.ion_number, 5);
         // An edit in the window survives settings that leave QUANT_* alone ...
-        b.settings.quant.ion_number = 2;
+        b.quant.ion_number = 2;
         applied.ls_ri_diff += 1.0;
         b.use_settings(&applied, false);
-        assert_eq!(b.settings.quant.ion_number, 2);
+        assert_eq!(b.quant.ion_number, 2);
         // ... and the next change of QUANT_* replaces it.
         applied.quant_ion_number = 4;
         b.use_settings(&applied, false);
-        assert_eq!(b.settings.quant.ion_number, 4);
+        assert_eq!(b.quant.ion_number, 4);
     }
 
     #[test]
@@ -2119,7 +2133,11 @@ mod tests {
             }
         };
         let runs = [at("d1", 100), at("d2", 200)];
-        let t = md_core::batch::table(&runs, &[], &[], &Default::default()).unwrap();
+        let study = StudyResult {
+            runs: runs.to_vec(),
+            ..Default::default()
+        };
+        let t = md_core::batch::table(&study, &[], &Default::default()).unwrap();
         assert_eq!(run_times(&t, &runs), (vec![100, 200], 0));
         let t = t.select_runs(&[1, 0]);
         let shown: Vec<_> = shown_runs(&runs, &t.sources)
@@ -2186,10 +2204,10 @@ mod tests {
         let scan = Scan {
             lib: Arc::new(lib),
             index: hit_index(std::slice::from_ref(&run)),
-            runs: Arc::new(vec![run]),
-            extra: Arc::default(),
-            rescanned: 0,
-            errors: Vec::new(),
+            study: StudyResult {
+                runs: vec![run],
+                ..Default::default()
+            },
             took: Duration::ZERO,
         };
         let table = Table {
@@ -2219,7 +2237,7 @@ mod tests {
         assert_eq!(d.ion(&t, 0, 0, 0), Some(500.0));
         assert_eq!(d.ion(&t, 0, 0, 1), Some(100.0));
         let f = d.found(&t, 0, 0).unwrap();
-        let hits = hit_list(f, &scan.lib.compounds, &scan.extra);
+        let hits = hit_list(f, &scan.lib.compounds, &scan.study.extra);
         assert_eq!(hits, [("Glucose".into(), 0.9), ("Fructose".into(), 0.8)]);
         // The ion lines follow their substance; without the checkbox there are none.
         let mut v = View::default();
