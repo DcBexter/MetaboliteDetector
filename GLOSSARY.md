@@ -9,13 +9,13 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Run** | Ein GC-MS-Lauf: eine Datei (ANDI-MS `.cdf`, FastFlight, alter Cache) mit Scans, Zeiten und Spektren. | `md_core::Chromatogram` |
 | **Derivative cache** | Erste Ableitung von TIC/SIC, je Run einmal beim ersten Zeichnen berechnet; das SIC-Feld wird mit einem neuen SIC geleert. | `Run::d_tic`, `Run::d_sic` (md-app) |
 | **Scan** | Ein Spektrum zu einem Zeitpunkt des Runs; m/z innerhalb des Scans sortiert. | `Chromatogram` (flache Arrays mit Scan-Offsets) |
-| **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut. | `md_core::peaks::IonTraces`, `trace(row)` |
+| **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut, dicht oder (bei dünn besetzten Exact-Mass-Runs) sparse. | `md_core::peaks::IonTraces`, `trace(row, scans, buf)` |
 | **Peak** | Ein Maximum in einem Ion trace mit Grenzen, Apex, interpoliertem Apex und S/N. | `md_core::peaks::Peak` |
 | **Peak pass** | Welche Peak-Erkennung ein Aufrufer will: *Reordered* (Hauptfenster und Batch, `detect_all_peaks` mit `reorder_peaks` auf Exact-Mass-Runs) oder *Fresh* (Rescan, `detect_peaks` wie das alte `ResultSeries::scanIons`). | `md_core::analysis::PeakPass` |
 | **Component** | Ein deconvolvierter Stoff: Peaks mehrerer Ion traces mit gemeinsamer Retentionszeit, Modellpeak und Spektrum. | `md_core::deconv::Component` |
 | **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
-| **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins. | `md_core::search` |
+| **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins (Heap über die besten Treffer je Component, keine globale Paarliste). | `md_core::search` |
 | **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |
 | **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Library, Settings, Sample table, Gruppen. | `md_core::batch`; geplant: `run_study` (#363) |
 | **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{scan_runs, complete_scan, table}` |

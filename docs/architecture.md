@@ -140,8 +140,9 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
-| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 83 ms (250 ms with the sorted pair list) |
 | Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
+| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | 470 / 450 / 47 ms (2026-10-22) |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -155,8 +156,17 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
-0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+detector on every trace in parallel. The index is dense (masses × scans × 4 bytes; the example runs:
+about 0.1 GiB) or, when the run fills at most 1 in 4 cells (`SPARSE_FILL_RATIO`, typical for exact-mass
+runs), sparse: per row the scans with a point (8 bytes each), every other scan reads the missing value.
+Readers call `IonTraces::trace(row, scans, buf)`, which returns the dense slice or fills `buf` (one per
+rayon worker; peak detection keeps it thread-local because `map_init` would allocate it per row), and
+`IonTraces::value(row, scan)` for single points. The ratio is measured with `examples/perf.rs` on
+36 000 scans × 500 points per scan spread over 1, 2, 4, 8 and 40 exact m/z per mass: at 1 in 2 sparse
+saves nothing, at 1 in 4 it saves a third of the peak memory for about a quarter more time, at 1 in 40
+(20 000 traces) the peak memory falls from 2.8 GiB to 0.3 GiB at the same detection time.
+`reorder_peaks` keeps a running f64 sum per profile, so a join adds one member instead of re-adding all.
+`IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
 
@@ -318,7 +328,11 @@ entry: the pure score is a cosine over all peaks of both spectra, the impure sco
 `0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
 Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
 components in parallel and then assigns library compounds greedily by best overall score, each library compound
-and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
+and each component at most once. The assignment does not build or sort the list of all (component, hit) pairs:
+each component's hits are already best first, so a heap over the components' current best pairs takes them in
+the same order (ties: lower library index, then lower component index) and gives the same result bit for bit
+(`assign_best_first`, checked against the sorted pair list in a test). All hits stay, the colouring needs them.
+`SearchSettings::default()` holds the old `LS_*` defaults.
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
 spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
 `library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
@@ -328,9 +342,9 @@ the old NIST search. Both are in the settings dialog ("Number of fragments", "Mi
 frag."; old `SQL_*`).
 
 File → Open NIST library loads a second library next to the normal one, always with the pre-filter (old
-`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on the
-UI thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
-entries) and its NIST hits are listed below the library hits, which stay
+`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on a
+worker thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
+entries; the button waits meanwhile) and its NIST hits are listed below the library hits, which stay
 as they are (old "NIST search..."). The NIST hits belong to that component and spectrum; a re-analysis hides
 them.
 
