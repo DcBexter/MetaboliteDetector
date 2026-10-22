@@ -377,14 +377,18 @@ pub fn map_compounds_cancellable(
     if cancel.is_cancelled() {
         return None; // also for no components
     }
+    // Not `collect::<Option<_>>`: that is measurably slower than a plain collect, as with `sic`.
     let hits: Vec<Vec<LibraryHit>> = comps
         .par_iter()
         .enumerate()
-        .map(|(i, c)| {
-            (!cancel.is_cancelled())
-                .then(|| library_hits(&c.spectrum, ris.and_then(|r| r.get(i).copied()), lib, s))
+        .map(|(i, c)| match cancel.is_cancelled() {
+            true => Vec::new(),
+            false => library_hits(&c.spectrum, ris.and_then(|r| r.get(i).copied()), lib, s),
         })
-        .collect::<Option<_>>()?;
+        .collect();
+    if cancel.is_cancelled() {
+        return None;
+    }
     let assigned = assign_best_first(&hits, lib.len());
     Some(Identification { hits, assigned })
 }

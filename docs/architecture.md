@@ -116,7 +116,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    matching the old `GCMSDiskScan<int, float>`. Accumulate sums in `f64`.
 2. **Never block the UI.** File loading and every analysis step run on worker threads; the UI polls
    results and shows progress. Long jobs must be cancellable: every background job is a `jobs::Job`
-   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, and the long md-core steps take the `Cancel` themselves: `fastflight::bin_spectrum` (per scan), `andi::write_with_tic` (per variable), `Chromatogram::sic_cancellable` / `ri::marker_peaks` (per scan) and `map_compounds_cancellable` (per component); a plain file read still runs to its end. Opening runs can be cancelled from the status bar. Each job has a test that a set `Cancel` gives no result (for `write_with_tic`, `bin_spectrum` and `marker_peaks` it is set inside the loop with `Cancel::after(n)`, md-core tests only); closing a job's window or dropping the `Job` discards its result.
+   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, and the long md-core steps take the `Cancel` themselves: `fastflight::bin_spectrum` (per scan), `andi::write_with_tic` (per variable), `Chromatogram::sic_cancellable` / `ri::marker_peaks` (per scan) and `map_compounds_cancellable` (per component); a plain file read still runs to its end. Opening runs can be cancelled from the status bar. Each job has a test that a set `Cancel` gives no result (for `write_with_tic`, `bin_spectrum` and `marker_peaks` it is set inside the loop with `Cancel::after(n)`, md-core tests only); closing a job's window or dropping the `Job` discards its result. A cancel-checked parallel loop writes into a preallocated `Vec` instead of collecting `Option`s (the latter cost about 1.4 ms per SIC call).
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
    The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame; both are freed when the derivative view is switched off.
@@ -128,25 +128,33 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
 7. Memory-mapped or streamed access (like the old disk scan) is added when real runs exceed RAM;
    the cut-off is recorded as a `shortcut:` comment in `andi.rs`.
 
-Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 invocations of
-`cargo run --release -p md-core --example perf`, measured 2026-10-22 on a noisy machine, the two builds
-alternating in one session (#360). Before M8 is `f16f0a7` (release 0.2.0), after M8 is `2fb4769`:
+Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 alternating runs of
+`cargo run --release -p md-core --example perf` (the same `perf.rs` for all three builds), one session on
+2026-10-22 on a noisy machine (single runs vary by about ±10 %). `f16f0a7` is 0.2.0, `93cbcb9` is main before
+#395, `#395` is this fix. The "SIC median" row is the median of 15 calls; the single call also pays for touching the data.
 
-| Operation | Before M8 | After M8 |
-|-----------|-----------|----------|
-| TIC | 2.1 ms | 1.9 ms |
-| SIC (one m/z) | 0.85 ms | 3.2 ms |
-| Decimate TIC for drawing | 0.06 ms | 0.05 ms |
-| Overlay frame: decimate TIC + SIC of 15 runs | 0.9 ms | 0.85 ms |
-| Ion traces (index, 500 traces) | 23 ms | 28 ms |
-| Peaks in all 500 traces (300 000 peaks) | 19 ms | 17 ms |
-| Deconvolution (12 000 substances of 25 ions) | 19 ms | 21 ms |
-| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 36 ms | 35 ms |
-| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 251 ms | 71 ms (#370) |
-| Batch, one run end to end (traces, peaks, deconvolution, search) | 323 ms | 398 ms |
-| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | not measured (no case in `f16f0a7`; dense peak memory 2.8 GiB) | 459 / 461 / 48 ms (#369) |
+| Operation | `f16f0a7` (0.2.0) | `93cbcb9` (before #395) | #395 |
+|-----------|-------------------|-------------------------|------|
+| TIC | 1.9 ms | 2.0 ms | 1.9 ms |
+| SIC (one m/z), single call | 0.8 ms | 3.1 ms | 0.8 ms |
+| SIC (one m/z), median of 15 calls | 0.20 ms | 1.56 ms | 0.17 ms |
+| Decimate TIC for drawing | 0.04 ms | 0.05 ms | 0.04 ms |
+| Overlay frame: decimate TIC + SIC of 15 runs | 0.66 ms | 0.83 ms | 0.63 ms |
+| Ion traces (index, 500 traces) | 19 ms | 21 ms | 22 ms |
+| Peaks in all 500 traces (300 000 peaks) | 17 ms | 15 ms | 15 ms |
+| Deconvolution (12 000 substances of 25 ions) | 19 ms | 20 ms | 20 ms |
+| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 33 ms | 33 ms | 32 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 243 ms | 70 ms (#370) | 69 ms |
+| Batch, one run end to end (traces, peaks, deconvolution, search) | 282 ms | 338 ms | 312 ms |
+| Batch, untargeted, one run | 283 ms | 341 ms | 318 ms |
+| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | not measured (no case in `f16f0a7`; dense peak memory 2.8 GiB) | 459 / 461 / 48 ms (#369, earlier session) | not re-measured |
 
-SIC, ion traces and the end-to-end batch run are slower after M8; the cause is not investigated yet.
+SIC was the regression: `sic_cancellable` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
+1.4 ms per call. The fix keeps the per-scan `Cancel` check, writes into a preallocated `Vec` and returns `None` at the end;
+`map_compounds_cancellable` had the same pattern and got the same fix, which takes about 8 % off the batch run.
+Still open, not fixed: the batch run is about 10 % and ion traces about 14 % slower than `f16f0a7`. Bisecting the batch run
+puts most of the gap in `4f136f9` (#377, job plumbing in `analyze_run` and `scan_and_save`); its cancel checks are not the cause.
+Tracked in #396.
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
