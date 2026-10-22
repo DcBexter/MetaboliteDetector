@@ -70,6 +70,12 @@ pub fn result_rows(
         .collect()
 }
 
+/// The component list's order: rows by the apex scan of their component. Stable, so equal apexes keep
+/// the deconvolution order. Only the list sorts; the run's components stay in deconvolution order.
+pub fn sort_by_apex(rows: &mut [ResultRow], comps: &[Component]) {
+    rows.sort_by_key(|r| comps[r.component].apex_scan);
+}
+
 /// Old `getIntegral`: the sum over the quant ions of the largest peak of that ion (a duplicate peak
 /// counts once, §4.5). Without quant ions the old code asks the component for three ions; here these are
 /// the three largest peaks (Inferred).
@@ -370,6 +376,19 @@ mod tests {
             (rows[0].name.as_str(), rows[0].overall),
             ("No match: 1", None)
         );
+    }
+
+    #[test]
+    fn rows_sort_by_apex_and_keep_deconvolution_order_on_ties() {
+        let comps = vec![comp(2, &[]), comp(1, &[]), comp(2, &[]), comp(0, &[])];
+        let id = Identification {
+            hits: vec![Vec::new(); 4],
+            assigned: vec![None; 4],
+        };
+        let mut rows = result_rows(&comps, &[0.0, 60.0, 120.0], None, &[], &id, &[], 0.8);
+        sort_by_apex(&mut rows, &comps);
+        let order: Vec<usize> = rows.iter().map(|r| r.component).collect();
+        assert_eq!(order, vec![3, 1, 0, 2]);
     }
 
     #[test]

@@ -13,7 +13,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Peak** | Ein Maximum in einem Ion trace mit Grenzen, Apex, interpoliertem Apex und S/N. | `md_core::peaks::Peak` |
 | **Peak pass** | Welche Peak-Erkennung ein Aufrufer will: *Reordered* (Hauptfenster und Batch, `detect_all_peaks` mit `reorder_peaks` auf Exact-Mass-Runs) oder *Fresh* (Rescan, `detect_peaks` wie das alte `ResultSeries::scanIons`). | `md_core::analysis::PeakPass` |
 | **Component** | Ein deconvolvierter Stoff: Peaks mehrerer Ion traces mit gemeinsamer Retentionszeit, Modellpeak und Spektrum. | `md_core::deconv::Component` |
-| **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
+| **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. Die Komponenten bleiben in Deconvolution-Reihenfolge (Nummern der untargeted Gruppen, Tie-Break der Library search); nach Apex sortiert nur die Liste. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
 | **Analysis settings** | Die einmal aus den Settings abgeleiteten Parameter von Ion trace, Peak, Component, Quant ion und Library search; eine Ableitung, die Analyze run, Study und md-cli lesen. | `md_core::settings::AnalysisSettings` |
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
 | **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins (Heap über die besten Treffer je Component, keine globale Paarliste); abbrechbar je Component. | `md_core::search` |
@@ -26,7 +26,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **MID** | Mass isotopomer distribution: Verteilung der Markierung je Fragment, korrigiert um natürliche Isotope. | `md_core::mid` |
 | **Job** | Hintergrundarbeit der App mit Progress und Cancel; die UI pollt den Zustand. Cancel wirkt zwischen Scans, Variablen oder Komponenten des langen Schritts. Jede Operation hat genau eine Funktion mit `Cancel`; ohne Abbruchwunsch übergibt der Aufrufer `&Cancel::default()`. | `md_app::jobs::Job`; `md_core::job::{Cancel, Progress}` |
 | **Job slot** | Das eine Job-Feld eines Fensters: start, poll (zeichnet bis zum Ergebnis neu), cancel. | `md_app::jobs::Slot` |
-| **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`), `md_core::results::order` |
+| **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`), `md_core::results::{order, sort_by_apex}` |
 | **Edits** | Änderungen an der angezeigten Batch-Tabelle: Runs und Substanzen ausblenden oder verschieben. Die Core-Tabelle bleibt unverändert. | `md_core::batch::Edits` |
 | **MID report** | Ergebnis eines MID-Scans: Runs, Substanzen, Statistik und Text-Exporte. Eine Verschiebung ändert nur die Reihenfolge. | `md_core::mid::MidReport` |
 | **Legacy numeric** | Benannte Rundungen und Rechenwege, die 3.3 bit für bit nachbilden (C-Trunkierung `c_int`, `sg_trunc`, `round_sig8`, glibc `pow`/`hypot`). | `md-core/src/legacy_numeric.rs` (crate-intern) |

@@ -66,7 +66,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/menu.rs           top menu bar (File, Analysis, View, Help)
   src/status.rs         bottom status bar
   src/run_list.rs       left area: the open runs, the component list below them
-  src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp (rows, order and filter in md-core)
+  src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp (rows, apex order, order and filter in md-core; the run's components keep the deconvolution order, see the untargeted test)
   src/central.rs        centre: TIC/SIC plots, scan cursor, scan/RT entry, spectrum
   src/detected_peaks.rs Detected Peaks: ion traces of the selected component beside the spectrum
   src/view.rs           chromatogram view options (derivative, time unit, auto Y, score filter) and the run info window
