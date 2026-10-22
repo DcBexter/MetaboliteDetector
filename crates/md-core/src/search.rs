@@ -755,6 +755,9 @@ mod tests {
         cancel.cancel();
         assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_none());
         assert!(map_compounds_cancellable(&[], None, &prepared, &s, &cancel).is_none());
+        assert!(
+            map_compounds_cancellable(&comps, None, &prepared, &s, &Cancel::after(2)).is_none()
+        );
     }
 
     #[test]

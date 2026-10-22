@@ -150,7 +150,7 @@ impl Chromatogram {
         tolerance: f32,
         cancel: &job::Cancel,
     ) -> Option<Vec<f64>> {
-        // Writing into a preallocated Vec: collecting `Option`s costs about 1 ms per call here.
+        // Writing into a preallocated Vec: collecting `Option`s costs about 1.4 ms per call here.
         let mut out = vec![0.0; self.scan_count()];
         out.par_iter_mut().enumerate().for_each(|(s, v)| {
             if cancel.is_cancelled() {
