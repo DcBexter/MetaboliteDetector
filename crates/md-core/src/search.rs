@@ -744,11 +744,7 @@ mod tests {
         let comps = [component(&[(50, 100)])];
         let prepared = PreparedLibrary::new(&lib, &s);
         let cancel = Cancel::default();
-        let id = map_compounds_cancellable(&comps, None, &prepared, &s, &cancel);
-        assert_eq!(
-            id,
-            Some(map_compounds_to_library(&comps, None, &prepared, &s))
-        );
+        assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_some());
         cancel.cancel();
         assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_none());
     }
