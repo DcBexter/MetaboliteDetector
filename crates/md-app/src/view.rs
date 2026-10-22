@@ -250,7 +250,7 @@ impl App {
         let last = (0..d.scan_count()).filter_map(|s| d.spectrum(s).0.last().copied());
         let lowest = first.fold(f32::INFINITY, f32::min);
         let highest = last.fold(f32::NEG_INFINITY, f32::max);
-        let peak = self.settings.key().0;
+        let peak = self.settings.key().peaks;
         let yes = |b: bool| if b { t("yes", "ja") } else { t("no", "nein") };
         let rows = [
             (t("Source file", "Quelldatei"), r.path.display().to_string()),
