@@ -758,7 +758,7 @@ mod tests {
         app.view.derivative = true;
         let run = &app.runs[0];
         super::run_points(run, (&run.tic, &run.d_tic), &app.view, (0.0, 1e9), 800);
-        super::run_points(run, (&run.sic, &run.d_sic), &app.view, (0.0, 1e9), 800);
+        run.d_sic.set(vec![0.0]).unwrap(); // the fixture's SIC is empty
         assert!(run.d_tic.get().is_some() && run.d_sic.get().is_some());
         app.free_derivatives();
         assert!(app.runs[0].d_tic.get().is_some(), "still shown");
