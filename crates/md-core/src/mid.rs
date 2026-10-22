@@ -5,7 +5,10 @@
 
 mod export;
 mod frag;
+mod report;
 mod series;
+
+pub use report::{MidReport, Move};
 
 pub use export::{group_stat, qt_g};
 

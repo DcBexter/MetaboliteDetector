@@ -10,12 +10,16 @@
 
 mod detail;
 mod edit;
+mod export;
 mod group_stats;
 mod rescan;
 mod samples;
 mod untargeted;
 
 pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
+pub(crate) use edit::pick;
+pub use edit::{Act, Edits, edited_runs, hit_index};
+pub use export::{ExportEntry, ExportFile, ExportOptions, ExportPart, export_set};
 pub use group_stats::{GroupStats, group_label, group_names, group_stats_path};
 use rescan::{PeakList, rescan_runs};
 use samples::fs_key;

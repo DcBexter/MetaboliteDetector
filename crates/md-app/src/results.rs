@@ -6,7 +6,10 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::Chromatogram;
-use md_core::results::{ResultRow, find_substance, result_rows, write_csv};
+use md_core::results::{
+    Col, ListRow as Row, PLAIN, ResultRow, WITH_LIBRARY, find_substance, next_sort, order,
+    result_rows, write_csv,
+};
 use md_core::ri::RiCalibration;
 use md_core::search::Identification;
 use std::sync::{Arc, Weak};
@@ -15,90 +18,49 @@ use crate::Run;
 use crate::identify::Library;
 use crate::lang::{Msg, msg, t, tf};
 
-/// A column of the list in the app's spelling; the CSV keeps the old program's
+/// The header text of a column in the app's spelling; the CSV keeps the old program's
 /// (`md_core::results::write_csv`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Col {
-    Name,
-    Rt,
-    Ri,
-    Area,
-    Score,
-    Spectrum,
-    RiScore,
-    Sn,
-    Ions,
-    QuantIons,
-}
-
-/// Without a library there are no scores and no quant ions.
-const PLAIN: [Col; 6] = [Col::Name, Col::Rt, Col::Ri, Col::Area, Col::Sn, Col::Ions];
-const WITH_LIBRARY: [Col; 10] = [
-    Col::Name,
-    Col::Rt,
-    Col::Ri,
-    Col::Area,
-    Col::Score,
-    Col::Spectrum,
-    Col::RiScore,
-    Col::Sn,
-    Col::Ions,
-    Col::QuantIons,
-];
-
-impl Col {
-    fn title(self) -> &'static str {
-        match self {
-            Col::Name => t("Compound name", "Substanzname"),
-            Col::Rt => "RT (min)",
-            Col::Ri => "RI",
-            Col::Area => t("Peak area", "Peakfläche"),
-            Col::Score => "Score",
-            Col::Spectrum => t("Spectrum", "Spektrum"),
-            Col::RiScore => t("RI score", "RI-Score"),
-            Col::Sn => "S/N",
-            Col::Ions => t("Ions", "Ionen"),
-            Col::QuantIons => t("Quant ions", "Quant-Ionen"),
-        }
-    }
-
-    fn column(self) -> Column {
-        match self {
-            // The name takes the room the fixed columns leave; a longer one is cut (the row's
-            // tooltip has it whole) so the scores stay in view. Not resizable: egui keeps a resizable
-            // column's first width, so it would stop following the panel.
-            Col::Name => Column::remainder()
-                .at_least(106.0)
-                .clip(true)
-                .resizable(false),
-            // Each with room for the sort arrow (a column never shrinks again); right-aligned cells
-            // would make automatic columns grow to the panel.
-            Col::Rt => Column::initial(66.0).at_least(40.0),
-            Col::Ri | Col::Sn | Col::Ions => Column::initial(44.0).at_least(40.0),
-            Col::Area | Col::Spectrum => Column::initial(80.0).at_least(40.0),
-            Col::Score => Column::initial(60.0).at_least(40.0),
-            Col::RiScore => Column::initial(70.0).at_least(40.0),
-            Col::QuantIons => Column::initial(90.0).at_least(60.0).clip(true),
-        }
-    }
-
-    /// Numbers are right-aligned so digits line up; name and quant ions stay left.
-    fn align(self) -> egui::Layout {
-        match matches!(self, Col::Name | Col::QuantIons) {
-            false => egui::Layout::right_to_left(egui::Align::Center),
-            true => egui::Layout::left_to_right(egui::Align::Center),
-        }
+fn title(c: Col) -> &'static str {
+    match c {
+        Col::Name => t("Compound name", "Substanzname"),
+        Col::Rt => "RT (min)",
+        Col::Ri => "RI",
+        Col::Area => t("Peak area", "Peakfläche"),
+        Col::Score => "Score",
+        Col::Spectrum => t("Spectrum", "Spektrum"),
+        Col::RiScore => t("RI score", "RI-Score"),
+        Col::Sn => "S/N",
+        Col::Ions => t("Ions", "Ionen"),
+        Col::QuantIons => t("Quant ions", "Quant-Ionen"),
     }
 }
 
-/// A result row and what the list shows beyond the CSV.
-struct Row {
-    res: ResultRow,
-    /// Also without a match: then the three largest peaks (`md_core::results::area`).
-    area: f64,
-    /// Mean S/N of the ion peaks; `None` for a component without peaks (saved by the old program).
-    sn: Option<f64>,
-    ions: usize,
+fn column(c: Col) -> Column {
+    match c {
+        // The name takes the room the fixed columns leave; a longer one is cut (the row's
+        // tooltip has it whole) so the scores stay in view. Not resizable: egui keeps a resizable
+        // column's first width, so it would stop following the panel.
+        Col::Name => Column::remainder()
+            .at_least(106.0)
+            .clip(true)
+            .resizable(false),
+        // Each with room for the sort arrow (a column never shrinks again); right-aligned cells
+        // would make automatic columns grow to the panel.
+        Col::Rt => Column::initial(66.0).at_least(40.0),
+        Col::Ri | Col::Sn | Col::Ions => Column::initial(44.0).at_least(40.0),
+        Col::Area | Col::Spectrum => Column::initial(80.0).at_least(40.0),
+        Col::Score => Column::initial(60.0).at_least(40.0),
+        Col::RiScore => Column::initial(70.0).at_least(40.0),
+        Col::QuantIons => Column::initial(90.0).at_least(60.0).clip(true),
+    }
+}
+
+/// Numbers are right-aligned so digits line up; name and quant ions stay left.
+fn align(c: Col) -> egui::Layout {
+    match matches!(c, Col::Name | Col::QuantIons) {
+        false => egui::Layout::right_to_left(egui::Align::Center),
+        true => egui::Layout::left_to_right(egui::Align::Center),
+    }
 }
 
 /// What the cached rows were built from: the run's data, its `rev`, the calibration used without
@@ -201,17 +163,9 @@ impl Results {
             ui.label(&*self.note);
         }
 
-        let mut order: Vec<usize> = (0..rows.len())
-            .filter(|i| want.is_empty() || shown_name(&rows[*i].res).to_lowercase().contains(&want))
-            .collect();
-        if let Some((col, desc)) = self.sort {
-            order.sort_by(|a, b| {
-                let o = compare(&rows[*a], &rows[*b], col);
-                if desc { o.reverse() } else { o }
-            });
-        }
+        let shown = order(&rows, &want, shown_name, self.sort);
         ui.horizontal_wrapped(|ui| {
-            let (s, n) = (order.len(), rows.len());
+            let (s, n) = (shown.len(), rows.len());
             ui.label(tf!("{s} of {n} components", "{s} von {n} Komponenten"));
             if lib.is_none() {
                 ui.weak(t(
@@ -220,7 +174,7 @@ impl Results {
                 ));
             }
         });
-        if order.is_empty() && !rows.is_empty() {
+        if shown.is_empty() && !rows.is_empty() {
             ui.weak(t(
                 "No component matches. Clear the search to see all.",
                 "Keine Komponente passt. Die Suche leeren, um alle zu sehen.",
@@ -232,13 +186,13 @@ impl Results {
                 - i32::from(i.key_pressed(egui::Key::ArrowUp))
         });
         let at =
-            (run.component).and_then(|k| order.iter().position(|i| rows[*i].res.component == k));
+            (run.component).and_then(|k| shown.iter().position(|i| rows[*i].res.component == k));
         let to = (step != 0 && !ui.ctx().text_edit_focused())
-            .then(|| stepped(order.len(), at, step))
+            .then(|| stepped(shown.len(), at, step))
             .flatten();
-        let clicked = table(ui, &mut self.sort, &rows, &order, run, lib.as_deref(), to)
+        let clicked = table(ui, &mut self.sort, &rows, &shown, run, lib.as_deref(), to)
             .or(selected)
-            .or(to.map(|p| rows[order[p]].res.component));
+            .or(to.map(|p| rows[shown[p]].res.component));
         if let Some(k) = clicked {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
@@ -437,15 +391,6 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
         .collect()
 }
 
-/// Click order of a column header: ascending, descending, off.
-fn next_sort(sort: Option<(Col, bool)>, col: Col) -> Option<(Col, bool)> {
-    match sort {
-        Some((s, false)) if s == col => Some((col, true)),
-        Some((s, true)) if s == col => None,
-        _ => Some((col, false)),
-    }
-}
-
 /// The table of `order` (indices into `rows`), scrolled to position `scroll` of `order`; returns the
 /// component clicked in it.
 fn table(
@@ -474,12 +419,12 @@ fn table(
             t = t.scroll_to_row(row, None);
         }
         for c in cols {
-            t = t.column(c.column());
+            t = t.column(column(*c));
         }
         t.header(20.0, |mut h| {
             for c in cols {
                 h.col(|ui| {
-                    ui.with_layout(c.align(), |ui| header_cell(ui, sort, *c));
+                    ui.with_layout(align(*c), |ui| header_cell(ui, sort, *c));
                 });
             }
         })
@@ -489,7 +434,7 @@ fn table(
                 row.set_selected(run.component == Some(r.res.component));
                 for c in cols {
                     row.col(|ui| {
-                        ui.with_layout(c.align(), |ui| {
+                        ui.with_layout(align(*c), |ui| {
                             let text = cell(r, *c);
                             // An unmatched component reads as a placeholder.
                             match r.res.compound.is_none() && *c == Col::Name {
@@ -515,7 +460,7 @@ fn header_cell(ui: &mut egui::Ui, sort: &mut Option<(Col, bool)>, col: Col) {
         Some((s, d)) if s == col => [" ▲", " ▼"][d as usize],
         _ => "",
     };
-    let text = egui::RichText::new(format!("{}{arrow}", col.title())).strong();
+    let text = egui::RichText::new(format!("{}{arrow}", title(col))).strong();
     let resp = ui
         .add(egui::Label::new(text).sense(egui::Sense::click()))
         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -548,27 +493,6 @@ fn cell(r: &Row, col: Col) -> String {
         }
     }
 }
-
-/// Missing values sort first.
-fn compare(a: &Row, b: &Row, col: Col) -> std::cmp::Ordering {
-    let num = md_core::view::missing_first;
-    let (x, y) = (&a.res, &b.res);
-    match col {
-        Col::Name => shown_name(x)
-            .to_lowercase()
-            .cmp(&shown_name(y).to_lowercase()),
-        Col::Rt => x.rt_s.total_cmp(&y.rt_s),
-        Col::Ri => num(x.ri).total_cmp(&num(y.ri)),
-        Col::Area => a.area.total_cmp(&b.area),
-        Col::Score => num(x.overall).total_cmp(&num(y.overall)),
-        Col::Spectrum => num(x.spec_score).total_cmp(&num(y.spec_score)),
-        Col::RiScore => num(x.ri_score).total_cmp(&num(y.ri_score)),
-        Col::Sn => num(a.sn).total_cmp(&num(b.sn)),
-        Col::Ions => a.ions.cmp(&b.ions),
-        Col::QuantIons => x.quant_ions.len().cmp(&y.quant_ions.len()),
-    }
-}
-
 /// md-core names a component without match "No match: N" for the CSV too; on screen it is translated.
 fn shown_name(r: &ResultRow) -> String {
     match r.compound {

@@ -13,10 +13,13 @@ use crate::settings::{name_of, row};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    DEFAULT_PARALLEL, Found, QuantSettings, RunResult, SampleGroups, SampleTable, ScanSettings,
-    ShiftReference, Study, StudyResult, Table, TableSettings, path_key, run_key, run_study, table,
+    Act, DEFAULT_PARALLEL, Edits, Found, QuantSettings, RunResult, SampleGroups, SampleTable,
+    ScanSettings, ShiftReference, Study, StudyResult, Table, TableSettings, path_key, run_key,
+    run_study, table,
 };
-use md_core::batch::{cell_ions, group_stats_path, hit_list, ions_path, settings_path};
+use md_core::batch::{
+    ExportEntry, ExportOptions, ExportPart, cell_ions, edited_runs, export_set, hit_index, hit_list,
+};
 use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
@@ -45,19 +48,6 @@ struct Scan {
     index: Vec<HashMap<usize, usize>>,
 }
 
-/// See `Scan::index`.
-fn hit_index(runs: &[RunResult]) -> Vec<HashMap<usize, usize>> {
-    (runs.iter())
-        .map(|r| {
-            r.found
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (f.compound, i))
-                .collect()
-        })
-        .collect()
-}
-
 /// Which normalisation (F13) the table shows; the table is derived again when this changes.
 #[derive(Clone, PartialEq)]
 struct Norm {
@@ -70,53 +60,6 @@ struct Norm {
     z_score: bool,
     /// Runs and substances the user removed; part of the key because they change the shown table.
     edits: Edits,
-}
-
-/// Columns and rows removed or moved in the shown table. Runs are edited before the
-/// normalisation (a removed run takes no part in z-scores), substances after it.
-#[derive(Clone, Default, PartialEq)]
-struct Edits {
-    /// Columns of the table `table` built that are kept, in display order; `None` = all.
-    cols: Option<Vec<usize>>,
-    /// Library indices of the removed substances.
-    rows: Vec<usize>,
-}
-
-impl Edits {
-    fn cols(&self, n: usize) -> Vec<usize> {
-        self.cols.clone().unwrap_or_else(|| (0..n).collect())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.cols.is_none() && self.rows.is_empty()
-    }
-
-    /// "Restore removed": brings back all runs and substances and the original order.
-    fn restore(&mut self) {
-        *self = Self::default();
-    }
-
-    /// Applies what the user asked for in the shown table with `n` columns in the base table.
-    fn apply(&mut self, act: Act, n: usize) {
-        let mut cols = self.cols(n);
-        match act {
-            Act::DropRun(j) if j < cols.len() => {
-                cols.remove(j);
-            }
-            Act::MoveRun(j, to) if j < cols.len() && to < cols.len() => cols.swap(j, to),
-            Act::DropRow(compound) => return self.rows.push(compound),
-            _ => return,
-        }
-        self.cols = Some(cols);
-    }
-}
-
-/// What a click in the shown table asks for; columns are numbered as shown.
-#[derive(Clone, Copy)]
-enum Act {
-    DropRun(usize),
-    MoveRun(usize, usize),
-    DropRow(usize),
 }
 
 /// How the shown table is displayed; changing it does not derive the table again.
@@ -1292,71 +1235,47 @@ fn remove_stale(path: &Path) -> std::io::Result<Option<PathBuf>> {
     }
 }
 
-/// Files are written in the standard format first; the German spreadsheet variant is a rewrite.
-fn german(path: &Path, text_cols: usize, ex: &Export) -> std::io::Result<()> {
-    if ex.excel_de {
-        md_core::csv::excel_de_file(path, text_cols)?;
-    }
-    Ok(())
-}
-
-/// Writes the results CSV `p` and the files next to it; the note names what was saved and what
-/// could not be.
+/// Writes the files of the export next to the results CSV `p` (built by `md_core::batch::export_set`);
+/// the note names what was saved and what could not be.
 fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
-    let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
-    t.write_csv(create(p)?)?;
-    german(p, 1, ex)?;
-    let sp = settings_path(p);
-    let group_stats = if ex.group_stats {
-        t.write_group_stats_file(p, Some(ex.blank))
-    } else {
-        remove_stale(&group_stats_path(p))
-    };
-    // (text columns for the German variant, name in the note, file)
-    let quant_ions = msg!("quant ions", "Quant-Ionen");
-    let mut results = vec![
-        (
-            2,
-            msg!("replicate groups", "Replikatgruppen"),
-            t.write_groups_file(p).transpose(),
-        ),
-        (
-            1,
-            msg!("group statistics", "Gruppenstatistik"),
-            group_stats.transpose(),
-        ),
-        (
-            2,
-            msg!("settings", "Einstellungen"),
-            Some(
-                create(&sp)
-                    .and_then(|f| ex.settings.write_csv(&ex.scan.study.quant, &ex.extra, f))
-                    .map(|()| sp),
-            ),
-        ),
-    ];
-    if !ex.ions {
-        results.push((
-            2,
-            quant_ions.clone(),
-            remove_stale(&ions_path(p)).transpose(),
-        ));
-    } else {
-        let ip = ions_path(p);
-        let runs: Vec<&RunResult> = (t.sources.iter())
+    let runs: Option<Vec<&RunResult>> = ex.ions.then(|| {
+        (t.sources.iter())
             .filter_map(|i| ex.scan.study.runs.get(*i))
-            .collect();
-        let r = create(&ip).and_then(|f| t.write_ions_csv(&runs, ex.settings, f));
-        results.push((2, quant_ions, Some(r.map(|()| ip))));
-    }
+            .collect()
+    });
+    let options = ExportOptions {
+        quant: &ex.scan.study.quant,
+        settings: ex.settings,
+        extra: &ex.extra,
+        ions: runs.as_deref(),
+        group_stats: ex.group_stats,
+        blank: ex.blank,
+    };
     let mut saved = vec![p.display().to_string()];
     let mut failed = Vec::new();
-    for (cols, what, r) in results {
-        let r = r.map(|r| r.and_then(|f| german(&f, cols, ex).map(|()| f)));
-        match r {
-            Some(Ok(path)) => saved.push(path.display().to_string()),
-            Some(Err(e)) => failed.push(msg!("{what}: {e}", "{what}: {e}")),
-            None => {}
+    for entry in export_set(t, p, &options) {
+        let (part, written) = match entry {
+            ExportEntry::File(f) => {
+                let written = match f.contents {
+                    Ok(bytes) => write_file(&f.path, bytes, f.text_cols, ex).map(Some),
+                    Err(e) => {
+                        // A failed export must not leave the last export's numbers behind.
+                        let _ = remove_stale(&f.path);
+                        Err(e)
+                    }
+                };
+                (f.part, written)
+            }
+            ExportEntry::Stale(part, path) => (part, remove_stale(&path)),
+        };
+        match (part, written) {
+            (ExportPart::Results, Err(e)) => return Err(e),
+            (_, Ok(Some(path))) => saved.push(path.display().to_string()),
+            (_, Ok(None)) => {}
+            (part, Err(e)) => {
+                let what = part_name(part);
+                failed.push(msg!("{what}: {e}", "{what}: {e}"));
+            }
         }
     }
     Ok(Msg::new(|| {
@@ -1373,31 +1292,39 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
     }))
 }
 
-/// The runs as the user left them (removed and moved), with their file dates.
-fn edited_runs<'a>(
-    t: &'a Table,
-    n: &Norm,
-    times: Option<&[i64]>,
-) -> (std::borrow::Cow<'a, Table>, Vec<i64>) {
-    use std::borrow::Cow;
-    let cols = n.edits.cols.as_deref();
-    let base = cols.map_or(Cow::Borrowed(t), |c| Cow::Owned(t.select_runs(c)));
-    // The file dates follow the runs that are left.
-    let times = match (times, cols) {
-        (Some(ts), Some(cols)) => cols
-            .iter()
-            .map(|c| ts.get(*c).copied().unwrap_or(0))
-            .collect(),
-        (Some(ts), None) => ts.to_vec(),
-        (None, _) => Vec::new(),
+/// The name of an export file in the note.
+fn part_name(part: ExportPart) -> Msg {
+    match part {
+        ExportPart::Results => msg!("results", "Ergebnisse"),
+        ExportPart::Groups => msg!("replicate groups", "Replikatgruppen"),
+        ExportPart::GroupStats => msg!("group statistics", "Gruppenstatistik"),
+        ExportPart::Settings => msg!("settings", "Einstellungen"),
+        ExportPart::Ions => msg!("quant ions", "Quant-Ionen"),
+    }
+}
+
+/// Writes one export file; the German spreadsheet variant converts the text first.
+fn write_file(
+    path: &Path,
+    bytes: Vec<u8>,
+    text_cols: usize,
+    ex: &Export,
+) -> std::io::Result<PathBuf> {
+    let bytes = match ex.excel_de {
+        true => {
+            let text = String::from_utf8(bytes).map_err(std::io::Error::other)?;
+            md_core::csv::to_excel_de(&text, text_cols).into_bytes()
+        }
+        false => bytes,
     };
-    (base, times)
+    std::fs::write(path, bytes)?;
+    Ok(path.to_path_buf())
 }
 
 /// The table as the user's edits and the normalisation leave it: runs are removed and moved
 /// first, substances are removed last.
 fn shown_table(t: &Table, n: &Norm, times: Option<&[i64]>) -> Table {
-    let (base, times) = edited_runs(t, n, times);
+    let (base, times) = edited_runs(t, &n.edits, times);
     apply(&base, &mode(n, &base, &times), n.z_score).without_rows(&n.edits.rows)
 }
 
@@ -1420,7 +1347,7 @@ fn pool_mapping_button(
     {
         return;
     }
-    let (base, times) = edited_runs(t, n, times);
+    let (base, times) = edited_runs(t, &n.edits, times);
     let Normalization::Pool(p) = mode(n, &base, &times) else {
         return;
     };
@@ -1991,22 +1918,6 @@ mod tests {
         applied.quant_ion_number = 4;
         b.use_settings(&applied, false);
         assert_eq!(b.quant.ion_number, 4);
-    }
-
-    #[test]
-    fn edits_drop_move_and_restore_columns_and_rows() {
-        let mut e = Edits::default();
-        e.apply(Act::MoveRun(0, 1), 3);
-        assert_eq!(e.cols, Some(vec![1, 0, 2]));
-        e.apply(Act::DropRun(1), 3);
-        assert_eq!(e.cols, Some(vec![1, 2]));
-        // Out of range clicks (a stale frame) change nothing.
-        e.apply(Act::DropRun(5), 3);
-        e.apply(Act::MoveRun(1, 2), 3);
-        assert_eq!(e.cols, Some(vec![1, 2]));
-        e.apply(Act::DropRow(7), 3);
-        assert_eq!(e.rows, [7]);
-        assert!(!e.is_empty());
     }
 
     #[test]

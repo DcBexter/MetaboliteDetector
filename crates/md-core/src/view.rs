@@ -5,8 +5,10 @@
 use crate::batch::{Table, group_label, group_names};
 use crate::deconv::Component;
 use crate::detail::component_detail;
+use crate::library::LibraryCompound;
 use crate::peaks::Peak;
 use crate::results::area;
+use crate::search::LibraryHit;
 use crate::stats::Biomarker;
 
 /// What the batch table lists.
@@ -311,10 +313,144 @@ pub fn cells(
     }
 }
 
+/// How many of the highest peaks in view the spectrum labels with their m/z (old `LABELLED_PEAKS`).
+pub const LABELLED_PEAKS: usize = 5;
+
+/// Old `SpectrumPlot::plotPeakLabels`: the [`LABELLED_PEAKS`] highest peaks with m/z in `lo..=hi`,
+/// as (m/z, intensity).
+pub fn highest_in_view(peaks: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
+    let mut shown: Vec<(f64, f64)> = (peaks.iter().copied())
+        .filter(|(m, v)| (lo..=hi).contains(m) && *v > 0.0)
+        .collect();
+    shown.sort_by(|a, b| b.1.total_cmp(&a.1));
+    shown.truncate(LABELLED_PEAKS);
+    shown
+}
+
+/// A name drawn at a component's apex on the TIC: position (minutes, TIC), library name, score.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HitLabel {
+    pub at: [f64; 2],
+    pub name: String,
+    pub score: f64,
+}
+
+/// The labels of the assigned library hits at the component apexes, the ones `show` accepts
+/// (by score). `minutes` and `tic` are per scan.
+pub fn hit_labels(
+    components: &[Component],
+    assigned: &[Option<LibraryHit>],
+    lib: &[LibraryCompound],
+    minutes: &[f64],
+    tic: &[f64],
+    show: impl Fn(f64) -> bool,
+) -> Vec<HitLabel> {
+    components
+        .iter()
+        .zip(assigned)
+        .filter_map(|(k, hit)| {
+            let h = hit.as_ref().filter(|h| show(h.overall))?;
+            let s = k.apex_scan as usize;
+            Some(HitLabel {
+                at: [minutes[s], tic[s]],
+                name: lib[h.compound].name.clone(),
+                score: h.overall,
+            })
+        })
+        .collect()
+}
+
+/// Which labels stay visible when they are drawn left-aligned at `starts` (pixels) with the
+/// given `widths`: the highest score wins, a label overlapping a kept one is hidden.
+pub fn visible_labels(starts: &[f32], widths: &[f32], scores: &[f64]) -> Vec<bool> {
+    let mut order: Vec<usize> = (0..starts.len()).collect();
+    order.sort_by(|a, b| scores[*b].total_cmp(&scores[*a]));
+    let mut keep = vec![false; starts.len()];
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        if kept
+            .iter()
+            .all(|k| starts[i] >= starts[*k] + widths[*k] || starts[*k] >= starts[i] + widths[i])
+        {
+            keep[i] = true;
+            kept.push(i);
+        }
+    }
+    keep
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::batch::Row;
+
+    #[test]
+    fn labels_go_to_the_highest_peaks_in_view() {
+        let peaks = [(73.0, 50.0), (147.0, 90.0), (200.0, 10.0), (300.0, 99.0)];
+        assert_eq!(
+            highest_in_view(&peaks, 0.0, 250.0),
+            [(147.0, 90.0), (73.0, 50.0), (200.0, 10.0)]
+        );
+        let many: Vec<(f64, f64)> = (1..=8).map(|i| (f64::from(i), f64::from(i))).collect();
+        let top = highest_in_view(&many, 0.0, 100.0);
+        assert_eq!(
+            top.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [8.0, 7.0, 6.0, 5.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn overlapping_labels_keep_the_best_score() {
+        // 0 and 1 overlap (1 scores higher), 2 is clear of both.
+        let keep = visible_labels(&[0.0, 30.0, 100.0], &[50.0, 50.0, 40.0], &[0.8, 0.95, 0.5]);
+        assert_eq!(keep, [false, true, true]);
+        // Touching labels do not overlap.
+        assert_eq!(
+            visible_labels(&[0.0, 50.0], &[50.0, 50.0], &[0.9, 0.8]),
+            [true, true]
+        );
+    }
+
+    #[test]
+    fn hit_labels_sit_at_the_apex_and_follow_the_filter() {
+        use crate::deconv::Component;
+        use crate::search::LibraryHit;
+        let comp = |apex| Component {
+            first_scan: 0,
+            apex_scan: apex,
+            last_scan: 2,
+            model: Vec::new(),
+            spectrum: Vec::new(),
+            peaks: Vec::new(),
+            exact_spectrum: Vec::new(),
+        };
+        let hit = |compound, overall| LibraryHit {
+            compound,
+            spec_sim: 0.0,
+            ri_sim: None,
+            overall,
+        };
+        let lib = [
+            LibraryCompound::new("Alanine"),
+            LibraryCompound::new("Glycine"),
+        ];
+        let comps = [comp(1), comp(2)];
+        let assigned = [Some(hit(0, 0.95)), Some(hit(1, 0.5))];
+        let minutes = [0.0, 1.0, 2.0];
+        let tic = [10.0, 20.0, 30.0];
+        let shown = hit_labels(&comps, &assigned, &lib, &minutes, &tic, |s| s > 0.7);
+        assert_eq!(
+            shown,
+            [HitLabel {
+                at: [1.0, 20.0],
+                name: "Alanine".into(),
+                score: 0.95,
+            }]
+        );
+        let all = hit_labels(&comps, &assigned, &lib, &minutes, &tic, |_| true);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[1].at, [2.0, 30.0]);
+    }
 
     fn table(values: &[f64], groups: &[&str]) -> Table {
         Table {
