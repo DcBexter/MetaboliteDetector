@@ -151,7 +151,7 @@ Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 alte
 
 SIC was the regression: `sic_cancellable` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
 1.4 ms per call. The fix keeps the per-scan `Cancel` check, writes into a preallocated `Vec` and returns `None` at the end;
-`map_compounds_cancellable` had the same pattern and got the same fix, which takes about 8 % off the batch run.
+`map_compounds_cancellable` now collects its hit lists directly instead of collecting `Option` values, which takes about 8 % off the batch run.
 Still open, not fixed: the batch run is about 10 % and ion traces about 14 % slower than `f16f0a7`. Bisecting the batch run
 puts most of the gap in `4f136f9` (#377, job plumbing in `analyze_run` and `scan_and_save`); its cancel checks are not the cause.
 Tracked in #396.

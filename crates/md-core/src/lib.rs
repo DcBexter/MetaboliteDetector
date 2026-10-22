@@ -293,6 +293,10 @@ mod tests {
         };
         assert_eq!(c.tic(), vec![15.0, 20.0, 5.0]);
         assert_eq!(c.sic(73.0, 0.5), vec![10.0, 20.0, 1.0]);
+        assert!(
+            c.sic_cancellable(73.0, 0.5, &job::Cancel::after(2))
+                .is_none()
+        );
         assert_eq!(c.spectrum(2), (&[73.1, 200.0][..], &[1.0, 4.0][..]));
         assert_eq!(c.scan_at(2.4), Some(1));
         assert_eq!(c.scan_at(99.0), Some(2));
