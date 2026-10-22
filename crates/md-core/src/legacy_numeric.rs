@@ -23,11 +23,14 @@ pub(crate) fn sg_trunc(w: [f32; 5]) -> f32 {
 
 /// The old `PeakEssential::roundSignificantFigures(x, 8)` (0x6fa301): rounds half up to one digit
 /// more, then floors to the last one, with the digit count from `(int)log10`. So it floors rather
-/// than rounds, keeps 8 significant digits below 1 and 9 from 1 up, and works on decimal places for
+/// than rounds, keeps 8 significant digits below 1 (9 at exact powers of ten such as 0.1) and 9
+/// from 1 up, and works on decimal places for
 /// 0 and negative `x` (`log10` gives no exponent there). From 1e9 up the second digit count is
 /// negative, which gives NaN like the old code.
 pub(crate) fn round_sig8(x: f64) -> f64 {
     // `(int)log10(v)` via the 64-bit `cvttsd2si`: its low 32 bits are 0 for -inf and NaN.
+    // shortcut: the platform log10 (MSVC on Windows) may differ from glibc's one ulp below a power of
+    // ten, shifting the digit count; port glibc log10 if a stage fixture shows such a share.
     let exponent = |v: f64| {
         let l = v.log10();
         if l.is_finite() { l as i32 } else { 0 }
