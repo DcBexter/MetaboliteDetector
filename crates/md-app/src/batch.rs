@@ -35,6 +35,8 @@ type Scanned = Option<StudyResult>;
 struct Running {
     started: Instant,
     lib: Arc<Library>,
+    /// Whether the scan runs the rescan (`Scan::rescan`).
+    rescan: bool,
     job: Job<Scanned>,
 }
 
@@ -42,11 +44,16 @@ struct Scan {
     lib: Arc<Library>,
     /// The runs, the pooled unknown substances (an untargeted scan), the scan errors and the quant ions.
     study: StudyResult,
+    /// Whether the scan ran the rescan; then the quant ions of the window cannot change the table.
+    rescan: bool,
     took: Duration,
     /// Per run: library index of a substance -> position in `RunResult::found`, so the details
     /// behind a cell are found without searching every frame.
     index: Vec<HashMap<usize, usize>>,
 }
+
+/// What `Batch::table` was built with: the table settings and the quant ions (`None`: the scan's own).
+type TableKey = (TableSettings, Option<QuantSettings>);
 
 /// Which normalisation (F13) the table shows; the table is derived again when this changes.
 #[derive(Clone, PartialEq)]
@@ -140,7 +147,7 @@ pub struct Batch {
     job: Option<Running>,
     scan: Option<Scan>,
     /// Table of `scan` for these settings, or the pattern error; rebuilt when the settings change.
-    table: Option<(TableSettings, Result<Table, String>)>,
+    table: Option<(TableKey, Result<Table, String>)>,
     norm: Norm,
     view: View,
     /// Total intensities of the shown table (`generation`), when they are displayed.
@@ -495,6 +502,7 @@ impl Batch {
                 runs,
                 ..Default::default()
             },
+            rescan: false,
             took: Duration::ZERO,
         });
     }
@@ -536,6 +544,7 @@ impl Batch {
                     lib: job.lib.clone(),
                     index: hit_index(&done.runs),
                     study: done,
+                    rescan: job.rescan,
                     took: job.started.elapsed(),
                 });
                 (self.table, self.note) = (None, Msg::default());
@@ -588,6 +597,7 @@ impl Batch {
         self.job = Some(Running {
             started: Instant::now(),
             lib: lib.clone(),
+            rescan: self.options.rescan,
             job,
         });
     }
@@ -961,17 +971,25 @@ impl Batch {
 
     /// The last scan: its summary, normalisation, exports and the table.
     fn results(&mut self, ui: &mut egui::Ui) {
-        if let Some(scan) = self.scan.as_mut()
-            && scan.study.quant != self.quant
-        {
-            scan.study.quant = self.quant.clone();
-            self.table = None;
-        }
         let Some(scan) = &self.scan else { return };
-        if self.table.as_ref().is_none_or(|t| t.0 != self.settings) {
-            let t =
-                table(&scan.study, &scan.lib.compounds, &self.settings).map_err(|e| e.to_string());
-            self.table = Some((self.settings.clone(), t));
+        // Without a rescan the window's quant ions can still pick from the scanned ions; with one,
+        // they would need ions the scan did not look for, so the table keeps the scan's own.
+        let quant = (!scan.rescan).then(|| self.quant.clone());
+        let quant_changed = scan.rescan && self.quant != scan.study.quant;
+        let table_quant = quant.as_ref().unwrap_or(&scan.study.quant);
+        let stale = self
+            .table
+            .as_ref()
+            .is_none_or(|t| t.0.0 != self.settings || t.0.1 != quant);
+        if stale {
+            let t = table(
+                &scan.study,
+                &scan.lib.compounds,
+                &self.settings,
+                quant.as_ref(),
+            )
+            .map_err(|e| e.to_string());
+            self.table = Some(((self.settings.clone(), quant.clone()), t));
             (self.shown, self.times, self.norm.edits) = (None, None, Edits::default());
         }
         ui.separator();
@@ -984,6 +1002,15 @@ impl Batch {
             scan.study.extra.len(),
             scan.study.rescanned
         ));
+        if quant_changed {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                lang::t(
+                    "Quant ions changed: scan again to apply them",
+                    "Quant-Ionen geändert, erneut scannen",
+                ),
+            );
+        }
         for e in &scan.study.errors {
             ui.colored_label(ui.visuals().error_fg_color, errors::text(e));
         }
@@ -1001,6 +1028,7 @@ impl Batch {
                         let ex = Export {
                             scan,
                             settings: &self.settings,
+                            quant: table_quant,
                             extra: [
                                 vec![(
                                     "GROUP_SOURCE",
@@ -1016,6 +1044,10 @@ impl Batch {
                                 )],
                                 shown_settings(&self.norm, shown, t.runs.len()),
                                 scan_settings(scan),
+                                vec![(
+                                    "QUANT_CHANGED_AFTER_SCAN",
+                                    (table_quant != &scan.study.quant).to_string(),
+                                )],
                             ]
                             .concat(),
                             ions: self.view.export_ions,
@@ -1154,6 +1186,8 @@ fn shown_runs(runs: &[RunResult], sources: &[usize]) -> Vec<RunResult> {
 struct Export<'a> {
     scan: &'a Scan,
     settings: &'a TableSettings,
+    /// The quant ions the table was built with.
+    quant: &'a QuantSettings,
     /// Settings of the shown table that `TableSettings` does not hold (normalisation, removals).
     extra: Vec<(&'static str, String)>,
     /// Also write the integral of every quant ion.
@@ -1244,7 +1278,7 @@ fn save_results(p: &Path, t: &Table, ex: &Export) -> std::io::Result<Msg> {
             .collect()
     });
     let options = ExportOptions {
-        quant: &ex.scan.study.quant,
+        quant: ex.quant,
         settings: ex.settings,
         extra: &ex.extra,
         ions: runs.as_deref(),
@@ -1921,6 +1955,68 @@ mod tests {
     }
 
     #[test]
+    fn a_quant_change_after_a_rescan_keeps_the_table_and_asks_for_a_scan() {
+        let (mut scan, _) = one_hit_scan();
+        scan.rescan = true;
+        let mut b = Batch {
+            scan: Some(scan),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let draw = |b: &mut Batch| {
+            let mut out = ctx.run_ui(Default::default(), |ui| b.results(ui));
+            out.textures_delta.clear();
+            format!("{:?}", out.shapes)
+        };
+        let hint = |text: &str| {
+            text.contains("Quant ions changed") || text.contains("Quant-Ionen geändert")
+        };
+        assert!(!hint(&draw(&mut b)));
+        let built = b.table.clone();
+        b.quant.ion_number += 1;
+        assert!(hint(&draw(&mut b)));
+        assert!(b.table == built, "the table of a rescanned scan stays");
+    }
+
+    #[test]
+    fn a_quant_change_without_a_rescan_rebuilds_the_table_and_keeps_the_scan_quant() {
+        let (scan, _) = one_hit_scan();
+        let scanned = scan.study.quant.clone();
+        let mut b = Batch {
+            scan: Some(scan),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let draw = |b: &mut Batch| {
+            let mut out = ctx.run_ui(Default::default(), |ui| b.results(ui));
+            out.textures_delta.clear();
+            format!("{:?}", out.shapes)
+        };
+        draw(&mut b);
+        b.quant.ion_number += 1;
+        let shapes = draw(&mut b);
+        let key = &b.table.as_ref().unwrap().0;
+        assert_eq!(
+            key.1.as_ref(),
+            Some(&b.quant),
+            "the table uses the override"
+        );
+        assert_eq!(b.scan.as_ref().unwrap().study.quant, scanned);
+        let scan = b.scan.as_ref().unwrap();
+        let rebuilt = md_core::batch::table(
+            &scan.study,
+            &scan.lib.compounds,
+            &b.settings,
+            Some(&b.quant),
+        );
+        assert_eq!(
+            b.table.as_ref().unwrap().1.as_ref().unwrap(),
+            rebuilt.as_ref().unwrap()
+        );
+        assert!(!shapes.contains("Quant ions changed") && !shapes.contains("Quant-Ionen geändert"));
+    }
+
+    #[test]
     fn group_statistics_are_readable_after_normalising_and_locked_for_z_scores() {
         let t = Table {
             runs: vec!["a".into(), "b".into(), "c".into()],
@@ -2048,7 +2144,7 @@ mod tests {
             runs: runs.to_vec(),
             ..Default::default()
         };
-        let t = md_core::batch::table(&study, &[], &Default::default()).unwrap();
+        let t = md_core::batch::table(&study, &[], &Default::default(), None).unwrap();
         assert_eq!(run_times(&t, &runs), (vec![100, 200], 0));
         let t = t.select_runs(&[1, 0]);
         let shown: Vec<_> = shown_runs(&runs, &t.sources)
@@ -2119,6 +2215,7 @@ mod tests {
                 runs: vec![run],
                 ..Default::default()
             },
+            rescan: false,
             took: Duration::ZERO,
         };
         let table = Table {
@@ -2163,6 +2260,33 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_file_names_the_quant_ions_of_the_table() {
+        let (scan, t) = one_hit_scan();
+        let dir = std::env::temp_dir().join(format!("md-app-quant-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let quant = QuantSettings {
+            ion_number: 9,
+            ..scan.study.quant.clone()
+        };
+        let settings = TableSettings::default();
+        let ex = Export {
+            scan: &scan,
+            settings: &settings,
+            quant: &quant,
+            extra: Vec::new(),
+            ions: false,
+            excel_de: false,
+            blank: "BLANK",
+            group_stats: false,
+        };
+        save_results(&dir.join("results.csv"), &t, &ex).unwrap();
+        let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
+        assert!(text.contains("QUANT_ION_NUMBER,9"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn an_export_writes_the_settings_and_on_request_the_ion_integrals() {
         let (scan, t) = one_hit_scan();
         let dir = std::env::temp_dir().join(format!("md-app-export-{}", std::process::id()));
@@ -2170,9 +2294,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("results.csv");
         let settings = TableSettings::default();
+        let quant = scan.study.quant.clone();
         let mut ex = Export {
             scan: &scan,
             settings: &settings,
+            quant: &quant,
             extra: [vec![("NORMALISATION", "none".into())], scan_settings(&scan)].concat(),
             ions: false,
             excel_de: false,

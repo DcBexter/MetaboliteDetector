@@ -765,13 +765,17 @@ fn cell(f: &Found, ions: &[u32], need: usize, s: &TableSettings) -> Option<f64> 
         .then(|| hit.iter().map(|p| p.integral).sum())
 }
 
-/// `extra` are the unknowns `add_unknowns` pooled; their indices follow the library's.
+/// `extra` are the unknowns `add_unknowns` pooled; their indices follow the library's. `quant`
+/// picks the quant ions instead of the scan's own (`StudyResult::quant`), for a table built after
+/// the scan; a rescan has to be run again for ions the scan did not look for.
 pub fn table(
     study: &StudyResult,
     lib: &[LibraryCompound],
     s: &TableSettings,
+    quant: Option<&QuantSettings>,
 ) -> Result<Table, regex::Error> {
-    let (runs, extra, q) = (&study.runs, &study.extra, &study.quant);
+    let (runs, extra) = (&study.runs, &study.extra);
+    let q = quant.unwrap_or(&study.quant);
     let pattern = Regex::new(&s.replicates)?;
     let name = |r: &RunResult| {
         r.path
@@ -885,7 +889,7 @@ mod tests {
             extra: extra.to_vec(),
             ..Default::default()
         };
-        table(&study, lib, s)
+        table(&study, lib, s, None)
     }
 
     /// Pass 1 of a study without the rescan: the runs that could be read, and the errors.
@@ -1758,7 +1762,48 @@ NUM PEAKS: 1
         assert_eq!(r.runs.iter().map(|r| r.input).collect::<Vec<_>>(), [0, 2]);
         assert_eq!(r.errors.len(), 1);
         assert_eq!(r.quant, s.analysis.quant);
-        assert!(table(&r, &lib, &TableSettings::default()).is_ok());
+        assert!(table(&r, &lib, &TableSettings::default(), None).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A quant override in `table` gives what a table of a study with those quant ions gives, and
+    /// the scan's own quant stays as it was.
+    #[test]
+    fn table_quant_override_equals_a_study_with_that_quant() {
+        let dir = std::env::temp_dir().join(format!("md-quant-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.cdf"), dir.join("b.cdf"));
+        crate::andi::write(&a, &two_substances()).unwrap();
+        crate::andi::write(&b, &two_substances()).unwrap();
+        let paths = [a, b];
+        let lib = two_substances_library();
+        let s = ScanSettings::default();
+        let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
+        let study = Study {
+            runs: &paths,
+            library: &lib,
+            prepared: &prepared,
+            scan: &s,
+            rescan: false,
+            parallel: 2,
+        };
+        let r = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
+        let other = QuantSettings {
+            ion_number: 1,
+            ..s.analysis.quant.clone()
+        };
+        let ts = TableSettings::default();
+        let mut changed = r.clone();
+        changed.quant = other.clone();
+        assert_eq!(r.quant, s.analysis.quant);
+        assert_eq!(
+            table(&r, &lib, &ts, Some(&other)).unwrap(),
+            table(&changed, &lib, &ts, None).unwrap()
+        );
+        assert_eq!(
+            table(&r, &lib, &ts, None).unwrap(),
+            table(&r, &lib, &ts, Some(&s.analysis.quant)).unwrap()
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1794,7 +1839,7 @@ NUM PEAKS: 1
         assert_eq!((r.rescanned, &r.extra, &r.runs), (added, &extra, &runs));
         let ts = TableSettings::default();
         assert_eq!(
-            table(&r, lib, &ts).unwrap(),
+            table(&r, lib, &ts, None).unwrap(),
             tbl(&runs, lib, &extra, &ts).unwrap()
         );
         cancel.cancel();

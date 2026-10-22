@@ -324,7 +324,7 @@ fn run(a: Args) -> Result<bool, String> {
         parallel: a.parallel,
     };
     let found = run_study(&study, &Progress::default(), &Cancel::default()).ok_or("cancelled")?;
-    let table = table(&found, &compounds, &ts).map_err(|e| format!("--replicates: {e}"))?;
+    let table = table(&found, &compounds, &ts, None).map_err(|e| format!("--replicates: {e}"))?;
     let StudyResult {
         runs,
         extra,

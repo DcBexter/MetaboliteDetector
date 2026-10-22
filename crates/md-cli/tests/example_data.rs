@@ -86,7 +86,7 @@ fn csv_equals_the_core_table_of_the_example_runs() {
     };
     let found = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
     assert!(found.errors.is_empty(), "{:?}", found.errors);
-    let t = table(&found, &compounds, &TableSettings::default()).unwrap();
+    let t = table(&found, &compounds, &TableSettings::default(), None).unwrap();
     let mut expected = Vec::new();
     t.write_csv(&mut expected).unwrap();
 

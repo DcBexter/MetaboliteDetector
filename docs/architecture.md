@@ -430,8 +430,10 @@ a calibration is given) and keeps only the assigned substances with their ion in
 well. Progress and cancel are `md_core::job::Progress` and `Cancel`; cancelling stops the runs in work at their
 next stage and starts no further file; unreadable files are listed and skipped. Each `RunResult` carries its
 `input` (position in `Study::runs`), so callers match results to inputs by position, not by path. The quant ions
-of the study are kept in `StudyResult::quant`; `table(&StudyResult, library, TableSettings)` builds the substance
-× run table from them and is cheap, so the app re-filters without a rescan:
+of the study are kept in `StudyResult::quant`; `table(&StudyResult, library, TableSettings, quant)` builds the substance
+× run table and is cheap, so the app re-filters without a rescan. `quant` (`Option<&QuantSettings>`, `None` = the scan's
+own) picks other quant ions after the scan, but only ions the scan already has: a scan with a rescan keeps its table
+until it is scanned again (the app says so; #411):
 
 - **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
   `autoQuantificationIonAssignment` (§7.2, fallback quirk kept) on the best-scoring run. The value of a
