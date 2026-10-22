@@ -298,7 +298,7 @@ pub fn marker_peaks(
     threshold: i32,
     cancel: &Cancel,
 ) -> Option<Vec<(f64, f64)>> {
-    let sic = c.sic_cancellable(mz, 0.5, cancel)?;
+    let sic = c.sic(mz, 0.5, cancel)?;
     let trace: Vec<f32> = sic.iter().map(|v| *v as f32).collect();
     Some(
         detect_peaks_matched(&trace, density, threshold, 1)

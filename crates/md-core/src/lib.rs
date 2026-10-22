@@ -137,19 +137,9 @@ impl Chromatogram {
             .collect()
     }
 
-    /// Selected ion chromatogram: per scan, summed intensity of ions within `mz ± tolerance`.
-    pub fn sic(&self, mz: f32, tolerance: f32) -> Vec<f64> {
-        self.sic_cancellable(mz, tolerance, &job::Cancel::default())
-            .expect("a fresh Cancel is never set")
-    }
-
-    /// [`Self::sic`] that checks `cancel` before each scan and returns `None` once it is set.
-    pub fn sic_cancellable(
-        &self,
-        mz: f32,
-        tolerance: f32,
-        cancel: &job::Cancel,
-    ) -> Option<Vec<f64>> {
+    /// Selected ion chromatogram: per scan, summed intensity of ions within `mz ± tolerance`. Checks
+    /// `cancel` before each scan and returns `None` once it is set.
+    pub fn sic(&self, mz: f32, tolerance: f32, cancel: &job::Cancel) -> Option<Vec<f64>> {
         // Writing into a preallocated Vec: collecting `Option`s costs about 1.4 ms per call here.
         let mut out = vec![0.0; self.scan_count()];
         out.par_iter_mut().enumerate().for_each(|(s, v)| {
@@ -292,11 +282,11 @@ mod tests {
             baseline: Default::default(),
         };
         assert_eq!(c.tic(), vec![15.0, 20.0, 5.0]);
-        assert_eq!(c.sic(73.0, 0.5), vec![10.0, 20.0, 1.0]);
-        assert!(
-            c.sic_cancellable(73.0, 0.5, &job::Cancel::after(2))
-                .is_none()
+        assert_eq!(
+            c.sic(73.0, 0.5, &job::Cancel::default()).unwrap(),
+            vec![10.0, 20.0, 1.0]
         );
+        assert!(c.sic(73.0, 0.5, &job::Cancel::after(2)).is_none());
         assert_eq!(c.spectrum(2), (&[73.1, 200.0][..], &[1.0, 4.0][..]));
         assert_eq!(c.scan_at(2.4), Some(1));
         assert_eq!(c.scan_at(99.0), Some(2));

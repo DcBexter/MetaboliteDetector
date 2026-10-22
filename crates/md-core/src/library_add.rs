@@ -6,6 +6,7 @@
 
 use crate::batch::{IonPeak, QuantSettings, quant_ions};
 use crate::deconv::Component;
+use crate::job::Cancel;
 use crate::library::{LibraryCompound, LibrarySpectrum};
 use crate::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
@@ -180,7 +181,14 @@ pub fn plan_rt_copy(
     target: &[LibraryCompound],
     s: &SearchSettings,
 ) -> Vec<RtCopy> {
-    let id = map_compounds_to_library(comps, ris, &PreparedLibrary::new(target, s), s);
+    let id = map_compounds_to_library(
+        comps,
+        ris,
+        &PreparedLibrary::new(target, s),
+        s,
+        &Cancel::default(),
+    )
+    .unwrap_or_default();
     id.assigned
         .iter()
         .enumerate()
@@ -431,7 +439,9 @@ mod tests {
             Some(&[1000.0]),
             &PreparedLibrary::new(&lib, &s),
             &s,
-        );
+            &Cancel::default(),
+        )
+        .unwrap();
         let hit = id.assigned[0].expect("assigned");
         assert!(hit.overall > 0.99, "{}", hit.overall);
     }
@@ -506,7 +516,14 @@ mod tests {
         let mut lib = Vec::new();
         add(&mut lib, new, AddMode::New, "").unwrap();
         let s = SearchSettings::default();
-        let id = map_compounds_to_library(&comps, None, &PreparedLibrary::new(&lib, &s), &s);
+        let id = map_compounds_to_library(
+            &comps,
+            None,
+            &PreparedLibrary::new(&lib, &s),
+            &s,
+            &Cancel::default(),
+        )
+        .unwrap();
         assert!(id.assigned[0].is_none_or(|h| h.overall < 0.5));
         let hit = id.assigned[1].expect("assigned");
         assert!(hit.overall > 0.99, "{}", hit.overall);

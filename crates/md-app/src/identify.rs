@@ -375,7 +375,7 @@ impl App {
             {
                 let key: Key = (lib.clone(), cal.clone(), reference);
                 let (k, comps, times) = (key.clone(), run.components.clone(), run.data.clone());
-                let job = Job::spawn(ctx, move |_, _| {
+                let job = Job::spawn(ctx, move |_, c| {
                     let (lib, times, s) =
                         (&k.0.prepared, &times.scan_times_s, k.0.settings.clone());
                     let shifted = k.1.as_ref().zip(k.2).and_then(|(c, (r, cutoff))| {
@@ -383,7 +383,8 @@ impl App {
                     });
                     let cal = shifted.as_ref().or(k.1.as_deref());
                     let ris = cal.map(|c| c.component_ris(times, &comps));
-                    let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s);
+                    let id = map_compounds_to_library(&comps, ris.as_deref(), lib, &s, c)
+                        .unwrap_or_default();
                     (id, shifted)
                 });
                 run.ident_job = Some((key, job));
