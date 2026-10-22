@@ -715,7 +715,7 @@ mod tests {
         let mut app = App::default();
         app.runs.push(crate::results::tests::run());
         let ctx = egui::Context::default();
-        let mut settle = |app: &mut App| {
+        let settle = |app: &mut App| {
             let t = std::time::Instant::now();
             loop {
                 app.update_sics(&ctx);
