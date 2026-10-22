@@ -202,6 +202,7 @@ mod tests {
             settings,
         });
         let found = |rt_s| md_core::batch::RunResult {
+            input: 0,
             path: format!("a_long_run_name_from_the_lab_{rt_s}.cdf").into(),
             found: (0..40)
                 .map(|compound| md_core::batch::Found {

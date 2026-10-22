@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use crate::job::Cancel;
 
 use super::{
-    Found, IonPeak, QuantSettings, RunResult, ScanSettings, compound_ions, compound_of,
+    Found, IonPeak, QuantSettings, RunResult, ScanSettings, Study, compound_ions, compound_of,
     hits_by_compound,
 };
 use crate::Chromatogram;
@@ -60,17 +60,14 @@ type Rescued = (usize, Vec<IonPeak>, f64);
 /// `lists[i]` (optional, by run) is run `i`'s [`PeakList`] from pass 1. Returns the number of ions
 /// added and the files that could not be read (their runs stay as they were), or `None` once `cancel` is set.
 /// The quant ions come from `q`, as `table` would choose them with the same settings.
-#[allow(clippy::too_many_arguments)]
 pub fn rescan_runs(
     runs: &mut [RunResult],
-    lib: &[LibraryCompound],
+    study: &Study,
     extra: &[LibraryCompound],
     lists: &[Option<PeakList>],
-    s: &ScanSettings,
-    q: &QuantSettings,
-    parallel: usize,
     cancel: &Cancel,
 ) -> Option<(usize, Vec<String>)> {
+    let (lib, s, q, parallel) = (study.library, study.scan, study.quant, study.parallel);
     // A `.cmp` input has no raw data to look into.
     let work: Vec<(usize, Vec<Todo>)> = (plan(runs, lib, extra, q, s.search.ri_diff).into_iter())
         .filter(|(i, _)| !crate::cmp::is_cmp(&runs[*i].path))

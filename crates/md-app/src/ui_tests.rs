@@ -542,6 +542,7 @@ fn screenshots() {
         .collect();
     let found: Vec<_> = (paths.iter().enumerate())
         .map(|(i, p)| md_core::batch::RunResult {
+            input: i,
             path: p.clone(),
             found: (0..lib.compounds.len().min(16))
                 .map(|k| md_core::batch::Found {

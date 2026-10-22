@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 /// Run key (`run_key`: lower-case file name without extension; by hand `path_key`) → replicate group.
 pub type SampleGroups = BTreeMap<String, String>;
 
-/// Key of a run or table entry: path, the extension of a run file and the case (Windows) do not matter.
+/// The sample-table key of a run: its lower-case file stem, so `a.cdf` and `a.cmp` match the same entry.
 pub fn run_key(name: &str) -> String {
     let file = (name.rsplit(['/', '\\']).next().unwrap_or(name)).to_lowercase();
     match file.rsplit_once('.') {
@@ -15,9 +15,24 @@ pub fn run_key(name: &str) -> String {
     }
 }
 
-/// Key of one run by hand: the whole path, so same-named runs in different folders stay apart.
+/// The hand-group key of a run: the whole path, so same-named runs in different folders stay apart.
 pub fn path_key(p: &std::path::Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
+/// The file-system identity of a run file, so that two runs writing one `.cmp` name are detected:
+/// the absolute path with its folder resolved (symlinks), lower-case on Windows and macOS.
+pub(crate) fn fs_key(p: &std::path::Path) -> String {
+    let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    // Symlinks: the folder as the file system sees it (the file itself may not exist yet).
+    let p = match (p.parent().map(std::fs::canonicalize), p.file_name()) {
+        (Some(Ok(dir)), Some(name)) => dir.join(name),
+        _ => p,
+    };
+    match cfg!(any(windows, target_os = "macos")) {
+        true => p.to_string_lossy().to_lowercase(),
+        false => p.to_string_lossy().into_owned(),
+    }
 }
 
 /// The cells of one line; a delimiter inside double quotes stays in the cell and `""` is a quote.

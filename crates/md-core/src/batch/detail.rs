@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use super::{BOM, Found, IonPeak, RunResult, Table, TableSettings, path_key, run_key, text_cell};
+use super::{
+    BOM, Found, IonPeak, QuantSettings, RunResult, Table, TableSettings, path_key, run_key,
+    text_cell,
+};
 use crate::library::LibraryCompound;
 
 /// The largest peak of each of `ions` in `f` that has at least `min_sn`; a duplicate peak (§4.5)
@@ -141,10 +144,15 @@ impl TableSettings {
 
     /// The settings the table was made with as `Setting,Value`, so a result file can be read
     /// later; `extra` are settings of the caller (e.g. the normalisation) written after them.
-    pub fn write_csv(&self, extra: &[(&str, String)], mut w: impl Write) -> io::Result<()> {
+    pub fn write_csv(
+        &self,
+        quant: &QuantSettings,
+        extra: &[(&str, String)],
+        mut w: impl Write,
+    ) -> io::Result<()> {
         w.write_all(BOM.as_bytes())?;
         writeln!(w, "Setting,Value")?;
-        let q = &self.quant;
+        let q = quant;
         let excluded: Vec<String> = (q.excluded.iter())
             .map(|(a, b)| format!("{a}-{b}"))
             .collect();
@@ -226,6 +234,7 @@ mod tests {
             ..Default::default()
         };
         let run = |f: Found| RunResult {
+            input: 0,
             path: "a.cdf".into(),
             found: vec![f],
             ..Default::default()
@@ -297,10 +306,13 @@ mod tests {
     #[test]
     fn settings_csv_lists_the_filters_and_the_callers_extras() {
         let mut s = TableSettings::default();
-        s.quant.excluded = vec![(73.0, 75.0), (147.0, 147.0)];
+        let q = QuantSettings {
+            excluded: vec![(73.0, 75.0), (147.0, 147.0)],
+            ..Default::default()
+        };
         s.replicates = "(\\w+)_\\d".into();
         let mut out = Vec::new();
-        s.write_csv(&[("NORMALISATION", "total signal".into())], &mut out)
+        s.write_csv(&q, &[("NORMALISATION", "total signal".into())], &mut out)
             .unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("\u{feff}Setting,Value\nQUANT_ION_NUMBER,3\n"));

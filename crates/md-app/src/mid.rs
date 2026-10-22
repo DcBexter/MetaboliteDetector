@@ -307,11 +307,15 @@ impl MidWindow {
                     "RT-Verschiebungsreferenz {n} ist keine Substanz mit MID-Fragmenten; ohne RT-Verschiebung gescannt."
                 ));
             }
-            // shortcut: a run that fails to load is dropped by run_study, which shifts the group
-            // indices; the runs are matched back by path.
-            let index = |p: &PathBuf| runs.iter().position(|r| &r.path == p);
-            let labelled: Vec<usize> = paths[..nl].iter().filter_map(index).collect();
-            let unlabelled: Vec<usize> = paths[nl..nl + nu].iter().filter_map(index).collect();
+            // A run that fails to load is missing from `runs`; `input` is its position in `paths`.
+            let labelled: Vec<usize> = (runs.iter().enumerate())
+                .filter(|(_, r)| r.input < nl)
+                .map(|(i, _)| i)
+                .collect();
+            let unlabelled: Vec<usize> = (runs.iter().enumerate())
+                .filter(|(_, r)| (nl..nl + nu).contains(&r.input))
+                .map(|(i, _)| i)
+                .collect();
             let mut mids = determine(
                 &runs,
                 &mids_lib,
@@ -325,8 +329,13 @@ impl MidWindow {
                 // One column per labelled run as chosen, also for runs that did not load.
                 for f in mids.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
                     let mut fits = std::mem::take(&mut f.fits).into_iter();
-                    f.fits = (paths[..nl].iter())
-                        .map(|p| index(p).and_then(|_| fits.next().flatten()))
+                    f.fits = (0..nl)
+                        .map(|k| {
+                            runs.iter()
+                                .any(|r| r.input == k)
+                                .then(|| fits.next().flatten())
+                                .flatten()
+                        })
                         .collect();
                 }
             }

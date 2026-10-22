@@ -18,6 +18,7 @@ mod untargeted;
 pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
 pub use group_stats::{GroupStats, group_label, group_names, group_stats_path};
 use rescan::{PeakList, rescan_runs};
+use samples::fs_key;
 pub use samples::{SampleGroups, SampleTable, path_key, run_key};
 pub use untargeted::add_unknowns;
 
@@ -148,6 +149,8 @@ pub struct Unknown {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RunResult {
+    /// Position of the run in `Study::runs`; the runs that could not be read leave gaps.
+    pub input: usize,
     pub path: PathBuf,
     pub found: Vec<Found>,
     /// Unidentified components; empty after `add_unknowns`.
@@ -317,19 +320,6 @@ fn read_scan_run(path: &Path, s: &ScanSettings) -> Result<Chromatogram, String> 
 }
 
 /// [`scan_and_keep`] without the peak lists.
-#[cfg(test)]
-fn scan_runs(
-    paths: &[PathBuf],
-    lib: &PreparedLibrary,
-    s: &ScanSettings,
-    parallel: usize,
-    done: &Progress,
-    cancel: &Cancel,
-) -> Option<(Vec<RunResult>, Vec<String>)> {
-    let (runs, errors) = scan_and_keep(paths, lib, s, parallel, false, done, cancel)?;
-    Some((runs.into_iter().map(|r| r.0).collect(), errors))
-}
-
 /// Pass 1: scans every file with at most `parallel` runs in memory at once; each run is analysed in
 /// parallel (rayon) as well. With `keep`, each deconvoluted run comes with its [`PeakList`]. A `.cmp` file stands for a run already analysed: its saved components are searched
 /// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
@@ -338,14 +328,12 @@ fn scan_runs(
 /// name another run of the batch also maps to, is an error, and the run's result is kept.
 #[allow(clippy::type_complexity)]
 fn scan_and_keep(
-    paths: &[PathBuf],
-    lib: &PreparedLibrary,
-    s: &ScanSettings,
-    parallel: usize,
+    study: &Study,
     keep: bool,
     done: &Progress,
     cancel: &Cancel,
 ) -> Option<(Vec<(RunResult, Option<PeakList>)>, Vec<String>)> {
+    let (paths, lib, s, parallel) = (study.runs, study.prepared, study.scan, study.parallel);
     done.set_total(paths.len());
     let next = AtomicUsize::new(0);
     let targets: Vec<Option<PathBuf>> = (paths.iter())
@@ -356,29 +344,17 @@ fn scan_and_keep(
         })
         .collect();
     // `out/x.cmp` and `./out\x.cmp` are one file; on Windows and macOS so are `X.cmp` and `x.cmp`.
-    let key = |p: &Path| {
-        let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
-        // Symlinks: the folder as the file system sees it (the file itself may not exist yet).
-        let p = match (p.parent().map(std::fs::canonicalize), p.file_name()) {
-            (Some(Ok(dir)), Some(name)) => dir.join(name),
-            _ => p,
-        };
-        match cfg!(any(windows, target_os = "macos")) {
-            true => p.to_string_lossy().to_lowercase(),
-            false => p.to_string_lossy().into_owned(),
-        }
-    };
-    let inputs: std::collections::HashSet<String> = paths.iter().map(|p| key(p)).collect();
+    let inputs: std::collections::HashSet<String> = paths.iter().map(|p| fs_key(p)).collect();
     let mut uses = std::collections::HashMap::new();
     for t in targets.iter().flatten() {
-        *uses.entry(key(t)).or_insert(0) += 1;
+        *uses.entry(fs_key(t)).or_insert(0) += 1;
     }
     // Two runs saved to one name would overwrite each other, and a target that is an input of this
     // batch would change under its reader: neither is saved.
     let clashes: Vec<Option<String>> = (targets.iter())
         .map(|t| {
             let t = t.as_deref()?;
-            match (inputs.contains(&key(t)), uses[&key(t)] > 1) {
+            match (inputs.contains(&fs_key(t)), uses[&fs_key(t)] > 1) {
                 (true, _) => Some(format!(
                     "not saved: {} is an input of this batch",
                     t.display()
@@ -420,6 +396,7 @@ fn scan_and_keep(
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
                         .map(|(r, list)| {
                             let run = RunResult {
+                                input: i,
                                 path: path.clone(),
                                 found: r.found,
                                 unknown: r.unknown,
@@ -486,6 +463,8 @@ pub struct StudyResult {
     pub rescanned: usize,
     /// Files that could not be read or saved, scan errors first.
     pub errors: Vec<String>,
+    /// The quant ions of the study (a copy of `Study::quant`); [`table`] reads them from here.
+    pub quant: QuantSettings,
 }
 
 /// The batch of the app, its MID window and the command line: pass 1 over every run (with the
@@ -496,15 +475,7 @@ pub struct StudyResult {
 /// filters and groups can change without a new study.
 pub fn run_study(study: &Study, progress: &Progress, cancel: &Cancel) -> Option<StudyResult> {
     let s = study.scan;
-    let (scanned, mut errors) = scan_and_keep(
-        study.runs,
-        study.prepared,
-        s,
-        study.parallel,
-        study.rescan,
-        progress,
-        cancel,
-    )?;
+    let (scanned, mut errors) = scan_and_keep(study, study.rescan, progress, cancel)?;
     let (mut runs, lists): (Vec<_>, Vec<_>) = scanned.into_iter().unzip();
     let extra = match s.untargeted {
         true => add_unknowns(&mut runs, study.library.len(), s, cancel)?,
@@ -512,8 +483,7 @@ pub fn run_study(study: &Study, progress: &Progress, cancel: &Cancel) -> Option<
     };
     let mut rescanned = 0;
     if study.rescan {
-        let (lib, q, n) = (study.library, study.quant, study.parallel);
-        let (added, e) = rescan_runs(&mut runs, lib, &extra, &lists, s, q, n, cancel)?;
+        let (added, e) = rescan_runs(&mut runs, study, &extra, &lists, cancel)?;
         rescanned = added;
         errors.extend(e);
     }
@@ -522,6 +492,7 @@ pub fn run_study(study: &Study, progress: &Progress, cancel: &Cancel) -> Option<
         extra,
         rescanned,
         errors,
+        quant: study.quant.clone(),
     })
 }
 
@@ -580,7 +551,6 @@ pub fn quant_ions(ions: &[IonPeak], q: &QuantSettings) -> Vec<u32> {
 /// How `table` groups runs and which substances it keeps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableSettings {
-    pub quant: QuantSettings,
     /// Replicate group of a run: the first capture group (else the whole match) of this pattern in
     /// the file name. Runs without a match form a group of their own; an empty pattern puts all runs
     /// in one group.
@@ -605,7 +575,6 @@ pub struct TableSettings {
 impl Default for TableSettings {
     fn default() -> Self {
         Self {
-            quant: QuantSettings::default(),
             replicates: String::new(),
             sample_groups: SampleGroups::new(),
             manual_groups: SampleGroups::new(),
@@ -783,11 +752,11 @@ fn cell(f: &Found, ions: &[u32], need: usize, s: &TableSettings) -> Option<f64> 
 
 /// `extra` are the unknowns `add_unknowns` pooled; their indices follow the library's.
 pub fn table(
-    runs: &[RunResult],
+    study: &StudyResult,
     lib: &[LibraryCompound],
-    extra: &[LibraryCompound],
     s: &TableSettings,
 ) -> Result<Table, regex::Error> {
+    let (runs, extra, q) = (&study.runs, &study.extra, &study.quant);
     let pattern = Regex::new(&s.replicates)?;
     let name = |r: &RunResult| {
         r.path
@@ -826,7 +795,7 @@ pub fn table(
         .into_iter()
         .filter_map(|(compound, found)| {
             let c = compound_of(lib, extra, compound);
-            let ions = compound_ions(c, &found, &s.quant)?;
+            let ions = compound_ions(c, &found, q)?;
             let need = s.min_ions.clamp(1, ions.len().max(1));
             let values: Vec<Option<f64>> = found
                 .iter()
@@ -887,6 +856,66 @@ mod tests {
     use super::*;
     use crate::library::parse_msl;
     use crate::peaks::Detector;
+
+    /// `table` of plain runs with the default quant settings.
+    fn tbl(
+        runs: &[RunResult],
+        lib: &[LibraryCompound],
+        extra: &[LibraryCompound],
+        s: &TableSettings,
+    ) -> Result<Table, regex::Error> {
+        let study = StudyResult {
+            runs: runs.to_vec(),
+            extra: extra.to_vec(),
+            ..Default::default()
+        };
+        table(&study, lib, s)
+    }
+
+    /// Pass 1 of a study without the rescan: the runs that could be read, and the errors.
+    fn scan_runs(
+        paths: &[PathBuf],
+        prepared: &PreparedLibrary,
+        s: &ScanSettings,
+        parallel: usize,
+        done: &Progress,
+        cancel: &Cancel,
+    ) -> Option<(Vec<RunResult>, Vec<String>)> {
+        let study = Study {
+            runs: paths,
+            library: &[],
+            prepared,
+            scan: s,
+            quant: &QuantSettings::default(),
+            rescan: false,
+            parallel,
+        };
+        let (runs, errors) = scan_and_keep(&study, false, done, cancel)?;
+        Some((runs.into_iter().map(|r| r.0).collect(), errors))
+    }
+
+    /// `rescan_runs` over runs without peak lists, as a study over `lib` with `s`, `q` and `parallel`.
+    fn rescan(
+        runs: &mut [RunResult],
+        lib: &[LibraryCompound],
+        extra: &[LibraryCompound],
+        s: &ScanSettings,
+        q: &QuantSettings,
+        parallel: usize,
+        cancel: &Cancel,
+    ) -> Option<(usize, Vec<String>)> {
+        let prepared = PreparedLibrary::new(lib, &s.search);
+        let study = Study {
+            runs: &[],
+            library: lib,
+            prepared: &prepared,
+            scan: s,
+            quant: q,
+            rescan: true,
+            parallel,
+        };
+        rescan_runs(runs, &study, extra, &[], cancel)
+    }
 
     fn ion(mass: u32, integral: f64, quality: f32) -> IonPeak {
         IonPeak {
@@ -1076,7 +1105,7 @@ mod tests {
             min_ions: 2,
             ..Default::default()
         };
-        let t = table(&runs, &lib, &[], &s).unwrap();
+        let t = tbl(&runs, &lib, &[], &s).unwrap();
         assert_eq!(t.runs, ["ctrl_1.cdf", "ctrl_2.cdf", "mut_1.cdf"]);
         assert_eq!(t.groups, ["ctrl", "ctrl", "mut"]);
         // A uses the library's ions; ctrl_2 has only one of them, below min_ions.
@@ -1094,16 +1123,16 @@ mod tests {
             min_reproducibility: 0.75,
             ..s.clone()
         };
-        let t = table(&runs, &lib, &[], &strict).unwrap();
+        let t = tbl(&runs, &lib, &[], &strict).unwrap();
         assert_eq!(
             t.rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             ["B"]
         );
         // Without a pattern all runs form one group, in input order.
-        let one = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
+        let one = tbl(&runs, &lib, &[], &TableSettings::default()).unwrap();
         assert_eq!(one.runs, ["ctrl_1.cdf", "mut_1.cdf", "ctrl_2.cdf"]);
         assert!(
-            table(
+            tbl(
                 &runs,
                 &lib,
                 &[],
@@ -1135,7 +1164,7 @@ mod tests {
             sample_groups: tab.groups(0, 1).unwrap(),
             ..Default::default()
         };
-        let t = table(&runs, &[], &[], &s).unwrap();
+        let t = tbl(&runs, &[], &[], &s).unwrap();
         let mut sizes = BTreeMap::new();
         t.groups
             .iter()
@@ -1146,13 +1175,13 @@ mod tests {
         );
         // A run the table lacks is a group of its own, or follows the pattern if there is one.
         let more = [runs, vec![run("extra_9.cdf", vec![])]].concat();
-        let t = table(&more, &[], &[], &s).unwrap();
+        let t = tbl(&more, &[], &[], &s).unwrap();
         assert_eq!(t.groups.last().unwrap(), "extra_9.cdf");
         let s = TableSettings {
             replicates: "^([a-z]+)_".into(),
             ..s
         };
-        let t = table(&more, &[], &[], &s).unwrap();
+        let t = tbl(&more, &[], &[], &s).unwrap();
         assert_eq!(t.groups.iter().filter(|g| *g == "extra").count(), 1);
         assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 3);
         // A group set by hand wins over the table and the pattern; the other runs are not touched.
@@ -1163,14 +1192,14 @@ mod tests {
             )]),
             ..s
         };
-        let t = table(&more, &[], &[], &hand).unwrap();
+        let t = tbl(&more, &[], &[], &hand).unwrap();
         assert_eq!(t.groups.iter().filter(|g| *g == "blank").count(), 1);
         assert_eq!(t.groups.iter().filter(|g| *g == "0").count(), 2);
         let only_hand = TableSettings {
             manual_groups: hand.manual_groups.clone(),
             ..Default::default()
         };
-        let t = table(&more, &[], &[], &only_hand).unwrap();
+        let t = tbl(&more, &[], &[], &only_hand).unwrap();
         assert_eq!(t.groups.iter().filter(|g| g.is_empty()).count(), 15);
     }
 
@@ -1182,7 +1211,7 @@ mod tests {
             manual_groups: SampleGroups::from([(path_key(&a.path), "x".into())]),
             ..Default::default()
         };
-        let t = table(&[a, b], &[], &[], &s).unwrap();
+        let t = tbl(&[a, b], &[], &[], &s).unwrap();
         assert_eq!(t.groups.iter().filter(|g| *g == "x").count(), 1);
     }
 
@@ -1271,7 +1300,7 @@ NUM PEAKS: 1
         let runs = [run("a.cdf", vec![good])];
         // A substance without any value left drops out of the table.
         let value = |s: TableSettings| {
-            (table(&runs, &lib, &[], &s).unwrap().rows.first()).and_then(|r| r.values[0])
+            (tbl(&runs, &lib, &[], &s).unwrap().rows.first()).and_then(|r| r.values[0])
         };
         assert_eq!(value(TableSettings::default()), Some(6.0));
         // S/N 5 drops ion 200; one of two ions is below min_ions 2.
@@ -1323,7 +1352,7 @@ NUM PEAKS: 1
             runs.iter()
                 .all(|r| r.unknown.is_empty() && r.found.len() == 2)
         );
-        let t = table(&runs, &[], &extra, &TableSettings::default()).unwrap();
+        let t = tbl(&runs, &[], &extra, &TableSettings::default()).unwrap();
         assert_eq!(t.rows.len(), 2);
         assert!(t.rows[0].rt_s < t.rows[1].rt_s);
         assert!(t.rows[0].name.starts_with("Unknown"));
@@ -1355,10 +1384,10 @@ NUM PEAKS: 1
         let (dir, mut runs, lib) = rescan_fixture("fill");
         let (s, q) = (ScanSettings::default(), QuantSettings::default());
         let cancel = Cancel::default();
-        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &[], &s, &q, 2, &cancel).unwrap();
+        let (added, errors) = rescan(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
-        let t = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
+        let t = tbl(&runs, &lib, &[], &TableSettings::default()).unwrap();
         assert!(added >= 2 * 3, "{added}");
         for row in &t.rows {
             let (v0, v1) = (row.values[0].unwrap(), row.values[1].unwrap());
@@ -1371,9 +1400,9 @@ NUM PEAKS: 1
             min_reproducibility: 1.0,
             ..Default::default()
         };
-        assert!(table(&runs, &lib, &[], &all).unwrap().rows.is_empty());
+        assert!(tbl(&runs, &lib, &[], &all).unwrap().rows.is_empty());
         cancel.cancel();
-        assert!(rescan_runs(&mut runs, &lib, &[], &[], &s, &q, 1, &cancel).is_none());
+        assert!(rescan(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1385,11 +1414,11 @@ NUM PEAKS: 1
         // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
         let mut again = vec![runs[0].clone()];
         again.extend((0..5).map(|_| runs[1].clone()));
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
         assert_eq!(added, 0);
         // At the limit (2 of 6) it is rescanned.
         again[1] = runs[0].clone();
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
         assert!(added > 0);
         // Ions added to an identified component do not count for reproducibility either.
         let mut partial = vec![runs[0].clone(), runs[0].clone()];
@@ -1403,9 +1432,9 @@ NUM PEAKS: 1
             min_reproducibility: 1.0,
             ..Default::default()
         };
-        let rows = |runs: &[RunResult], s: &TableSettings| table(runs, &lib, &[], s).unwrap().rows;
+        let rows = |runs: &[RunResult], s: &TableSettings| tbl(runs, &lib, &[], s).unwrap().rows;
         assert!(rows(&partial, &all).is_empty());
-        rescan_runs(&mut partial, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
+        rescan(&mut partial, &lib, &[], &s, &q, 1, &cancel).unwrap();
         assert!(partial[1].found.iter().all(|f| !f.ions.is_empty()));
         assert!(rows(&partial, &all).is_empty());
         assert!(!rows(&partial, &TableSettings::default()).is_empty());
@@ -1466,10 +1495,9 @@ NUM PEAKS: 1
         // The rescan has no raw data to look into and leaves a `.cmp` run alone.
         let mut runs = runs;
         runs[0].found.clear();
-        let (added, errors) = rescan_runs(
+        let (added, errors) = rescan(
             &mut runs,
             &lib,
-            &[],
             &[],
             &s,
             &QuantSettings::default(),
@@ -1563,7 +1591,7 @@ NUM PEAKS: 1
         };
         assert_eq!(hits(&again), hits(&raw));
         let t = TableSettings::default();
-        let table_of = |r: &[RunResult]| table(r, &lib, &[], &t).unwrap().rows;
+        let table_of = |r: &[RunResult]| tbl(r, &lib, &[], &t).unwrap().rows;
         assert_eq!(table_of(&again), table_of(&raw));
         assert_eq!(table_of(&raw).len(), 2);
 
@@ -1690,6 +1718,40 @@ NUM PEAKS: 1
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A run that cannot be read leaves a gap: the runs keep their input positions, and the study
+    /// holds the quant ions it was run with.
+    #[test]
+    fn run_study_numbers_runs_by_input_and_keeps_its_quant() {
+        let dir = std::env::temp_dir().join(format!("md-input-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.cdf"), dir.join("b.cdf"));
+        crate::andi::write(&a, &two_substances()).unwrap();
+        crate::andi::write(&b, &two_substances()).unwrap();
+        let paths = [a, dir.join("missing.cdf"), b];
+        let lib = two_substances_library();
+        let s = ScanSettings::default();
+        let prepared = PreparedLibrary::new(&lib, &s.search);
+        let quant = QuantSettings {
+            ion_number: 2,
+            ..Default::default()
+        };
+        let study = Study {
+            runs: &paths,
+            library: &lib,
+            prepared: &prepared,
+            scan: &s,
+            quant: &quant,
+            rescan: false,
+            parallel: 2,
+        };
+        let r = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
+        assert_eq!(r.runs.iter().map(|r| r.input).collect::<Vec<_>>(), [0, 2]);
+        assert_eq!(r.errors.len(), 1);
+        assert_eq!(r.quant, quant);
+        assert!(table(&r, &lib, &TableSettings::default()).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Runs the untargeted study with rescan and checks it against the passes one by one, where
     /// the rescan reads and detects every run again; a set cancel then ends the study.
     fn study_equals_the_passes(
@@ -1721,14 +1783,13 @@ NUM PEAKS: 1
         assert_eq!((done.done(), r.runs.len()), (paths.len(), paths.len()));
         let (mut runs, errors) = scan_runs(paths, &prepared, &s, parallel, &done, &cancel).unwrap();
         let extra = add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap();
-        let (added, more) =
-            rescan_runs(&mut runs, lib, &extra, &[], &s, &q, parallel, &cancel).unwrap();
+        let (added, more) = rescan(&mut runs, lib, &extra, &s, &q, parallel, &cancel).unwrap();
         assert!(errors.is_empty() && more.is_empty() && r.errors.is_empty());
         assert_eq!((r.rescanned, &r.extra, &r.runs), (added, &extra, &runs));
         let ts = TableSettings::default();
         assert_eq!(
-            table(&r.runs, lib, &r.extra, &ts).unwrap(),
-            table(&runs, lib, &extra, &ts).unwrap()
+            table(&r, lib, &ts).unwrap(),
+            tbl(&runs, lib, &extra, &ts).unwrap()
         );
         cancel.cancel();
         assert!(run_study(&study, &done, &cancel).is_none());

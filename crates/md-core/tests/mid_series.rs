@@ -179,6 +179,7 @@ fn mids_of(
     c.mid_sizes = k.frags.iter().map(|f| (f.0, f.1, f.3)).collect();
     let runs: Vec<RunResult> = (0..k.runs)
         .map(|r| RunResult {
+            input: r,
             path: PathBuf::from(format!("run{r}")),
             found: vec![Found {
                 compound: 0,

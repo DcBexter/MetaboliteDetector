@@ -48,7 +48,7 @@ fn main() {
     let r = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
     let took = t.elapsed();
     let t = Instant::now();
-    let tab = table(&r.runs, &lib, &r.extra, &TableSettings::default()).unwrap();
+    let tab = table(&r, &lib, &TableSettings::default()).unwrap();
     println!(
         "{} runs ({} errors) x {} library entries, {parallel} in parallel: study {took:?} ({} unknown, {} ions added by the rescan), table {:?}",
         r.runs.len(),

@@ -236,6 +236,7 @@ fn main() {
     }
     let mid_runs: Vec<RunResult> = (0..200)
         .map(|r| RunResult {
+            input: r as usize,
             path: format!("run{r}.bin").into(),
             found: (0..mids_lib.len())
                 .map(|k| Found {
@@ -305,6 +306,7 @@ fn pool_unknowns() {
             .collect();
         let mut runs: Vec<RunResult> = (0..20)
             .map(|r| RunResult {
+                input: r,
                 path: format!("run{r}.cdf").into(),
                 unknown: (0..n / 20)
                     .map(|k| Unknown {
