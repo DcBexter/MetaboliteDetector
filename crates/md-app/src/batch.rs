@@ -2002,6 +2002,17 @@ mod tests {
             "the table uses the override"
         );
         assert_eq!(b.scan.as_ref().unwrap().study.quant, scanned);
+        let scan = b.scan.as_ref().unwrap();
+        let rebuilt = md_core::batch::table(
+            &scan.study,
+            &scan.lib.compounds,
+            &b.settings,
+            Some(&b.quant),
+        );
+        assert_eq!(
+            b.table.as_ref().unwrap().1.as_ref().unwrap(),
+            rebuilt.as_ref().unwrap()
+        );
         assert!(!shapes.contains("Quant ions changed") && !shapes.contains("Quant-Ionen geändert"));
     }
 
@@ -2246,6 +2257,33 @@ mod tests {
         );
         v.mode = Mode::Times;
         assert_eq!(view::body_lines(&t, v.mode, v.ion_rows, false).len(), 1);
+    }
+
+    #[test]
+    fn the_settings_file_names_the_quant_ions_of_the_table() {
+        let (scan, t) = one_hit_scan();
+        let dir = std::env::temp_dir().join(format!("md-app-quant-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let quant = QuantSettings {
+            ion_number: 9,
+            ..scan.study.quant.clone()
+        };
+        let settings = TableSettings::default();
+        let ex = Export {
+            scan: &scan,
+            settings: &settings,
+            quant: &quant,
+            extra: Vec::new(),
+            ions: false,
+            excel_de: false,
+            blank: "BLANK",
+            group_stats: false,
+        };
+        save_results(&dir.join("results.csv"), &t, &ex).unwrap();
+        let text = std::fs::read_to_string(dir.join("results.settings.csv")).unwrap();
+        assert!(text.contains("QUANT_ION_NUMBER,9"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
