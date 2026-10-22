@@ -78,13 +78,9 @@ pub fn apex_order(comps: &[Component]) -> Vec<usize> {
     order
 }
 
-/// The rows of the component list in [`apex_order`] of their components.
+/// The rows of the component list in [`apex_order`] of their components (rows come in component order).
 pub fn sort_by_apex(rows: &mut [ResultRow], comps: &[Component]) {
-    let mut rank = vec![0; comps.len()];
-    for (p, k) in apex_order(comps).into_iter().enumerate() {
-        rank[k] = p;
-    }
-    rows.sort_by_key(|r| rank[r.component]);
+    rows.sort_by_key(|r| comps[r.component].apex_scan);
 }
 
 /// Old `getIntegral`: the sum over the quant ions of the largest peak of that ion (a duplicate peak
