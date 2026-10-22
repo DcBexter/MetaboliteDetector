@@ -24,6 +24,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Normalisierung** | Umrechnung der Batch-Tabelle (interner Standard, Gesamtsignal, Pool, z-Score). | `md_core::normalize` |
 | **MID** | Mass isotopomer distribution: Verteilung der Markierung je Fragment, korrigiert um natürliche Isotope. | `md_core::mid` |
 | **Job** | Hintergrundarbeit der App mit Progress und Cancel; die UI pollt den Zustand. Cancel wirkt zwischen Scans, Variablen oder Komponenten des langen Schritts. | `md_app::jobs::Job`; `md_core::job::{Cancel, Progress}` |
+| **Job slot** | Das eine Job-Feld eines Fensters: start, poll (zeichnet bis zum Ergebnis neu), cancel. | `md_app::jobs::Slot` |
 | **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`) |
 | **Legacy numeric** | Benannte Rundungen und Rechenwege, die 3.3 bit für bit nachbilden (C-Trunkierung `c_int`, `sg_trunc`, `round_sig8`, glibc `pow`/`hypot`). | `md-core/src/legacy_numeric.rs` (crate-intern) |
 | **Golden test** | Vergleich der neuen Kette gegen Ergebnisse des alten Binary 3.3 auf den Beispiel-Runs. | `crates/md-core/tests/golden_old_md.rs` |

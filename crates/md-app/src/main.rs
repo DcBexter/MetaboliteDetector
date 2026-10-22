@@ -46,7 +46,7 @@ mod update;
 mod vector;
 mod view;
 
-use jobs::Job;
+use jobs::{Job, Slot};
 use lang::Msg;
 
 fn main() -> eframe::Result {
