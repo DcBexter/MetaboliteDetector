@@ -308,15 +308,14 @@ impl MidWindow {
                 ));
             }
             // A run that fails to load is missing from `runs`; `input` is its position in `paths`.
-            let position = |range: std::ops::Range<usize>| {
-                (runs.iter().enumerate())
-                    .filter(|(_, r)| range.contains(&r.input))
-                    .map(|(i, _)| i)
-                    .collect::<Vec<usize>>()
-            };
-            let labelled = position(0..nl);
-            let unlabelled = position(nl..nl + nu);
-            let loaded = |k: usize| runs.iter().any(|r| r.input == k);
+            let labelled: Vec<usize> = (runs.iter().enumerate())
+                .filter(|(_, r)| r.input < nl)
+                .map(|(i, _)| i)
+                .collect();
+            let unlabelled: Vec<usize> = (runs.iter().enumerate())
+                .filter(|(_, r)| (nl..nl + nu).contains(&r.input))
+                .map(|(i, _)| i)
+                .collect();
             let mut mids = determine(
                 &runs,
                 &mids_lib,
@@ -331,7 +330,12 @@ impl MidWindow {
                 for f in mids.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
                     let mut fits = std::mem::take(&mut f.fits).into_iter();
                     f.fits = (0..nl)
-                        .map(|k| loaded(k).then(|| fits.next().flatten()).flatten())
+                        .map(|k| {
+                            runs.iter()
+                                .any(|r| r.input == k)
+                                .then(|| fits.next().flatten())
+                                .flatten()
+                        })
                         .collect();
                 }
             }
