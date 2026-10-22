@@ -95,6 +95,8 @@ impl<T: Send + 'static> Slot<T> {
     ) {
         self.job = Some(Job::spawn(ctx, work));
         self.what = what;
+        // The window polls on the next frame; without this the progress would stay unchanged until then.
+        ctx.request_repaint_after(Duration::from_millis(200));
     }
 
     pub fn running(&self) -> bool {
