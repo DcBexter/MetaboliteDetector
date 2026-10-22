@@ -147,145 +147,293 @@ impl Cursor<'_> {
     }
 }
 
+/// Bounds of a number without a range of its own.
+pub const ANY: (f64, f64) = (-1e9, 1e9);
+
+/// A field of [`GcmsSettings`] as read from and written to the app format, and (for the fixed-size
+/// ones) the old file.
+pub enum Field<'a> {
+    F64(&'a mut f64),
+    /// A number, or `auto` for `None`.
+    Auto(&'a mut Option<f64>),
+    F32(&'a mut f32),
+    I32(&'a mut i32),
+    Bool(&'a mut bool),
+    Ranges(&'a mut Vec<(f32, f32)>),
+    Detector(&'a mut Detector),
+}
+
+/// One setting: its old key, where it lives in the struct and what values it accepts.
+pub struct Key {
+    pub name: &'static str,
+    pub field: fn(&mut GcmsSettings) -> Field<'_>,
+    /// Inclusive bounds (m/z for the range lists, the width for the matched detector); `None`: any
+    /// number within ±1e9. `validate`, the app's loader and the settings window all read this.
+    pub range: Option<(f64, f64)>,
+    /// A fixed-size slot of the old file (§5.2); the excluded ions follow them, the rest is not in it.
+    pub fixed: bool,
+}
+
+const fn key(
+    name: &'static str,
+    field: fn(&mut GcmsSettings) -> Field<'_>,
+    range: Option<(f64, f64)>,
+    fixed: bool,
+) -> Key {
+    Key {
+        name,
+        field,
+        range,
+        fixed,
+    }
+}
+
+/// Every setting under its old key, in the order of the old file. Parse, both file formats, `validate`
+/// and the settings window all go through this one table; the defaults are `GcmsSettings::default()`.
+/// The old `QSettings` name `baseline_correction` stays as it is so an old settings file imports it.
+// Rustfmt would put each of the 36 rows on five lines.
+#[rustfmt::skip]
+pub const KEYS: [Key; 36] = [
+    key("SF_PEAK_THRESHOLD_BEGIN", |s| Field::F64(&mut s.sf_peak_threshold_begin), None, true),
+    key("SF_PEAK_THRESHOLD_END", |s| Field::F64(&mut s.sf_peak_threshold_end), None, true),
+    key("SF_MAX_BASE_DEV", |s| Field::F64(&mut s.sf_max_base_dev), None, true),
+    key("SF_FWHM", |s| Field::F64(&mut s.sf_fwhm), Some((0.0, 1.0)), true),
+    key("SF_CENTROID_THRESHOLD_BEGIN", |s| Field::F64(&mut s.sf_centroid_threshold_begin), None, true),
+    key("SF_CENTROID_THRESHOLD_END", |s| Field::F64(&mut s.sf_centroid_threshold_end), None, true),
+    key("SF_CENTROID_MAX_BASE_DEV", |s| Field::F64(&mut s.sf_centroid_max_base_dev), None, true),
+    key("AN_PEAK_THRESHOLD_BEGIN", |s| Field::F64(&mut s.an_peak_threshold_begin), None, true),
+    key("AN_PEAK_THRESHOLD_END", |s| Field::F64(&mut s.an_peak_threshold_end), None, true),
+    key("AN_MAX_BASE_DEV", |s| Field::F64(&mut s.an_max_base_dev), None, true),
+    key("AN_MIN_PEAK_HEIGHT", |s| Field::F64(&mut s.an_min_peak_height), Some((0.0, 1000000000.0)), true),
+    key("AN_DECONVOLUTION_WIDTH", |s| Field::Auto(&mut s.an_deconvolution_width), Some((0.1, 100.0)), true),
+    key("AN_NUMBER_BINS", |s| Field::I32(&mut s.an_number_bins), Some((1.0, 100.0)), true),
+    key("AN_MIN_PEAK_NUMBER", |s| Field::I32(&mut s.an_min_peak_number), Some((1.0, 10000.0)), true),
+    key("AN_MIN_HEIGHT_BP", |s| Field::F64(&mut s.an_min_height_bp), Some((0.0, 1.0)), false),
+    key("AN_MODELED_VALUES_FOR_INTEGRATION", |s| Field::Bool(&mut s.an_modeled_values_for_integration), None, false),
+    key("baseline_correction", |s| Field::Bool(&mut s.baseline_correction), None, false),
+    key("LS_RI_DIFF", |s| Field::F64(&mut s.ls_ri_diff), Some((1e-06, 1000000000.0)), true),
+    key("LS_PURE_FACTOR", |s| Field::F64(&mut s.ls_pure_factor), Some((0.0, 1000000000.0)), true),
+    key("LS_IMPURE_FACTOR", |s| Field::F64(&mut s.ls_impure_factor), Some((0.0, 1000000000.0)), true),
+    key("LS_SCALE_FACTOR_ION", |s| Field::F64(&mut s.ls_scale_factor_ion), None, true),
+    key("LS_SCALE_FACTOR_VALUE", |s| Field::F64(&mut s.ls_scale_factor_value), None, true),
+    key("LS_SCALE_FACTOR_NO_MATCH", |s| Field::F64(&mut s.ls_scale_factor_no_match), None, true),
+    key("LS_RESOLUTION", |s| Field::F32(&mut s.ls_resolution), None, true),
+    key("LS_USE_RI", |s| Field::Bool(&mut s.ls_use_ri), None, true),
+    key("LS_USE_SCALED_LIB", |s| Field::Bool(&mut s.ls_use_scaled_lib), None, true),
+    key("LS_USE_SPEC", |s| Field::Bool(&mut s.ls_use_spec), None, true),
+    key("LS_MASS_FILTER", |s| Field::Ranges(&mut s.ls_mass_filter), Some((0.0, 100000.0)), false),
+    key("LS_CUTOFF", |s| Field::F64(&mut s.ls_cutoff), Some((0.0, 1.0)), false),
+    key("QUANT_ION_NUMBER", |s| Field::I32(&mut s.quant_ion_number), Some((0.0, 10000.0)), true),
+    key("QUANT_MIN_DIST_IONS", |s| Field::F64(&mut s.quant_min_dist_ions), None, true),
+    key("QUANT_QUALITY_CUTOFF", |s| Field::F64(&mut s.quant_quality_cutoff), None, true),
+    key("QUANT_EXCL_IONS", |s| Field::Ranges(&mut s.quant_excl_ions), Some((0.0, 100000.0)), false),
+    key("SQL_MAX_NUMBER_FRAGMENTS", |s| Field::I32(&mut s.sql_max_number_fragments), Some((1.0, 100.0)), false),
+    key("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS", |s| Field::I32(&mut s.sql_minimal_number_equal_fragments), Some((0.0, 100.0)), false),
+    key("PEAK_DETECTOR", |s| Field::Detector(&mut s.peak_detector), Some((1.0, 1000.0)), false),
+];
+
+/// Bounds of a setting for an input widget; panics on a key that is not in the table.
+pub fn limits(name: &str) -> (f64, f64) {
+    let k = KEYS
+        .iter()
+        .find(|k| k.name == name)
+        .expect("a key of the table");
+    k.range.unwrap_or(ANY)
+}
+
+fn put<T: std::str::FromStr>(f: &mut T, v: &str) -> bool {
+    v.parse().map(|x| *f = x).is_ok()
+}
+
+impl Field<'_> {
+    /// Reads the app-format text.
+    pub fn parse(self, v: &str) -> bool {
+        match self {
+            Field::F64(f) => put(f, v),
+            Field::Auto(f) if v == "auto" => {
+                *f = None;
+                true
+            }
+            Field::Auto(f) => v.parse().map(|x| *f = Some(x)).is_ok(),
+            Field::F32(f) => put(f, v) || variant_f32(v).map(|x| *f = x).is_some(),
+            Field::I32(f) => put(f, v),
+            Field::Bool(f) => put(f, v),
+            Field::Ranges(f) => ranges(v).map(|r| *f = r).is_some(),
+            Field::Detector(f) => detector(v).map(|d| *f = d).is_some(),
+        }
+    }
+
+    /// The app-format text.
+    pub fn text(self) -> String {
+        match self {
+            Field::F64(f) => f.to_string(),
+            Field::Auto(f) => f.map_or("auto".into(), |x| x.to_string()),
+            Field::F32(f) => f.to_string(),
+            Field::I32(f) => f.to_string(),
+            Field::Bool(f) => f.to_string(),
+            Field::Ranges(f) => (f.iter().map(|(a, b)| format!("{a}:{b}")))
+                .collect::<Vec<_>>()
+                .join(";"),
+            Field::Detector(Detector::Default) => "default".into(),
+            Field::Detector(Detector::Matched { width, threshold }) => {
+                format!("matched {width} {threshold}")
+            }
+        }
+    }
+
+    /// The old file's bytes of a `fixed` key.
+    fn write(&self, out: &mut Vec<u8>) {
+        match self {
+            Field::F64(v) => out.extend(v.to_le_bytes()),
+            // Automatic is the old default 1 there: the old version knows no other.
+            Field::Auto(v) => out.extend(v.unwrap_or(1.0).to_le_bytes()),
+            Field::F32(v) => out.extend(v.to_le_bytes()),
+            Field::I32(v) => out.extend(v.to_le_bytes()),
+            Field::Bool(v) => out.push(u8::from(**v)),
+            Field::Ranges(_) | Field::Detector(_) => unreachable!("not a fixed-size key"),
+        }
+    }
+
+    fn read(self, c: &mut Cursor) {
+        match self {
+            Field::F64(v) => *v = c.f64(),
+            Field::Auto(v) => *v = Some(c.f64()),
+            Field::F32(v) => *v = c.f32(),
+            Field::I32(v) => *v = c.i32(),
+            Field::Bool(v) => *v = c.bool(),
+            Field::Ranges(_) | Field::Detector(_) => unreachable!("not a fixed-size key"),
+        }
+    }
+}
+
+/// `73:75;147:148`; the old app's `@Invalid()` is its empty list.
+fn ranges(v: &str) -> Option<Vec<(f32, f32)>> {
+    if v.is_empty() || v == "@Invalid()" {
+        return Some(Vec::new());
+    }
+    // shortcut: a non-empty old list (a QVariantList, never seen) is not decoded and keeps the
+    // default; decode it once a user's old file has one.
+    (v.split(';'))
+        .map(|r| {
+            let (a, b) = r.split_once(':')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+        .collect()
+}
+
+fn detector(v: &str) -> Option<Detector> {
+    match v.split_whitespace().collect::<Vec<_>>()[..] {
+        ["default"] => Some(Detector::Default),
+        ["matched", w, t] => Some(Detector::Matched {
+            width: w.parse().ok()?,
+            threshold: t.parse().ok()?,
+        }),
+        _ => None,
+    }
+}
+
+/// The old `LS_RESOLUTION=@Variant(\0\0\0\x87>\x99\x99\x9a)`: a QDataStream QVariant of type 135
+/// (float), big-endian, here already unescaped to one char per byte.
+fn variant_f32(v: &str) -> Option<f32> {
+    let inner = v.strip_prefix("@Variant(")?.strip_suffix(')')?;
+    let bytes: Vec<u8> = inner
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).ok())
+        .collect::<Option<_>>()?;
+    match bytes[..] {
+        [0, 0, 0, 135, a, b, c, d] => Some(f32::from_be_bytes([a, b, c, d])),
+        _ => None,
+    }
+}
+
 impl GcmsSettings {
     /// Values the analysis steps can run with; the error names the first bad field.
     pub fn validate(&self) -> Result<(), String> {
-        let finite = |name: &str, v: f64| {
-            if v.is_finite() && v.abs() <= 1e9 {
-                Ok(())
-            } else {
-                Err(format!("{name}: value out of range"))
-            }
-        };
-        for (name, v) in [
-            ("SF_PEAK_THRESHOLD_BEGIN", self.sf_peak_threshold_begin),
-            ("SF_PEAK_THRESHOLD_END", self.sf_peak_threshold_end),
-            ("SF_MAX_BASE_DEV", self.sf_max_base_dev),
-            ("SF_FWHM", self.sf_fwhm),
-            (
-                "SF_CENTROID_THRESHOLD_BEGIN",
-                self.sf_centroid_threshold_begin,
-            ),
-            ("SF_CENTROID_THRESHOLD_END", self.sf_centroid_threshold_end),
-            ("SF_CENTROID_MAX_BASE_DEV", self.sf_centroid_max_base_dev),
-            ("AN_PEAK_THRESHOLD_BEGIN", self.an_peak_threshold_begin),
-            ("AN_PEAK_THRESHOLD_END", self.an_peak_threshold_end),
-            ("AN_MAX_BASE_DEV", self.an_max_base_dev),
-            ("AN_MIN_PEAK_HEIGHT", self.an_min_peak_height),
-            ("LS_PURE_FACTOR", self.ls_pure_factor),
-            ("LS_IMPURE_FACTOR", self.ls_impure_factor),
-            ("LS_SCALE_FACTOR_ION", self.ls_scale_factor_ion),
-            ("LS_SCALE_FACTOR_VALUE", self.ls_scale_factor_value),
-            ("LS_SCALE_FACTOR_NO_MATCH", self.ls_scale_factor_no_match),
-            ("QUANT_MIN_DIST_IONS", self.quant_min_dist_ions),
-            ("QUANT_QUALITY_CUTOFF", self.quant_quality_cutoff),
-            ("LS_RESOLUTION", self.ls_resolution as f64),
-        ] {
-            finite(name, v)?;
-        }
-        let ranged = |name: &str, v: f64, lo: f64, hi: f64| {
-            if (lo..=hi).contains(&v) {
-                Ok(())
-            } else {
-                Err(format!("{name}: must be between {lo} and {hi}"))
-            }
-        };
-        // A share of the peak maximum: above 1 no point reaches it and every centroid is empty.
-        ranged("SF_FWHM", self.sf_fwhm, 0.0, 1.0)?;
-        ranged("AN_MIN_PEAK_HEIGHT", self.an_min_peak_height, 0.0, 1e9)?;
-        if let Some(w) = self.an_deconvolution_width {
-            ranged("AN_DECONVOLUTION_WIDTH", w, 0.1, 100.0)?;
-        }
-        ranged("AN_NUMBER_BINS", self.an_number_bins as f64, 1.0, 100.0)?;
-        ranged(
-            "AN_MIN_PEAK_NUMBER",
-            self.an_min_peak_number as f64,
-            1.0,
-            10_000.0,
-        )?;
-        ranged("AN_MIN_HEIGHT_BP", self.an_min_height_bp, 0.0, 1.0)?;
-        if let Detector::Matched { width, threshold } = self.peak_detector {
-            // The old window's width range; the threshold only needs to stay finite.
-            ranged("Peak width", width as f64, 1.0, 1000.0)?;
-            finite("Peak threshold", threshold as f64)?;
-        }
-        ranged("LS_RI_DIFF", self.ls_ri_diff, 1e-6, 1e9)?;
-        ranged("LS_CUTOFF", self.ls_cutoff, 0.0, 1.0)?;
-        // A component has a few dozen fragments at most; the dialog uses the same limits.
-        ranged(
-            "SQL_MAX_NUMBER_FRAGMENTS",
-            self.sql_max_number_fragments as f64,
-            1.0,
-            100.0,
-        )?;
-        ranged(
-            "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS",
-            self.sql_minimal_number_equal_fragments as f64,
-            0.0,
-            100.0,
-        )?;
-        ranged(
-            "QUANT_ION_NUMBER",
-            self.quant_ion_number as f64,
-            0.0,
-            10_000.0,
-        )?;
-        for (name, v) in [
-            ("LS_PURE_FACTOR", self.ls_pure_factor),
-            ("LS_IMPURE_FACTOR", self.ls_impure_factor),
-        ] {
-            ranged(name, v, 0.0, 1e9)?;
-        }
-        for (name, ranges) in [
-            ("QUANT_EXCL_IONS", &self.quant_excl_ions),
-            ("LS_MASS_FILTER", &self.ls_mass_filter),
-        ] {
-            // Same limits as the dialog, so it never changes a loaded value.
-            let ok = |v: &f32| (0.0..=100_000.0).contains(v);
-            if ranges.iter().any(|(a, b)| !ok(a) || !ok(b)) {
-                return Err(format!("{name}: value out of range"));
+        self.check().map_err(|(_, e)| e)
+    }
+
+    /// The first bad field as its table key and message. The ranges are those of [`KEYS`]; the dialog
+    /// uses the same ones ([`limits`]), so it never changes a loaded value.
+    fn check(&self) -> Result<(), (&'static str, String)> {
+        let mut copy = self.clone();
+        for k in &KEYS {
+            let (lo, hi) = k.range.unwrap_or(ANY);
+            let name = k.name;
+            let number = |label: &str, v: f64| {
+                if !v.is_finite() {
+                    Err((name, format!("{label}: value out of range")))
+                } else if k.range.is_some() && !(lo..=hi).contains(&v) {
+                    Err((name, format!("{label}: must be between {lo} and {hi}")))
+                } else if v.abs() > ANY.1 {
+                    Err((name, format!("{label}: value out of range")))
+                } else {
+                    Ok(())
+                }
+            };
+            match (k.field)(&mut copy) {
+                Field::F64(v) => number(name, *v)?,
+                Field::F32(v) => number(name, f64::from(*v))?,
+                Field::I32(v) => number(name, f64::from(*v))?,
+                Field::Auto(Some(v)) => number(name, *v)?,
+                Field::Ranges(r) => {
+                    let ok = |v: &f32| (lo..=hi).contains(&f64::from(*v));
+                    if r.iter().any(|(a, b)| !ok(a) || !ok(b)) {
+                        return Err((name, format!("{name}: value out of range")));
+                    }
+                }
+                Field::Detector(Detector::Matched { width, threshold }) => {
+                    number("Peak width", f64::from(*width))?;
+                    // The threshold only needs to stay within the common bound.
+                    if f64::from(*threshold).abs() > ANY.1 {
+                        return Err((name, "Peak threshold: value out of range".into()));
+                    }
+                }
+                Field::Auto(None) | Field::Bool(_) | Field::Detector(Detector::Default) => {}
             }
         }
         Ok(())
     }
 
+    /// Sets one setting from its app-format text. `None`: no such key; `Some(false)`: unreadable text.
+    pub fn set(&mut self, key: &str, text: &str) -> Option<bool> {
+        let k = KEYS.iter().find(|k| k.name == key)?;
+        Some((k.field)(self).parse(text))
+    }
+
+    /// Every setting as `key`, app-format text, in table order.
+    pub fn lines(&self) -> Vec<(&'static str, String)> {
+        let mut copy = self.clone();
+        (KEYS.iter())
+            .map(|k| (k.name, (k.field)(&mut copy).text()))
+            .collect()
+    }
+
+    /// Loaded values that fail [`Self::validate`] go back to their default, one field at a time
+    /// (each message is pushed to `bad`); all of them if a message names no field.
+    pub fn sanitized(mut self, bad: &mut Vec<String>) -> Self {
+        // Each round resets one field, so this ends; the bound only guards against a field whose
+        // default does not pass.
+        for _ in 0..=KEYS.len() {
+            let Err((name, e)) = self.check() else {
+                return self;
+            };
+            bad.push(e);
+            let Some(k) = KEYS.iter().find(|k| k.name == name) else {
+                break;
+            };
+            let default = (k.field)(&mut Self::default()).text();
+            (k.field)(&mut self).parse(&default);
+        }
+        Self::default()
+    }
+
     /// Old `toStream` (§5.2): 191 + 8n bytes, no header.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(FIXED_LEN + ION_LEN * self.quant_excl_ions.len());
-        for v in [
-            self.sf_peak_threshold_begin,
-            self.sf_peak_threshold_end,
-            self.sf_max_base_dev,
-            self.sf_fwhm,
-            self.sf_centroid_threshold_begin,
-            self.sf_centroid_threshold_end,
-            self.sf_centroid_max_base_dev,
-            self.an_peak_threshold_begin,
-            self.an_peak_threshold_end,
-            self.an_max_base_dev,
-            self.an_min_peak_height,
-            // Automatic is the old default 1 there: the old version knows no other.
-            self.an_deconvolution_width.unwrap_or(1.0),
-        ] {
-            out.extend(v.to_le_bytes());
+        let mut copy = self.clone();
+        for k in KEYS.iter().filter(|k| k.fixed) {
+            (k.field)(&mut copy).write(&mut out);
         }
-        out.extend(self.an_number_bins.to_le_bytes());
-        out.extend(self.an_min_peak_number.to_le_bytes());
-        for v in [
-            self.ls_ri_diff,
-            self.ls_pure_factor,
-            self.ls_impure_factor,
-            self.ls_scale_factor_ion,
-            self.ls_scale_factor_value,
-            self.ls_scale_factor_no_match,
-        ] {
-            out.extend(v.to_le_bytes());
-        }
-        out.extend(self.ls_resolution.to_le_bytes());
-        out.extend([self.ls_use_ri, self.ls_use_scaled_lib, self.ls_use_spec].map(u8::from));
-        out.extend(self.quant_ion_number.to_le_bytes());
-        out.extend(self.quant_min_dist_ions.to_le_bytes());
-        out.extend(self.quant_quality_cutoff.to_le_bytes());
         out.extend((self.quant_excl_ions.len() as u32).to_le_bytes());
         for (a, b) in &self.quant_excl_ions {
             out.extend(a.to_le_bytes());
@@ -338,36 +486,10 @@ impl GcmsSettings {
             ));
         }
         let mut c = Cursor(bytes);
-        let mut s = Self {
-            sf_peak_threshold_begin: c.f64(),
-            sf_peak_threshold_end: c.f64(),
-            sf_max_base_dev: c.f64(),
-            sf_fwhm: c.f64(),
-            sf_centroid_threshold_begin: c.f64(),
-            sf_centroid_threshold_end: c.f64(),
-            sf_centroid_max_base_dev: c.f64(),
-            an_peak_threshold_begin: c.f64(),
-            an_peak_threshold_end: c.f64(),
-            an_max_base_dev: c.f64(),
-            an_min_peak_height: c.f64(),
-            an_deconvolution_width: Some(c.f64()),
-            an_number_bins: c.i32(),
-            an_min_peak_number: c.i32(),
-            ls_ri_diff: c.f64(),
-            ls_pure_factor: c.f64(),
-            ls_impure_factor: c.f64(),
-            ls_scale_factor_ion: c.f64(),
-            ls_scale_factor_value: c.f64(),
-            ls_scale_factor_no_match: c.f64(),
-            ls_resolution: c.f32(),
-            ls_use_ri: c.bool(),
-            ls_use_scaled_lib: c.bool(),
-            ls_use_spec: c.bool(),
-            quant_ion_number: c.i32(),
-            quant_min_dist_ions: c.f64(),
-            quant_quality_cutoff: c.f64(),
-            ..self.clone()
-        };
+        let mut s = self.clone();
+        for k in KEYS.iter().filter(|k| k.fixed) {
+            (k.field)(&mut s).read(&mut c);
+        }
         c.take::<4>();
         s.quant_excl_ions = (0..n).map(|_| (c.f32(), c.f32())).collect();
         let check = c.f64();
@@ -382,12 +504,17 @@ impl GcmsSettings {
         Ok(s)
     }
 
+    /// `AN_NUMBER_BINS`: the one place `peak` and `deconv` read it from, so they cannot differ.
+    fn number_bins(&self) -> u32 {
+        self.an_number_bins.max(1) as u32
+    }
+
     pub fn peak(&self) -> PeakSettings {
         PeakSettings {
             threshold_begin: self.an_peak_threshold_begin as f32,
             threshold_end: self.an_peak_threshold_end as f32,
             min_peak_height: self.an_min_peak_height as f32,
-            number_bins: self.an_number_bins.max(1) as u32,
+            number_bins: self.number_bins(),
             detector: self.peak_detector,
             fwhm: self.sf_fwhm,
         }
@@ -396,7 +523,7 @@ impl GcmsSettings {
     pub fn deconv(&self) -> DeconvSettings {
         DeconvSettings {
             width: self.an_deconvolution_width,
-            number_bins: self.an_number_bins.max(1) as u32,
+            number_bins: self.number_bins(),
             min_peak_number: self.an_min_peak_number.max(1) as usize,
             min_height_bp: self.an_min_height_bp,
             modeled_integration: self.an_modeled_values_for_integration,
@@ -519,6 +646,149 @@ mod tests {
                 "{max} {min}"
             );
         }
+    }
+
+    /// A value that differs from the default and passes `validate`.
+    fn change(k: &Key, s: &mut GcmsSettings) {
+        match (k.field)(s) {
+            Field::F64(f) => *f = k.range.map_or(3.5, |(lo, hi)| lo + (hi - lo) / 3.0),
+            Field::Auto(f) => *f = Some(2.5),
+            Field::F32(f) => *f = 0.25,
+            Field::I32(f) => *f = k.range.map_or(7, |(lo, _)| lo as i32 + 1),
+            Field::Bool(f) => *f = !*f,
+            Field::Ranges(f) => *f = vec![(73.0, 75.0), (147.0, 148.5)],
+            Field::Detector(f) => {
+                *f = Detector::Matched {
+                    width: 12,
+                    threshold: 4,
+                }
+            }
+        }
+    }
+
+    /// Puts `v` where the key's range applies: the number, the matched width, or both ends of a range.
+    fn put_bound(k: &Key, s: &mut GcmsSettings, v: f64) {
+        match (k.field)(s) {
+            Field::F64(f) => *f = v,
+            Field::F32(f) => *f = v as f32,
+            Field::I32(f) => *f = v as i32,
+            Field::Auto(f) => *f = Some(v),
+            Field::Detector(d) => {
+                *d = Detector::Matched {
+                    width: v as u32,
+                    threshold: 0,
+                }
+            }
+            Field::Ranges(r) => *r = vec![(v as f32, v as f32)],
+            Field::Bool(_) => unreachable!("a flag has no range"),
+        }
+    }
+
+    /// Each key round-trips through the app format and, if it has a slot there, the old file.
+    #[test]
+    fn every_key_round_trips() {
+        // The old file holds the width, so a loaded one is set.
+        let base = GcmsSettings {
+            an_deconvolution_width: Some(1.0),
+            ..Default::default()
+        };
+        let names: std::collections::HashSet<_> = KEYS.iter().map(|k| k.name).collect();
+        assert_eq!(names.len(), KEYS.len(), "a key twice");
+        for k in &KEYS {
+            // Default: the text of every key reads back to the same value.
+            let mut back = GcmsSettings::default();
+            for (name, text) in GcmsSettings::default().lines() {
+                assert_eq!(back.set(name, &text), Some(true), "{name}");
+            }
+            assert_eq!(back, GcmsSettings::default(), "{}", k.name);
+
+            let mut s = base.clone();
+            change(k, &mut s);
+            assert_ne!(s, base, "{}", k.name);
+            s.validate().unwrap_or_else(|e| panic!("{}: {e}", k.name));
+            let mut app = base.clone();
+            for (name, text) in s.lines() {
+                assert_eq!(app.set(name, &text), Some(true), "{name}");
+            }
+            assert_eq!(app, s, "app format {}", k.name);
+            let old = base.from_bytes(&s.to_bytes()).unwrap();
+            if k.fixed {
+                assert_eq!(old, s, "old file {}", k.name);
+            } else if k.name != "QUANT_EXCL_IONS" {
+                assert_eq!(old, base, "{} is not in the old file", k.name);
+            }
+        }
+    }
+
+    #[test]
+    fn set_names_unknown_keys_and_bad_text() {
+        assert_eq!(GcmsSettings::default().set("NO_SUCH_KEY", "1"), None);
+        assert_eq!(
+            GcmsSettings::default().set("LS_RI_DIFF", "abc"),
+            Some(false)
+        );
+    }
+
+    /// The bounds of the table are the bounds of `validate`, at the edge and one step beyond.
+    #[test]
+    fn every_range_is_enforced() {
+        for k in KEYS.iter().filter(|k| k.range.is_some()) {
+            let (lo, hi) = k.range.unwrap();
+            for v in [lo, hi] {
+                let mut s = GcmsSettings::default();
+                put_bound(k, &mut s, v);
+                s.validate()
+                    .unwrap_or_else(|e| panic!("{} {v}: {e}", k.name));
+            }
+            for v in [lo - 1.0, hi + 1.0] {
+                let mut s = GcmsSettings::default();
+                put_bound(k, &mut s, v);
+                assert!(
+                    s.check().is_err_and(|(name, _)| name == k.name),
+                    "{} {v}",
+                    k.name
+                );
+            }
+        }
+        // A bad value is reset alone, with its message.
+        let mut bad = Vec::new();
+        let s = GcmsSettings {
+            an_number_bins: 0,
+            ls_pure_factor: 0.7,
+            peak_detector: Detector::Matched {
+                width: 0,
+                threshold: 5,
+            },
+            ..Default::default()
+        };
+        let s = s.sanitized(&mut bad);
+        assert_eq!(
+            bad,
+            [
+                "AN_NUMBER_BINS: must be between 1 and 100",
+                "Peak width: must be between 1 and 1000"
+            ]
+        );
+        assert_eq!(
+            s,
+            GcmsSettings {
+                ls_pure_factor: 0.7,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// `peak` and `deconv` read the apex steps from one place, and the excluded ions reach the model peak
+    /// and the quantification.
+    #[test]
+    fn shared_values_reach_every_step() {
+        let s = GcmsSettings {
+            an_number_bins: 7,
+            quant_excl_ions: vec![(73.0, 73.0)],
+            ..Default::default()
+        };
+        assert_eq!((s.peak().number_bins, s.deconv().number_bins), (7, 7));
+        assert_eq!(s.deconv().excluded_model_ions, s.quant().excluded);
     }
 
     #[test]

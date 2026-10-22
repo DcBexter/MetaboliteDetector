@@ -18,8 +18,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use md_core::peaks::Detector;
-use md_core::settings::{GcmsSettings, MAX_LEN};
+use md_core::settings::MAX_LEN;
 
 use crate::App;
 use crate::lang::{Msg, msg, t};
@@ -96,178 +95,8 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
-/// A field of [`GcmsSettings`] as read from and written to a line.
-enum Field<'a> {
-    F64(&'a mut f64),
-    /// A number, or `auto` for `None`.
-    Auto(&'a mut Option<f64>),
-    F32(&'a mut f32),
-    I32(&'a mut i32),
-    Bool(&'a mut bool),
-    Ranges(&'a mut Vec<(f32, f32)>),
-    Detector(&'a mut Detector),
-}
-
-type Access = fn(&mut GcmsSettings) -> Field<'_>;
-
-/// Every setting under its old key; reading and writing both go through this one table.
-const FIELDS: [(&str, Access); 36] = [
-    ("SF_PEAK_THRESHOLD_BEGIN", |s| {
-        Field::F64(&mut s.sf_peak_threshold_begin)
-    }),
-    ("SF_PEAK_THRESHOLD_END", |s| {
-        Field::F64(&mut s.sf_peak_threshold_end)
-    }),
-    ("SF_MAX_BASE_DEV", |s| Field::F64(&mut s.sf_max_base_dev)),
-    ("SF_FWHM", |s| Field::F64(&mut s.sf_fwhm)),
-    ("SF_CENTROID_THRESHOLD_BEGIN", |s| {
-        Field::F64(&mut s.sf_centroid_threshold_begin)
-    }),
-    ("SF_CENTROID_THRESHOLD_END", |s| {
-        Field::F64(&mut s.sf_centroid_threshold_end)
-    }),
-    ("SF_CENTROID_MAX_BASE_DEV", |s| {
-        Field::F64(&mut s.sf_centroid_max_base_dev)
-    }),
-    ("AN_PEAK_THRESHOLD_BEGIN", |s| {
-        Field::F64(&mut s.an_peak_threshold_begin)
-    }),
-    ("AN_PEAK_THRESHOLD_END", |s| {
-        Field::F64(&mut s.an_peak_threshold_end)
-    }),
-    ("AN_MAX_BASE_DEV", |s| Field::F64(&mut s.an_max_base_dev)),
-    ("AN_MIN_PEAK_HEIGHT", |s| {
-        Field::F64(&mut s.an_min_peak_height)
-    }),
-    ("AN_DECONVOLUTION_WIDTH", |s| {
-        Field::Auto(&mut s.an_deconvolution_width)
-    }),
-    ("AN_NUMBER_BINS", |s| Field::I32(&mut s.an_number_bins)),
-    ("AN_MIN_PEAK_NUMBER", |s| {
-        Field::I32(&mut s.an_min_peak_number)
-    }),
-    ("AN_MIN_HEIGHT_BP", |s| Field::F64(&mut s.an_min_height_bp)),
-    ("AN_MODELED_VALUES_FOR_INTEGRATION", |s| {
-        Field::Bool(&mut s.an_modeled_values_for_integration)
-    }),
-    // The old QSettings key under [Algorithm], so an old settings file imports it as it is.
-    ("baseline_correction", |s| {
-        Field::Bool(&mut s.baseline_correction)
-    }),
-    ("LS_RI_DIFF", |s| Field::F64(&mut s.ls_ri_diff)),
-    ("LS_PURE_FACTOR", |s| Field::F64(&mut s.ls_pure_factor)),
-    ("LS_IMPURE_FACTOR", |s| Field::F64(&mut s.ls_impure_factor)),
-    ("LS_SCALE_FACTOR_ION", |s| {
-        Field::F64(&mut s.ls_scale_factor_ion)
-    }),
-    ("LS_SCALE_FACTOR_VALUE", |s| {
-        Field::F64(&mut s.ls_scale_factor_value)
-    }),
-    ("LS_SCALE_FACTOR_NO_MATCH", |s| {
-        Field::F64(&mut s.ls_scale_factor_no_match)
-    }),
-    ("LS_RESOLUTION", |s| Field::F32(&mut s.ls_resolution)),
-    ("LS_USE_RI", |s| Field::Bool(&mut s.ls_use_ri)),
-    ("LS_USE_SCALED_LIB", |s| {
-        Field::Bool(&mut s.ls_use_scaled_lib)
-    }),
-    ("LS_USE_SPEC", |s| Field::Bool(&mut s.ls_use_spec)),
-    ("LS_MASS_FILTER", |s| Field::Ranges(&mut s.ls_mass_filter)),
-    ("LS_CUTOFF", |s| Field::F64(&mut s.ls_cutoff)),
-    ("QUANT_ION_NUMBER", |s| Field::I32(&mut s.quant_ion_number)),
-    ("QUANT_MIN_DIST_IONS", |s| {
-        Field::F64(&mut s.quant_min_dist_ions)
-    }),
-    ("QUANT_QUALITY_CUTOFF", |s| {
-        Field::F64(&mut s.quant_quality_cutoff)
-    }),
-    ("QUANT_EXCL_IONS", |s| Field::Ranges(&mut s.quant_excl_ions)),
-    ("SQL_MAX_NUMBER_FRAGMENTS", |s| {
-        Field::I32(&mut s.sql_max_number_fragments)
-    }),
-    ("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS", |s| {
-        Field::I32(&mut s.sql_minimal_number_equal_fragments)
-    }),
-    ("PEAK_DETECTOR", |s| Field::Detector(&mut s.peak_detector)),
-];
-
 fn put<T: std::str::FromStr>(f: &mut T, v: &str) -> bool {
     v.parse().map(|x| *f = x).is_ok()
-}
-
-impl Field<'_> {
-    fn parse(self, v: &str) -> bool {
-        match self {
-            Field::F64(f) => put(f, v),
-            Field::Auto(f) if v == "auto" => {
-                *f = None;
-                true
-            }
-            Field::Auto(f) => v.parse().map(|x| *f = Some(x)).is_ok(),
-            Field::F32(f) => put(f, v) || variant_f32(v).map(|x| *f = x).is_some(),
-            Field::I32(f) => put(f, v),
-            Field::Bool(f) => put(f, v),
-            Field::Ranges(f) => ranges(v).map(|r| *f = r).is_some(),
-            Field::Detector(f) => detector(v).map(|d| *f = d).is_some(),
-        }
-    }
-
-    fn text(self) -> String {
-        match self {
-            Field::F64(f) => f.to_string(),
-            Field::Auto(f) => f.map_or("auto".into(), |x| x.to_string()),
-            Field::F32(f) => f.to_string(),
-            Field::I32(f) => f.to_string(),
-            Field::Bool(f) => f.to_string(),
-            Field::Ranges(f) => (f.iter().map(|(a, b)| format!("{a}:{b}")))
-                .collect::<Vec<_>>()
-                .join(";"),
-            Field::Detector(Detector::Default) => "default".into(),
-            Field::Detector(Detector::Matched { width, threshold }) => {
-                format!("matched {width} {threshold}")
-            }
-        }
-    }
-}
-
-/// `73:75;147:148`; the old app's `@Invalid()` is its empty list.
-fn ranges(v: &str) -> Option<Vec<(f32, f32)>> {
-    if v.is_empty() || v == "@Invalid()" {
-        return Some(Vec::new());
-    }
-    // shortcut: a non-empty old list (a QVariantList, never seen) is not decoded and keeps the
-    // default; decode it once a user's old file has one.
-    (v.split(';'))
-        .map(|r| {
-            let (a, b) = r.split_once(':')?;
-            Some((a.parse().ok()?, b.parse().ok()?))
-        })
-        .collect()
-}
-
-fn detector(v: &str) -> Option<Detector> {
-    match v.split_whitespace().collect::<Vec<_>>()[..] {
-        ["default"] => Some(Detector::Default),
-        ["matched", w, t] => Some(Detector::Matched {
-            width: w.parse().ok()?,
-            threshold: t.parse().ok()?,
-        }),
-        _ => None,
-    }
-}
-
-/// The old `LS_RESOLUTION=@Variant(\0\0\0\x87>\x99\x99\x9a)`: a QDataStream QVariant of type 135
-/// (float), big-endian, here already unescaped to one char per byte.
-fn variant_f32(v: &str) -> Option<f32> {
-    let inner = v.strip_prefix("@Variant(")?.strip_suffix(')')?;
-    let bytes: Vec<u8> = inner
-        .chars()
-        .map(|c| u8::try_from(u32::from(c)).ok())
-        .collect::<Option<_>>()?;
-    match bytes[..] {
-        [0, 0, 0, 135, a, b, c, d] => Some(f32::from_be_bytes([a, b, c, d])),
-        _ => None,
-    }
 }
 
 /// Keys the old app named differently from its settings file (Inferred: same meaning and default).
@@ -445,8 +274,8 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
     let mut recent = Vec::new();
     for (section, key, v) in entries {
         let key = alias(&key).to_owned();
-        let ok = if let Some((_, field)) = FIELDS.iter().find(|(k, _)| *k == key) {
-            field(&mut s).parse(&v)
+        let ok = if let Some(ok) = s.set(&key, &v) {
+            ok
         } else if let Some(name) = key.strip_prefix("panel.")
             && let Some((_, on)) = app.panels.saved().into_iter().find(|(k, _)| *k == name)
         {
@@ -513,7 +342,7 @@ fn apply(app: &mut App, ctx: &egui::Context, entries: Vec<Entry>) -> Vec<String>
     for p in recent.into_iter().rev() {
         app.saved.remember(p);
     }
-    app.settings.restore(valid(s, &mut bad));
+    app.settings.restore(s.sanitized(&mut bad));
     bad
 }
 
@@ -528,35 +357,10 @@ fn width_once(app: &mut App) {
     }
 }
 
-/// Resets only the field `validate` names, until the settings pass; all of them if it names none.
-fn valid(mut s: GcmsSettings, bad: &mut Vec<String>) -> GcmsSettings {
-    // Each round resets one field, so this ends; the bound only guards against a field whose
-    // default does not pass.
-    for _ in 0..=FIELDS.len() {
-        let Err(e) = s.validate() else {
-            return s;
-        };
-        // The matched detector's errors name its parts, not its key.
-        let key = if e.starts_with("Peak ") {
-            "PEAK_DETECTOR"
-        } else {
-            e.split(':').next().unwrap_or_default()
-        };
-        bad.push(e.clone());
-        let Some((_, field)) = FIELDS.iter().find(|(k, _)| *k == key) else {
-            break;
-        };
-        let default = field(&mut GcmsSettings::default()).text();
-        field(&mut s).parse(&default);
-    }
-    GcmsSettings::default()
-}
-
 /// The lines saved under [`KEY`].
 pub fn text(app: &App) -> String {
-    let mut s = app.settings.applied.clone();
-    let mut lines: Vec<(String, String)> = (FIELDS.iter())
-        .map(|(k, field)| ((*k).to_owned(), field(&mut s).text()))
+    let mut lines: Vec<(String, String)> = (app.settings.applied.lines().into_iter())
+        .map(|(k, v)| (k.to_owned(), v))
         .collect();
     let mut panels = app.panels;
     lines.extend((panels.saved()).map(|(k, on)| (format!("panel.{k}"), on.to_string())));
@@ -813,6 +617,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use md_core::peaks::Detector;
+    use md_core::settings::GcmsSettings;
 
     fn apply_text(text: &str, entries: fn(&str) -> Vec<Entry>) -> (App, Vec<String>) {
         let mut app = App::default();
