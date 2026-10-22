@@ -627,7 +627,7 @@ impl App {
         let run = &self.runs[self.active];
         let src = Source {
             run,
-            ri: self.ri.for_run(run),
+            ri: self.ri.for_library(run),
             quant: self.settings.applied.quant(),
             search: self.settings.applied.search(),
         };
@@ -642,7 +642,7 @@ impl App {
         };
         let source = Source {
             run,
-            ri: self.ri.for_run(run),
+            ri: self.ri.for_library(run),
             quant: self.settings.applied.quant(),
             search: self.settings.applied.search(),
         };
@@ -659,7 +659,7 @@ impl App {
         let run = self.runs.get(self.active);
         let source = run.map(|run| Source {
             run,
-            ri: self.ri.for_run(run),
+            ri: self.ri.for_library(run),
             quant: self.settings.applied.quant(),
             search: self.settings.applied.search(),
         });

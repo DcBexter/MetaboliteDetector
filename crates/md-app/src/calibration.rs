@@ -14,11 +14,11 @@ use md_core::Chromatogram;
 use md_core::deconv::Component;
 use md_core::job::Cancel;
 use md_core::library::LibraryCompound;
-use md_core::ri::{RiCalibration, marker_peaks, match_mix, series_points};
+use md_core::ri::{RiCalibration, applicable, marker_peaks, match_mix, series_points};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_cancellable};
 
 use crate::identify::Library;
-use crate::{Job, Run};
+use crate::{Run, Slot};
 
 /// One line of the calibration table; lines that are not `used` (a mix substance not found, or switched
 /// off by hand) stay out of the calibration.
@@ -39,13 +39,6 @@ struct Saved {
     error: Option<Msg>,
 }
 
-type RowsJob = (Msg, Job<Result<Vec<Row>, Msg>>);
-
-/// A small Cancel button; the caller drops its job when this is true (dropping cancels it).
-fn cancel_clicked(ui: &mut egui::Ui) -> bool {
-    ui.small_button(t("Cancel", "Abbrechen")).clicked()
-}
-
 pub struct Calibration {
     /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
     pub cal: Option<Arc<RiCalibration>>,
@@ -64,7 +57,10 @@ pub struct Calibration {
     /// Calibration mix: names of library compounds with RI, and the text filtering the picker.
     mix: BTreeSet<String>,
     mix_filter: String,
-    mix_job: Option<RowsJob>,
+    mix_job: Slot<Result<Vec<Row>, Msg>>,
+    /// Where the results of `job` and `mix_job` come from, set when they start.
+    job_source: Msg,
+    mix_source: Msg,
     mz: f32,
     /// Alkane carbon numbers: C`first` … C`last` get RI 100 · n.
     first: u32,
@@ -79,8 +75,8 @@ pub struct Calibration {
     pub ref_cutoff: f64,
     /// Cutoff being edited; applied when the drag ends, so dragging does not search on every frame.
     cutoff_edit: f64,
-    /// Running alkane search and the source it will set.
-    job: Option<(Msg, Job<Result<RiCalibration, Msg>>)>,
+    /// Running alkane search.
+    job: Slot<Result<RiCalibration, Msg>>,
     error: Option<Msg>,
 }
 
@@ -97,7 +93,9 @@ impl Default for Calibration {
             saved: None,
             mix: BTreeSet::new(),
             mix_filter: String::new(),
-            mix_job: None,
+            mix_job: Slot::default(),
+            job_source: Msg::default(),
+            mix_source: Msg::default(),
             // Alkane fragment C4H9+.
             mz: 57.0,
             first: 10,
@@ -107,7 +105,7 @@ impl Default for Calibration {
             reference: None,
             ref_cutoff: 0.8,
             cutoff_edit: 0.8,
-            job: None,
+            job: Slot::default(),
             error: None,
         }
     }
@@ -120,16 +118,18 @@ impl Calibration {
         own.or(self.cal.as_ref())
     }
 
-    /// The run's calibration: shifted onto the reference when it was found there, else `base`.
-    /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
-    /// None in RT-only mode, where "RI" is a time.
+    /// The calibration whose RI the run shows, the one rule in `md_core::ri::applicable`: that of its
+    /// identification (shifted, else the one it was searched with), else `base`. In RT-only mode only an
+    /// identification's calibration applies; there it maps RT to the shifted time.
     pub fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
-        let ptr = |c: Option<&Arc<RiCalibration>>| c.map(Arc::as_ptr);
-        let base = self.base(run).filter(|_| !self.rt_only);
-        (run.ident.as_ref())
-            .filter(|i| run.ident_job.is_none() && ptr(i.0.1.as_ref()) == ptr(base))
-            .and_then(|i| i.2.as_ref())
-            .or(base.map(|c| &**c))
+        let ident = (run.ident.as_ref())
+            .map(|((_, used, _), _, shifted)| (used.as_deref(), shifted.as_ref()));
+        applicable(ident, self.base(run).map(|c| &**c), self.rt_only)
+    }
+
+    /// The RI to store or search with: `for_run`, but none in RT-only mode, where "RI" would be a time.
+    pub fn for_library<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
+        self.for_run(run).filter(|_| !self.rt_only)
     }
 
     /// What the batch and MID scans search with: the calibration, not while the library is rebuilt
@@ -173,13 +173,15 @@ impl Calibration {
             .collect();
         self.applied = self.rows.clone();
         (self.cal, self.source, self.error) = (Some(Arc::new(cal)), source, None);
-        (self.job, self.mix_job) = (None, None);
+        self.job.cancel();
+        self.mix_job.cancel();
     }
 
     /// Takes the table of a mix search; `cal` follows once the table is valid (see `apply_edits`).
     fn set_rows(&mut self, rows: Vec<Row>, source: Msg) {
         (self.rows, self.applied, self.source, self.error) = (rows, Vec::new(), source, None);
-        (self.job, self.mix_job) = (None, None);
+        self.job.cancel();
+        self.mix_job.cancel();
     }
 
     /// Builds `cal` from an edited table once no field is being dragged or typed in, so that a change
@@ -213,7 +215,9 @@ impl Calibration {
     }
 
     fn clear(&mut self) {
-        (self.cal, self.job, self.mix_job) = (None, None, None);
+        self.cal = None;
+        self.job.cancel();
+        self.mix_job.cancel();
         (self.rows, self.applied, self.rt_only, self.error) = (Vec::new(), Vec::new(), false, None);
         (self.own, self.saved) = (HashMap::new(), None);
     }
@@ -248,27 +252,17 @@ impl Calibration {
         active: usize,
         lib: Option<&Library>,
     ) {
-        if let Some((source, job)) = &self.job
-            && let Some(result) = job
-                .poll(|| t("RI calibration", "RI-Kalibrierung").into())
-                .map(|r| r.and_then(|x| x))
-        {
-            match result {
-                Ok(cal) => self.set(cal, source.clone()),
+        if let Some(result) = self.job.poll(ctx) {
+            match result.and_then(|x| x) {
+                Ok(cal) => self.set(cal, self.job_source.clone()),
                 Err(e) => self.error = Some(e),
             }
-            self.job = None;
         }
-        if let Some((source, job)) = &self.mix_job
-            && let Some(result) = job
-                .poll(|| t("calibration mix", "Kalibriermischung").into())
-                .map(|r| r.and_then(|x| x))
-        {
-            match result {
-                Ok(rows) => self.set_rows(rows, source.clone()),
+        if let Some(result) = self.mix_job.poll(ctx) {
+            match result.and_then(|x| x) {
+                Ok(rows) => self.set_rows(rows, self.mix_source.clone()),
                 Err(e) => self.error = Some(e),
             }
-            self.mix_job = None;
         }
         let mut open = self.open;
         egui::Window::new(t("RI calibration", "RI-Kalibrierung"))
@@ -381,7 +375,7 @@ impl Calibration {
             }
             if let Some(run) = run
                 && ui
-                    .add_enabled(self.job.is_none(), egui::Button::new(tf!("Find alkanes in {}", "Alkane in {} finden", run.name)))
+                    .add_enabled(!self.job.running(), egui::Button::new(tf!("Find alkanes in {}", "Alkane in {} finden", run.name)))
                     .on_hover_text(t(
                         "The highest peaks of the marker ion, in time order, become C first … C last",
                         "Die höchsten Peaks des Marker-Ions werden in zeitlicher Reihenfolge zu C erstes … C letztes",
@@ -391,14 +385,17 @@ impl Calibration {
                 let (data, mz, density, threshold) = (run.data.clone(), self.mz, self.density, self.threshold);
                 let ris: Vec<f64> = (self.first..=self.last).map(|n| 100.0 * n as f64).collect();
                 let source = Msg::from(format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last));
-                let job = Job::spawn(ui.ctx(), move |_, cancel| {
+                let what = Msg::new(|| t("RI calibration", "RI-Kalibrierung").into());
+                self.job.start(ui.ctx(), what, move |_, cancel| {
                     alkane_calibration(&data, mz, density, threshold, &ris, cancel)
                 });
-                self.job = Some((source, job));
+                self.job_source = source;
             }
-            if self.job.is_some() {
+            if self.job.running() {
                 ui.spinner();
-                self.job = self.job.take().filter(|_| !cancel_clicked(ui));
+                if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                    self.job.cancel();
+                }
             }
             if ui.button(t("Load .calib…", ".calib laden…")).clicked()
                 && let Some(path) = calib_dialog().pick_file()
@@ -478,7 +475,7 @@ impl Calibration {
                 return;
             };
             let button = egui::Button::new(tf!("Find the mix in {}", "Mischung in {} finden", run.name));
-            let searching = self.mix_job.is_some();
+            let searching = self.mix_job.running();
             if ui
                 .add_enabled(!self.mix.is_empty() && !searching, button)
                 .on_hover_text(t(
@@ -504,17 +501,20 @@ impl Calibration {
                     run.name,
                     self.mix.len()
                 );
-                let job = Job::spawn(ui.ctx(), move |_, cancel| {
+                let what = Msg::new(|| t("calibration mix", "Kalibriermischung").into());
+                self.mix_job.start(ui.ctx(), what, move |_, cancel| {
                     find_mix(mix, &comps, &data.scan_times_s, &s, cancel)
                         .ok_or_else(|| msg!("Cancelled.", "Abgebrochen."))
                 });
-                self.mix_job = Some((source, job));
+                self.mix_source = source;
             }
             if searching {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(t("Searching the mix…", "Mischung wird gesucht…"));
-                    self.mix_job = self.mix_job.take().filter(|_| !cancel_clicked(ui));
+                    if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
+                        self.mix_job.cancel();
+                    }
                 });
             }
         });

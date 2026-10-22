@@ -73,7 +73,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/plot_export.rs    save a plot as PNG, SVG or PDF, or copy it; src/vector.rs writes the SVG/PDF from the frame's shapes
   src/tof_calibration.rs TOF calibration window (FastFlight m/z, saves .mzcalib)
   src/loading.rs        opening files, load polling, SIC jobs
-  src/jobs.rs           `Job<T>`: a worker thread with `Progress`, `Cancel` and panic report; dropping it cancels
+  src/jobs.rs           `Job<T>`: a worker thread with `Progress`, `Cancel` and panic report; dropping it cancels. `Slot<T>` holds one job of a window (start, poll with repaint, cancel); new windows take a `Slot`
   src/calibration.rs    RI calibration window (alkane search, .calib load/save)
   src/isotopes.rs       natural isotope calculator window
   src/mid.rs            MID window: labelled/unlabelled runs, correction, result tree, bar plots, exports
@@ -331,6 +331,13 @@ status bar; the window lists the shift per run, or that the reference was not fo
 unshifted calibration). Reference and cutoff are part of the `run.ident` key. Tests: a synthetic run 10 s
 late (`search.rs`) and the example runs made 4 s late, where Glycine 3TMS lands on its `lib_aa` RI again and
 the shift grows by exactly 4 s (`tests/example_data.rs`).
+
+One precedence rule for the RI a run shows (`md_core::ri::applicable`, called by `Calibration::for_run`; the
+component list, the calibration window and identify labels read its result): the identification's calibration
+(shifted, else the one it was searched with) applies, also while a new identification runs; without one, the
+base applies. RT-only: without an identification nothing; with one, its calibration maps RT to the shifted
+time. Table-driven test in `ri.rs`. Behaviour change (#407): in RT-only mode the detail panel and the run list of identified runs now show the
+time as RI, where before they showed nothing; the component list is unchanged.
 
 Conscious deviations:
 

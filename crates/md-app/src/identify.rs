@@ -266,15 +266,11 @@ impl App {
         // A new RI calibration of that run makes the hits stale.
         if let Some((path, k, _, ri, _)) = &self.nist.hits
             && let Some(run) = self.runs.iter().find(|r| &r.path == path)
-            && (run.components.get(*k)).is_some_and(|c| self.component_ri(run, c) != *ri)
+            && run.components.get(*k).is_some()
+            && crate::results::component_ri(run, *k, self.ri.for_library(run)) != *ri
         {
             self.nist.hits = None;
         }
-    }
-
-    /// RI of the component's apex once the run is calibrated.
-    fn component_ri(&self, run: &Run, c: &md_core::deconv::Component) -> Option<f64> {
-        (self.ri.for_run(run)).map(|cal| cal.ri(run.data.scan_times_s[c.apex_scan as usize]))
     }
 
     /// Old `nistSearch`: the selected component of the active run against the NIST library, with RI
@@ -287,7 +283,7 @@ impl App {
             return;
         };
         let c = &run.components[k];
-        let ri = self.component_ri(run, c);
+        let ri = crate::results::component_ri(run, k, self.ri.for_library(run));
         let (path, spectrum, lib) = (run.path.clone(), c.spectrum.clone(), lib.clone());
         self.nist.search = Some(Job::spawn(ctx, move |_, _| {
             let hits = library_hits(&spectrum, ri, &lib.prepared, &lib.settings);
@@ -568,13 +564,17 @@ mod tests {
         app.runs[0].components[0].spectrum.pop();
         assert!(app.nist.hits_for(&app.runs[0], 0).is_none());
 
-        // A new RI calibration drops hits searched without it.
+        // A new calibration alone keeps the hits: the list shows the stored identification's RI
+        // until a new identification ends. Once it does, hits searched with the old RI are dropped.
         app.runs[0].components[0]
             .spectrum
             .clone_from(&app.nist.hits.as_ref().unwrap().2);
         app.update_nist(&ctx);
         assert!(app.nist.hits_for(&app.runs[0], 0).is_some());
         app.ri.cal = Some(Arc::new(RiCalibration::identity()));
+        app.update_nist(&ctx);
+        assert!(app.nist.hits.is_some());
+        app.runs[0].ident.as_mut().unwrap().0.1 = Some(Arc::new(RiCalibration::identity()));
         app.update_nist(&ctx);
         assert!(app.nist.hits.is_none());
 
