@@ -57,6 +57,16 @@ fn main() {
     let t = Instant::now();
     let sic = c.sic(73.0, 0.5);
     println!("SIC m/z 73: {:?}", t.elapsed());
+    // The first call also pays for touching the 137 MiB; the median of repeats shows the per-call cost.
+    let mut repeats: Vec<_> = (0..15)
+        .map(|_| {
+            let t = Instant::now();
+            std::hint::black_box(c.sic(73.0, 0.5));
+            t.elapsed()
+        })
+        .collect();
+    repeats.sort();
+    println!("SIC m/z 73, median of 15: {:?}", repeats[7]);
 
     let t = Instant::now();
     let d = decimate(
