@@ -15,6 +15,7 @@ pub mod diskscan;
 pub mod fastflight;
 pub mod isotope;
 pub mod job;
+pub(crate) mod legacy_numeric;
 pub mod library;
 pub mod library_add;
 pub mod mid;
