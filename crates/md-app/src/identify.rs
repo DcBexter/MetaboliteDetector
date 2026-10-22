@@ -627,12 +627,18 @@ mod tests {
         app.runs.push(run);
         app.library = Some(Arc::new(lib));
         let ctx = egui::Context::default();
+        // Wait for both jobs to finish, with a deadline instead of a poll count.
         let settle = |app: &mut App| {
-            for _ in 0..10_000 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
                 app.update_identification(&ctx);
                 if app.library_job.is_none() && app.runs[0].ident_job.is_none() {
                     break;
                 }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "identification jobs did not finish"
+                );
                 std::thread::yield_now();
             }
         };
