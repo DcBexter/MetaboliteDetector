@@ -227,7 +227,7 @@ fn trace_plot(
                 .map(|l| l.1.chars().count() as f32 * LABEL_CHAR_PX + LABEL_GAP_PX)
                 .collect();
             let scores: Vec<f64> = labels.iter().map(|l| l.3).collect();
-            let keep = identify::visible_labels(&starts, &widths, &scores);
+            let keep = md_core::view::visible_labels(&starts, &widths, &scores);
             for ((at, name, color, _), _) in labels.iter().zip(&keep).filter(|(_, k)| **k) {
                 let text = egui::RichText::new(name).color(*color);
                 let at = [view.time(at[0]), at[1]];
@@ -644,7 +644,7 @@ impl App {
             }
             if look.peak_labels {
                 let b = p.plot_bounds();
-                for (m, v) in highest_in_view(&labelled, b.min()[0], b.max()[0]) {
+                for (m, v) in md_core::view::highest_in_view(&labelled, b.min()[0], b.max()[0]) {
                     // No name: a named item would get a legend row. The f32 masses print without widening noise.
                     let text = Text::new("", PlotPoint::new(m, v), format!("{}", m as f32))
                         .anchor(egui::Align2::CENTER_BOTTOM);
@@ -667,17 +667,6 @@ impl App {
         // Not the plot response: that is only the inner area, the PNG needs axes and titles too.
         self.export.spectrum = Area::since(ui, top);
     }
-}
-
-/// Old `SpectrumPlot::plotPeakLabels`: the `LABELLED_PEAKS` highest peaks with m/z in `lo..=hi`,
-/// as (m/z, intensity).
-fn highest_in_view(peaks: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
-    let mut shown: Vec<(f64, f64)> = (peaks.iter().copied())
-        .filter(|(m, v)| (lo..=hi).contains(m) && *v > 0.0)
-        .collect();
-    shown.sort_by(|a, b| b.1.total_cmp(&a.1));
-    shown.truncate(crate::settings::LABELLED_PEAKS);
-    shown
 }
 
 #[cfg(test)]
@@ -788,21 +777,6 @@ mod tests {
         time(false);
         let after = time(false);
         println!("15 runs x 500k scans: per frame before {before:?}, after {after:?}");
-    }
-
-    #[test]
-    fn labels_go_to_the_highest_peaks_in_view() {
-        let peaks = [(73.0, 50.0), (147.0, 90.0), (200.0, 10.0), (300.0, 99.0)];
-        assert_eq!(
-            super::highest_in_view(&peaks, 0.0, 250.0),
-            [(147.0, 90.0), (73.0, 50.0), (200.0, 10.0)]
-        );
-        let many: Vec<(f64, f64)> = (1..=8).map(|i| (f64::from(i), f64::from(i))).collect();
-        let top = super::highest_in_view(&many, 0.0, 100.0);
-        assert_eq!(
-            top.iter().map(|p| p.0).collect::<Vec<_>>(),
-            [8.0, 7.0, 6.0, 5.0, 4.0]
-        );
     }
 
     #[test]

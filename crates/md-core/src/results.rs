@@ -144,10 +144,162 @@ pub fn find_substance(
     found
 }
 
+/// A column of the component list, in the order of the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Col {
+    Name,
+    Rt,
+    Ri,
+    Area,
+    Score,
+    Spectrum,
+    RiScore,
+    Sn,
+    Ions,
+    QuantIons,
+}
+
+/// Without a library there are no scores and no quant ions.
+pub const PLAIN: [Col; 6] = [Col::Name, Col::Rt, Col::Ri, Col::Area, Col::Sn, Col::Ions];
+pub const WITH_LIBRARY: [Col; 10] = [
+    Col::Name,
+    Col::Rt,
+    Col::Ri,
+    Col::Area,
+    Col::Score,
+    Col::Spectrum,
+    Col::RiScore,
+    Col::Sn,
+    Col::Ions,
+    Col::QuantIons,
+];
+
+/// A row of the component list: the result row and what the list shows beyond the CSV.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListRow {
+    pub res: ResultRow,
+    /// Also without a match: then the three largest peaks (see [`area`]).
+    pub area: f64,
+    /// Mean S/N of the ion peaks; `None` for a component without peaks (saved by the old program).
+    pub sn: Option<f64>,
+    pub ions: usize,
+}
+
+/// Click order of a column header: ascending, descending, off.
+pub fn next_sort(sort: Option<(Col, bool)>, col: Col) -> Option<(Col, bool)> {
+    match sort {
+        Some((s, false)) if s == col => Some((col, true)),
+        Some((s, true)) if s == col => None,
+        _ => Some((col, false)),
+    }
+}
+
+/// The rows the list shows, in their order: those whose shown name (`shown`, lower-cased) contains
+/// `filter` (case-insensitive; empty keeps all), sorted by `sort` when given. The shown name is
+/// the one on screen, so the name sort and the filter follow the language.
+pub fn order(
+    rows: &[ListRow],
+    filter: &str,
+    shown: impl Fn(&ResultRow) -> String,
+    sort: Option<(Col, bool)>,
+) -> Vec<usize> {
+    let want = filter.to_lowercase();
+    let names: Vec<String> = rows.iter().map(|r| shown(&r.res).to_lowercase()).collect();
+    let mut order: Vec<usize> = (0..rows.len())
+        .filter(|i| want.is_empty() || names[*i].contains(&want))
+        .collect();
+    if let Some((col, desc)) = sort {
+        order.sort_by(|a, b| {
+            let o = compare(&rows[*a], &rows[*b], col, &names[*a], &names[*b]);
+            if desc { o.reverse() } else { o }
+        });
+    }
+    order
+}
+
+/// Missing values sort first. `na`/`nb` are the lower-cased shown names of `a` and `b`.
+fn compare(a: &ListRow, b: &ListRow, col: Col, na: &str, nb: &str) -> std::cmp::Ordering {
+    use crate::view::missing_first as num;
+    let (x, y) = (&a.res, &b.res);
+    match col {
+        Col::Name => na.cmp(nb),
+        Col::Rt => x.rt_s.total_cmp(&y.rt_s),
+        Col::Ri => num(x.ri).total_cmp(&num(y.ri)),
+        Col::Area => a.area.total_cmp(&b.area),
+        Col::Score => num(x.overall).total_cmp(&num(y.overall)),
+        Col::Spectrum => num(x.spec_score).total_cmp(&num(y.spec_score)),
+        Col::RiScore => num(x.ri_score).total_cmp(&num(y.ri_score)),
+        Col::Sn => num(a.sn).total_cmp(&num(b.sn)),
+        Col::Ions => a.ions.cmp(&b.ions),
+        Col::QuantIons => x.quant_ions.len().cmp(&y.quant_ions.len()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::deconv::FittedPeak;
+
+    fn row(name: &str, rt_s: f64, ri: Option<f64>, area: f64) -> ListRow {
+        ListRow {
+            res: ResultRow {
+                component: 0,
+                compound: Some(0),
+                name: name.into(),
+                rt_s,
+                ri,
+                area: Some(area),
+                overall: Some(0.5),
+                spec_score: None,
+                ri_score: None,
+                quant_ions: Vec::new(),
+            },
+            area,
+            sn: None,
+            ions: 1,
+        }
+    }
+
+    #[test]
+    fn a_header_click_cycles_ascending_descending_off() {
+        let up = next_sort(None, Col::Rt);
+        assert_eq!(up, Some((Col::Rt, false)));
+        let down = next_sort(up, Col::Rt);
+        assert_eq!(down, Some((Col::Rt, true)));
+        assert_eq!(next_sort(down, Col::Rt), None);
+        assert_eq!(next_sort(up, Col::Ri), Some((Col::Ri, false)));
+    }
+
+    #[test]
+    fn the_list_filters_by_shown_name_and_sorts_missing_values_first() {
+        let rows = vec![
+            row("Glycine", 120.0, None, 3.0),
+            row("Alanine", 60.0, Some(1500.0), 15.0),
+            row("No match: 3", 90.0, Some(1400.0), 1.0),
+        ];
+        let shown = |r: &ResultRow| r.name.clone();
+        assert_eq!(order(&rows, "", shown, None), vec![0, 1, 2]);
+        assert_eq!(order(&rows, "ALA", shown, None), vec![1]);
+        assert_eq!(
+            order(&rows, "", shown, Some((Col::Name, false))),
+            vec![1, 0, 2]
+        );
+        assert_eq!(
+            order(&rows, "", shown, Some((Col::Ri, false))),
+            vec![0, 2, 1]
+        );
+        assert_eq!(
+            order(&rows, "", shown, Some((Col::Area, true))),
+            vec![1, 0, 2]
+        );
+        // The translated name is what the filter and the name sort see.
+        let german = |r: &ResultRow| r.name.replace("No match", "Kein Treffer");
+        assert_eq!(order(&rows, "treffer", german, None), vec![2]);
+        assert_eq!(
+            order(&rows, "", german, Some((Col::Name, false))),
+            vec![1, 0, 2]
+        );
+    }
     use crate::search::LibraryHit;
 
     fn comp(apex: u32, peaks: &[(usize, f64)]) -> Component {
