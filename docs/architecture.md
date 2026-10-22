@@ -886,7 +886,7 @@ titles, m/z labels on the 5 highest peaks in view), which apply at once.
 In the app (`crates/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
 Applying re-runs `IonTraces` → peaks → deconvolution for every open run on worker threads (stale jobs are
 dropped), clears the selected component and library hits, and re-prepares the library when `LS_*` changed.
-New runs open with the applied settings.
+New runs open with the applied settings. A run's analysis is keyed by `settings::Key { peaks, deconv, fwhm }`.
 
 ## Saved state
 

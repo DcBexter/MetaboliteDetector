@@ -21,7 +21,12 @@ use md_core::view::LABELLED_PEAKS;
 use crate::{Job, Run};
 
 /// What the analysis of a run depends on: peak detection, deconvolution and the centroid `fwhm`.
-pub type Key = (PeakSettings, DeconvSettings, f64);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Key {
+    pub peaks: PeakSettings,
+    pub deconv: DeconvSettings,
+    pub fwhm: f64,
+}
 
 /// The old Appearance options (QSettings `GUI/axes_label` and `GUI/peak_label`, both on by default).
 /// They only change the drawing, so they apply at once.
@@ -94,8 +99,15 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
-    let mut a = analyze_run(data, &key.0, key.2, &key.1, PeakPass::Reordered, cancel)
-        .map_err(|e| e.to_string())?;
+    let mut a = analyze_run(
+        data,
+        &key.peaks,
+        key.fwhm,
+        &key.deconv,
+        PeakPass::Reordered,
+        cancel,
+    )
+    .map_err(|e| e.to_string())?;
     a.components.sort_by_key(|k| k.apex_scan);
     Ok((a.components, a.masses, a.peaks))
 }
@@ -114,7 +126,11 @@ impl Settings {
 
     pub fn key(&self) -> Key {
         let a = self.applied.analysis();
-        (a.peaks, a.deconv, a.fwhm)
+        Key {
+            peaks: a.peaks,
+            deconv: a.deconv,
+            fwhm: a.fwhm,
+        }
     }
 
     /// Collects finished analyses and starts one for every run whose components are stale.
