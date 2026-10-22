@@ -33,7 +33,7 @@ impl Default for AnalysisSettings {
             deconv: DeconvSettings::default(),
             quant: QuantSettings::default(),
             search: SearchSettings::default(),
-            fwhm: 0.5,
+            fwhm: GcmsSettings::default().sf_fwhm,
         }
     }
 }
