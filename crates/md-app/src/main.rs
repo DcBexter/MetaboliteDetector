@@ -207,7 +207,7 @@ struct Run {
     /// First derivative of `tic` and `sic`, filled by the first frame that draws it; `sic` is cleared with a new SIC. Freed when the derivative view is off.
     d_tic: OnceCell<Vec<f64>>,
     d_sic: OnceCell<Vec<f64>>,
-    /// Deconvoluted substances with the applied settings, ordered by retention time.
+    /// Deconvoluted substances with the applied settings, in deconvolution order (the list sorts them by apex).
     components: Vec<Component>,
     /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
     peak_masses: Vec<u32>,

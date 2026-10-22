@@ -76,7 +76,7 @@ impl App {
         }
     }
 
-    /// ↑/↓ with the component list hidden: previous or next component by retention time. With the
+    /// ↑/↓ with the component list hidden: previous or next component by apex. With the
     /// list shown it steps in the order of the list (filter, sort) itself.
     fn step_component(&mut self, ctx: &egui::Context) {
         if self.panels.components || ctx.text_edit_focused() {
@@ -88,13 +88,15 @@ impl App {
         let step = ctx.input(|i| {
             i32::from(i.key_pressed(Key::ArrowDown)) - i32::from(i.key_pressed(Key::ArrowUp))
         });
+        if step == 0 {
+            return;
+        }
         // Along the apex order, as the list shows it; the list itself steps when it is shown.
         let order = md_core::results::apex_order(&run.components);
         let at = run
             .component
             .and_then(|k| order.iter().position(|&x| x == k));
-        let to = (step != 0).then(|| stepped(order.len(), at, step).map(|p| order[p]));
-        if let Some(k) = to.flatten() {
+        if let Some(k) = stepped(order.len(), at, step).map(|p| order[p]) {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
         }
