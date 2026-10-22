@@ -734,6 +734,8 @@ pub(crate) mod tests {
             sic: Vec::new(),
             sic_for: None,
             sic_job: None,
+            d_tic: Default::default(),
+            d_sic: Default::default(),
             components: vec![comp(1), comp(2)],
             peak_masses: vec![73],
             // The peak both components point to.

@@ -2,6 +2,7 @@
 // Release builds on Windows open no console window next to the app (shortcuts, double-click).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::cell::OnceCell;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -203,6 +204,9 @@ struct Run {
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
     sic_job: Option<(SicKey, Job<Vec<f64>>)>,
+    /// First derivative of `tic` and `sic`, filled by the first frame that draws it; `sic` is cleared with a new SIC.
+    d_tic: OnceCell<Vec<f64>>,
+    d_sic: OnceCell<Vec<f64>>,
     /// Deconvoluted substances with the applied settings, ordered by retention time.
     components: Vec<Component>,
     /// Ion mass of each peak the components were fitted from (`FittedPeak::peak`).
