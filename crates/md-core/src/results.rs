@@ -30,7 +30,7 @@ pub struct ResultRow {
     pub quant_ions: Vec<f32>,
 }
 
-/// Rows of all components in component order (ascending RT). `peak_masses[p]` is the ion mass of
+/// Rows of all components in component order. `peak_masses[p]` is the ion mass of
 /// peak `p` of the peak list the components were deconvoluted from; `ris` as in `map_compounds_to_library`.
 /// An assigned hit below `cutoff` (`LS_CUTOFF`) is shown as no match, like the old `DataTableModel`.
 pub fn result_rows(

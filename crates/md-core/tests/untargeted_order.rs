@@ -9,11 +9,10 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use md_core::Chromatogram;
+use md_core::analysis::{PeakPass, analyze_run};
 use md_core::andi;
 use md_core::batch::{ScanSettings, Study, run_study};
-use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::job::{Cancel, Progress};
-use md_core::peaks::{IonTraces, PeakSettings};
 use md_core::search::PreparedLibrary;
 
 /// Seeds whose runs have an apex inversion in the deconvolution order (see the module doc).
@@ -73,17 +72,21 @@ fn synthetic_run(seed0: u32) -> Chromatogram {
     }
 }
 
-/// Whether the deconvolution order of `c` (default settings, one peak per component allowed) is not
-/// the apex order.
+/// Whether `analyze_run` (the path the batch takes, one peak per component allowed) returns the
+/// components of `c` in an order that is not the apex order. A re-sort in `analyze_run` makes this false.
 fn has_inversion(c: &Chromatogram) -> bool {
-    let d = DeconvSettings {
-        min_peak_number: 1,
-        ..Default::default()
-    };
-    let mut traces = IonTraces::new(c, 0.5).unwrap();
-    let peaks = traces.detect_all_peaks(&PeakSettings::default());
-    let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &d);
-    let apex: Vec<u32> = comps.iter().map(|k| k.apex_scan).collect();
+    let mut s = ScanSettings::default();
+    s.analysis.deconv.min_peak_number = 1;
+    let a = analyze_run(
+        c,
+        &s.analysis.peaks,
+        s.analysis.fwhm,
+        &s.analysis.deconv,
+        PeakPass::Reordered,
+        &Cancel::default(),
+    )
+    .unwrap();
+    let apex: Vec<u32> = a.components.iter().map(|k| k.apex_scan).collect();
     apex.windows(2).any(|w| w[0] > w[1])
 }
 
@@ -133,15 +136,5 @@ fn untargeted_groups_match_the_fixture_from_before_the_apex_sort() {
     // The runs must reach the study in deconvolution order that differs from the apex order.
     assert!(SEEDS.iter().all(|&s| has_inversion(&synthetic_run(s))));
     let text = groups_text();
-    // The study keeps that order: some run lists a later RT before an earlier one.
-    let descends = text.split("run ").skip(1).any(|run| {
-        let rts: Vec<f64> = run
-            .lines()
-            .skip(1)
-            .filter_map(|l| l.split('\t').next()?.parse().ok())
-            .collect();
-        rts.windows(2).any(|w| w[0] > w[1])
-    });
-    assert!(descends, "{text}");
     assert_eq!(text, include_str!("fixtures/untargeted_groups.tsv"));
 }
