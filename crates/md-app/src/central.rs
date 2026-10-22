@@ -676,6 +676,7 @@ fn highest_in_view(peaks: &[(f64, f64)], lo: f64, hi: f64) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use crate::App;
+    use eframe::egui;
 
     fn run_of(n: usize) -> crate::Run {
         let mut run = crate::results::tests::run();
@@ -707,6 +708,36 @@ mod tests {
         run.tic = vec![1.0; 10_000];
         run.d_tic.take();
         assert_ne!(pts(&run), direct);
+    }
+
+    #[test]
+    fn a_new_sic_clears_its_cached_derivative() {
+        let mut app = App::default();
+        app.runs.push(crate::results::tests::run());
+        let ctx = egui::Context::default();
+        let mut settle = |app: &mut App| {
+            let t = std::time::Instant::now();
+            loop {
+                app.update_sics(&ctx);
+                if app.runs[0].sic_job.is_none() {
+                    break;
+                }
+                assert!(t.elapsed().as_secs() < 10, "SIC job never finished");
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut app);
+        let view = crate::view::View {
+            derivative: true,
+            ..Default::default()
+        };
+        let range = (f64::NEG_INFINITY, f64::INFINITY);
+        let run = &app.runs[0];
+        super::run_points(run, (&run.sic, &run.d_sic), &view, range, 800);
+        assert!(run.d_sic.get().is_some(), "the first frame fills the cache");
+        app.mz += 1.0;
+        settle(&mut app);
+        assert!(app.runs[0].d_sic.get().is_none());
     }
 
     /// `cargo test --release -p metabolite-detector frame_time -- --ignored --nocapture`
