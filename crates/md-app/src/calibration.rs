@@ -39,6 +39,11 @@ struct Saved {
 
 type RowsJob = (Msg, Job<Result<Vec<Row>, Msg>>);
 
+/// A small Cancel button; the caller drops its job when this is true (dropping cancels it).
+fn cancel_clicked(ui: &mut egui::Ui) -> bool {
+    ui.small_button(t("Cancel", "Abbrechen")).clicked()
+}
+
 pub struct Calibration {
     /// Shared with the library search jobs; a new `Arc` on every change re-identifies all runs.
     pub cal: Option<Arc<RiCalibration>>,
@@ -395,9 +400,7 @@ impl Calibration {
             }
             if self.job.is_some() {
                 ui.spinner();
-                if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
-                    self.job = None;
-                }
+                self.job = self.job.take().filter(|_| !cancel_clicked(ui));
             }
             if ui.button(t("Load .calib…", ".calib laden…")).clicked()
                 && let Some(path) = calib_dialog().pick_file()
@@ -515,9 +518,7 @@ impl Calibration {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(t("Searching the mix…", "Mischung wird gesucht…"));
-                    if ui.small_button(t("Cancel", "Abbrechen")).clicked() {
-                        self.mix_job = None;
-                    }
+                    self.mix_job = self.mix_job.take().filter(|_| !cancel_clicked(ui));
                 });
             }
         });
