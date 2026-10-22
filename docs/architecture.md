@@ -123,6 +123,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
 5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Peak detection
    and deconvolution share one ion-major index per run (`IonTraces`) instead of rescanning spectra per ion.
+   Per-point callbacks in these loops are generic (`impl FnMut`), not `&mut dyn FnMut`: the indirect call per point cost about 2 ms per index build (#396).
 6. **Measure.** `examples/perf.rs` reports timings; each new algorithm adds a case, and PRs that
    touch hot paths report before/after numbers against the table below.
 7. Memory-mapped or streamed access (like the old disk scan) is added when real runs exceed RAM;
@@ -152,8 +153,15 @@ Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 alte
 SIC was the regression: `sic_cancellable` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
 1.4 ms per call. The fix keeps the per-scan `Cancel` check, writes into a preallocated `Vec` and returns `None` at the end;
 `map_compounds_cancellable` now collects its hit lists directly instead of collecting `Option` values, which takes about 8 % off the batch run.
-Still open, not fixed: the batch run is about 10 % and ion traces about 14 % slower than `f16f0a7`. Bisecting the batch run
-puts most of the gap in `4f136f9` (#377, job plumbing in `analyze_run` and `scan_and_save`); its cancel checks are not the cause.
+Ion traces (#396): the index build called its per-point callback through `dyn FnMut`, which the dense store could not
+inline (#369). The callback is generic now. Median of 7 alternating runs in one session, 36 000 × 500: ion traces 23.0 ms
+before and 20.9 ms after (`f16f0a7`: 20.7 ms); the full batch run (`scan_chromatogram`, median of 5) 102.8 ms before and
+99.3 ms after (`f16f0a7`: 95.1 ms). `examples/perf.rs`, median of 7: ion traces 22.0 ms before and 20.3 ms after
+(`f16f0a7`: 23.9 ms); one batch run 315 ms before and 314 ms after (`f16f0a7`: 303 ms; single runs vary by about ±10 %).
+The step `4f136f9` (#377) does not show in this session: 98.6 ms at `d993ca5` against 97.4 ms there (median of 7).
+Of the batch gap (4.2 ms, about 4 %), the assignment heap of #370 in `map_compounds_cancellable` is a partial cause, about 1.9 ms:
+the search over the 12 000 components of the run takes 21.2 ms here against 19.3 ms in `f16f0a7` (3 runs). The heap stays on purpose: the pair
+list it replaced needed 16 bytes per hit (about 144 MB at cutoff 0). The rest of the gap, about 2 ms, is not explained.
 Tracked in #396.
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
