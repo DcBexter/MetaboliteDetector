@@ -164,9 +164,9 @@ impl Results {
             ui.label(&*self.note);
         }
 
-        let order = order(&rows, &want, shown_name, self.sort);
+        let shown = order(&rows, &want, shown_name, self.sort);
         ui.horizontal_wrapped(|ui| {
-            let (s, n) = (order.len(), rows.len());
+            let (s, n) = (shown.len(), rows.len());
             ui.label(tf!("{s} of {n} components", "{s} von {n} Komponenten"));
             if lib.is_none() {
                 ui.weak(t(
@@ -175,7 +175,7 @@ impl Results {
                 ));
             }
         });
-        if order.is_empty() && !rows.is_empty() {
+        if shown.is_empty() && !rows.is_empty() {
             ui.weak(t(
                 "No component matches. Clear the search to see all.",
                 "Keine Komponente passt. Die Suche leeren, um alle zu sehen.",
@@ -187,13 +187,13 @@ impl Results {
                 - i32::from(i.key_pressed(egui::Key::ArrowUp))
         });
         let at =
-            (run.component).and_then(|k| order.iter().position(|i| rows[*i].res.component == k));
+            (run.component).and_then(|k| shown.iter().position(|i| rows[*i].res.component == k));
         let to = (step != 0 && !ui.ctx().text_edit_focused())
-            .then(|| stepped(order.len(), at, step))
+            .then(|| stepped(shown.len(), at, step))
             .flatten();
-        let clicked = table(ui, &mut self.sort, &rows, &order, run, lib.as_deref(), to)
+        let clicked = table(ui, &mut self.sort, &rows, &shown, run, lib.as_deref(), to)
             .or(selected)
-            .or(to.map(|p| rows[order[p]].res.component));
+            .or(to.map(|p| rows[shown[p]].res.component));
         if let Some(k) = clicked {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
