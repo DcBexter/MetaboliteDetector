@@ -1076,4 +1076,21 @@ mod tests {
         assert_eq!(s.applied().quant_ion_number, 4);
         assert_eq!(s.analysis(), &s.applied().analysis());
     }
+
+    /// The Apply button goes through `set_applied`, so the stored analysis follows it (#427).
+    #[test]
+    fn apply_updates_the_stored_analysis() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut Settings| s.buttons(ui, None),
+            Settings::default(),
+        );
+        h.state_mut().draft.quant_ion_number = 4;
+        h.run();
+        h.get_by_label("Apply").click();
+        h.run();
+        let s = h.state();
+        assert_eq!(s.applied().quant_ion_number, 4);
+        assert_eq!(s.analysis(), &s.applied().analysis());
+        assert_eq!(s.analysis().quant.ion_number, 4);
+    }
 }

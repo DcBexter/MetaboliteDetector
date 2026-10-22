@@ -85,7 +85,7 @@ pub struct MidWindow {
     /// Tracer `abundance` was last filled in for.
     abundance_for: String,
     rescan: bool,
-    /// The applied settings (Analysis → Settings), copied every frame by `use_settings`.
+    /// The applied settings (Analysis → Settings), copied by `use_settings` when it changes.
     applied: GcmsSettings,
     /// `applied.analysis()`, copied with `applied`; the rows read it instead of deriving it.
     analysis: AnalysisSettings,
@@ -166,10 +166,12 @@ impl MidWindow {
         }
     }
 
-    /// Takes the applied settings and their analysis, every frame.
+    /// Takes the applied settings and their analysis; copies only when they changed.
     pub fn use_settings(&mut self, settings: &Settings) {
-        self.applied.clone_from(settings.applied());
-        self.analysis.clone_from(settings.analysis());
+        if self.applied != *settings.applied() {
+            self.applied.clone_from(settings.applied());
+            self.analysis.clone_from(settings.analysis());
+        }
     }
 
     fn start(
