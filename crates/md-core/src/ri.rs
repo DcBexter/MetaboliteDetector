@@ -256,6 +256,23 @@ pub fn saved_calibration(run: &Path) -> Result<Option<RiCalibration>, CalibError
     }
 }
 
+/// The calibration whose RI a run shows: that of its identification (shifted, else the one it was
+/// searched with), else `base`. `ident` is `(used, shifted)` of the stored identification. A new
+/// identification running does not change this: the stored one still applies. RT-only: no calibration.
+pub fn applicable<'a>(
+    ident: Option<(Option<&'a RiCalibration>, Option<&'a RiCalibration>)>,
+    base: Option<&'a RiCalibration>,
+    rt_only: bool,
+) -> Option<&'a RiCalibration> {
+    if rt_only {
+        return None;
+    }
+    match ident {
+        Some((used, shifted)) => shifted.or(used),
+        None => base,
+    }
+}
+
 /// Piecewise linear `y(x)` through `points` (ascending in x after `xy`), extrapolated with the first
 /// or last segment. The old code dereferenced `end()` above the last point (§6.2); here that case
 /// uses the last segment, as the old code does for every other point above the range.
@@ -581,6 +598,46 @@ mod tests {
         // Identity calibration: RI is the time in s.
         let id = RiCalibration::identity();
         assert_eq!((id.ri(123.4), id.rt(55.0)), (123.4, 55.0));
+    }
+
+    #[test]
+    fn applicable_precedence_table() {
+        let (base, used, shifted) = (
+            RiCalibration::identity(),
+            alkanes(),
+            alkanes().shifted_to(160.0, 1050.0),
+        );
+        let s = Some(&shifted);
+        let u = Some(&used);
+        let b = Some(&base);
+        // (identification, base, rt_only) -> the calibration that applies.
+        let cases = [
+            // No identification: the base, none in RT-only.
+            (None, None, false, None),
+            (None, b, false, b),
+            (None, b, true, None),
+            // Identification without calibration: nothing, even with a base.
+            (Some((None, None)), None, false, None),
+            (Some((None, None)), b, false, None),
+            // Identification searched with a calibration, not shifted: that one, base or not.
+            (Some((u, None)), None, false, u),
+            (Some((u, None)), b, false, u),
+            // Shifted: the shifted one wins.
+            (Some((u, s)), b, false, s),
+            (Some((None, s)), b, false, s),
+            // RT-only wins over everything.
+            (Some((u, s)), b, true, None),
+            (Some((u, None)), b, true, None),
+        ];
+        for (ident, base, rt_only, want) in cases {
+            assert_eq!(
+                applicable(ident, base, rt_only),
+                want,
+                "ident {:?}, base {:?}, rt_only {rt_only}",
+                ident.map(|(u, s)| (u.is_some(), s.is_some())),
+                base.is_some(),
+            );
+        }
     }
 
     #[test]

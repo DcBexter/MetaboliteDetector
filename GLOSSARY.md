@@ -16,7 +16,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Analyze run** | Die Kette Ion traces, Peaks, Deconvolution für einen Run hinter einer Interface. | `md_core::analysis::analyze_run`; Peak-Stufe allein: `find_run_peaks` |
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
 | **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins (Heap über die besten Treffer je Component, keine globale Paarliste); abbrechbar je Component. | `md_core::search` |
-| **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |
+| **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. Welche Kalibrierung ein Run zeigt, entscheidet eine Regel: die der Identifikation, sonst die Basis. | `md_core::ri` (`applicable`) |
 | **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Runs, Library, Scan- und Quant-Settings, Rescan ja/nein. Ein Aufruf für Batch-Fenster, MID-Fenster und md-cli. | `md_core::batch::{Study, run_study, StudyResult}` |
 | **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{run_study, table}` |
 | **Rescan** | Zweiter Pass des Batch: fehlende Substanzen werden je Run an der erwarteten RT mit frischen Peaks nachgesucht. Nutzt die Fresh-Peak-Liste aus Pass 1, nicht den Ion-Index; liest einen Run nur, wenn dort ein Kandidat liegt. | `md_core::batch::rescan::rescan_runs` |

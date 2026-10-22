@@ -326,7 +326,7 @@ impl Results {
 
     /// Ctrl+E: the whole list of `run` as CSV, unfiltered, whether or not the list is on screen.
     pub fn export_csv(&mut self, run: &Run, cal: Option<&RiCalibration>, cutoff: f64) {
-        let rows: Vec<ResultRow> = build_rows(run, cal.filter(|_| run.ident.is_none()), cutoff)
+        let rows: Vec<ResultRow> = build_rows(run, cal, cutoff)
             .into_iter()
             .map(|r| r.res)
             .collect();
@@ -392,18 +392,10 @@ pub(crate) fn stepped(len: usize, at: Option<usize>, step: i32) -> Option<usize>
     })
 }
 
-/// The calibration whose RI the list shows: that of the identification, else `cal`.
-fn calibration<'a>(run: &'a Run, cal: Option<&'a RiCalibration>) -> Option<&'a RiCalibration> {
-    match &run.ident {
-        Some(((_, used, _), _, shifted)) => shifted.as_ref().or(used.as_deref()),
-        None => cal,
-    }
-}
-
-/// RI of component `k` as the list shows it; see `calibration`.
+/// RI of component `k` as the list shows it. `cal` is `ri.for_run(run)`, the one rule for the RI of a run.
 pub fn component_ri(run: &Run, k: usize, cal: Option<&RiCalibration>) -> Option<f64> {
     let rt = run.data.scan_times_s[run.components[k].apex_scan as usize];
-    calibration(run, cal).map(|c| c.ri(rt))
+    cal.map(|c| c.ri(rt))
 }
 
 /// Rows of the active run. Without a library every row is "No match: N" (`result_rows`).
@@ -421,7 +413,7 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
         }
     };
     let times = &run.data.scan_times_s;
-    let ris = calibration(run, cal).map(|c| c.component_ris(times, &run.components));
+    let ris = cal.map(|c| c.component_ris(times, &run.components));
     let rows = result_rows(
         &run.components,
         times,
