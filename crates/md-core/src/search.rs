@@ -468,6 +468,11 @@ pub fn shift_to_reference(
     s: &SearchSettings,
 ) -> Option<RiCalibration> {
     let reference_ri = lib.ris[reference]?;
+    // The reference search cuts off at its own cutoff, not at LS_CUTOFF.
+    let s = &SearchSettings {
+        cutoff,
+        ..s.clone()
+    };
     let ris = cal.component_ris(scan_times_s, comps);
     let score = |i: usize| {
         library_hits(&comps[i].spectrum, Some(ris[i]), lib, s)
@@ -802,6 +807,27 @@ mod tests {
         let ris = shifted.component_ris(&times, &comps);
         let id = map_compounds_to_library(&comps, Some(&ris), &lib, &s);
         assert_eq!(id.assigned[1].unwrap().ri_sim, Some(1.0));
+    }
+
+    #[test]
+    fn shift_cutoff_below_the_search_cutoff_still_finds_the_reference() {
+        let s = SearchSettings {
+            cutoff: 0.99,
+            ..all(SearchSettings::default())
+        };
+        let lib = PreparedLibrary::new(&[entry("Gly", 1200.0, &GLY)], &s);
+        let cal = RiCalibration::new([(100.0, 1000.0), (300.0, 1300.0)]).unwrap();
+        let times: Vec<f64> = (0..400).map(f64::from).collect();
+        let comps = [Component {
+            apex_scan: 243,
+            ..component(&as_comp(&GLY, 1))
+        }];
+        // Gly scores 0.91: between the shift cutoff 0.5 and the search cutoff 0.99.
+        assert!(shift_to_reference(&cal, &times, &comps, &lib, 0, 0.5, &s).is_some());
+        assert_eq!(
+            shift_to_reference(&cal, &times, &comps, &lib, 0, 0.99, &s),
+            None
+        );
     }
 
     /// The old search takes `RI >= 0` as known (`getLibraryHits`): RI 0 is a value, -1 means unknown.
