@@ -128,21 +128,25 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
 7. Memory-mapped or streamed access (like the old disk scan) is added when real runs exceed RAM;
    the cut-off is recorded as a `shortcut:` comment in `andi.rs`.
 
-Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 MiB):
+Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 invocations of
+`cargo run --release -p md-core --example perf`, measured 2026-10-22 on a noisy machine, the two builds
+alternating in one session (#360). Before M8 is `f16f0a7` (release 0.2.0), after M8 is `2fb4769`:
 
-| Operation | Time |
-|-----------|------|
-| TIC | 2.0 ms |
-| SIC (one m/z) | 1.0 ms |
-| Decimate TIC for drawing | 0.05 ms |
-| Overlay frame: decimate TIC + SIC of 15 runs | 0.8 ms |
-| Ion traces (index, 500 traces) | 26 ms |
-| Peaks in all 500 traces (300 000 peaks) | 20 ms |
-| Deconvolution (12 000 substances of 25 ions) | 19 ms |
-| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
-| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 83 ms (250 ms with the sorted pair list) |
-| Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
-| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | 470 / 450 / 47 ms (2026-10-22) |
+| Operation | Before M8 | After M8 |
+|-----------|-----------|----------|
+| TIC | 2.1 ms | 1.9 ms |
+| SIC (one m/z) | 0.85 ms | 3.2 ms |
+| Decimate TIC for drawing | 0.06 ms | 0.05 ms |
+| Overlay frame: decimate TIC + SIC of 15 runs | 0.9 ms | 0.85 ms |
+| Ion traces (index, 500 traces) | 23 ms | 28 ms |
+| Peaks in all 500 traces (300 000 peaks) | 19 ms | 17 ms |
+| Deconvolution (12 000 substances of 25 ions) | 19 ms | 21 ms |
+| Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 36 ms | 35 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 251 ms | 71 ms (#370) |
+| Batch, one run end to end (traces, peaks, deconvolution, search) | 323 ms | 398 ms |
+| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | not measured (no case in `f16f0a7`; dense peak memory 2.8 GiB) | 459 / 461 / 48 ms (#369) |
+
+SIC, ion traces and the end-to-end batch run are slower after M8; the cause is not investigated yet.
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -462,6 +466,9 @@ pooling, 1.1 s rescan with 4 in parallel), measured 2026-10-20 with `examples/ba
 Reusing the pass-1 peaks (#363) takes the rescan of the 15 runs with 4 in parallel from 80 to 66 ms
 (5 substances) and from 186 to 159 ms (untargeted, 474 ions added), medians of 15 in-process runs on a
 loaded machine, 2026-10-22.
+`examples/batch.rs` on all 15 runs, 4 in parallel, median of 5, same session as the table above (#360): 5 substances, no rescan,
+117 ms before M8 (`f16f0a7`, scan) and 108 ms after (`2fb4769`, `run_study`); untargeted with rescan
+375 ms before (scan + pooling + rescan, summed per invocation, then median) and 313 ms after (`run_study` does all three).
 
 ### Command line (`md-cli`)
 
