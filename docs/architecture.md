@@ -33,6 +33,8 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/deconv.rs         deconvolution of ion-trace peaks into components with spectra
   src/analysis.rs       analyze run: ion traces, peaks (PeakPass) and deconvolution of one run, the one
                         chain behind the app, the batch and its rescan
+  src/settings.rs       old GCMSSettings: values and defaults, `analysis()` (the one derivation of AnalysisSettings),
+                        `KEYS` with the key names in `settings::keys`, old settings file read and write
   src/job.rs            `Cancel` (cooperative stop flag) and `Progress` (done/total steps) of long jobs
   src/isotope.rs        formula parser and natural isotope patterns (M+0, M+1, …) from a built-in table
   src/ri.rs             retention index: RT ↔ RI calibration, marker search, RT shift, .calib file,
@@ -848,12 +850,14 @@ against `tools::MIDSolver`, and the pipeline on the unlabelled example runs (M+0
 
 ## Settings
 
-`md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1) and
-converts to `PeakSettings`, `DeconvSettings` and `SearchSettings`. One const table, `settings::KEYS` (old key, display text (English, German),
+`md_core::settings::GcmsSettings` holds all old settings with the old defaults (file-formats.md §5.1).
+`GcmsSettings::analysis()` derives `AnalysisSettings { peaks, deconv, quant, search, fwhm }` once; it is the only
+conversion, and `ScanSettings` carries it. One const table, `settings::KEYS` (old key, display text (English, German),
 accessor, range, fixed slot in the old file; no macro), drives the app's `KEY=value` lines (`set`, `lines`), the
 old file's fixed-size fields, `validate` (`sanitized` resets the bad ones) and the ranges of the Settings window
-(`limits`); a new value is one table row plus its struct field and default. `an_number_bins` is read once
-(`number_bins`) for both `peak()` and `deconv()`. It reads and writes the old settings
+(`limits`). Its keys are the constants of `settings::keys` (the app names no key as a string literal); a new value is
+one constant, one table row plus its struct field and default. `an_number_bins` is read once in `analysis()`
+for the peak and the deconvolution step. It reads and writes the old settings
 file (§5.2: raw, 191 + 8n bytes, no header; a gzip wrapper is accepted because algorithms.md §1 reports
 one). The file is untrusted: size must match the excluded-ion count exactly, the checksum must match,
 every value must be finite and in range, and gzip output is capped at 1 MiB. A text variant is not read

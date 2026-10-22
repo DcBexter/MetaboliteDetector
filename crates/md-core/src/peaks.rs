@@ -20,9 +20,6 @@ pub struct PeakSettings {
     pub number_bins: u32,
     /// Peak detection method; `Matched` ignores the three thresholds above.
     pub detector: Detector,
-    /// `SF_FWHM`: share of a peak's maximum a point must reach to count in its centroid
-    /// ([`IonTraces::new`] takes it; kept here so a change re-runs the analysis).
-    pub fwhm: f64,
 }
 
 /// "Peak detection method" of the old Calibration Setter window (algorithms.md §3.3). The old main
@@ -53,7 +50,6 @@ impl Default for PeakSettings {
             min_peak_height: 20.0,
             number_bins: 10,
             detector: Detector::Default,
-            fwhm: 0.5,
         }
     }
 }
@@ -420,7 +416,7 @@ fn dense_store(
 impl IonTraces {
     /// One trace per nominal mass of the centroided scans (`centroided`); centroids of one nominal
     /// mass in a scan are summed. A run with exact masses (FastFlight) gets [`Self::exact`].
-    /// `fwhm` is `SF_FWHM` ([`PeakSettings::fwhm`]).
+    /// `fwhm` is `SF_FWHM` ([`crate::settings::AnalysisSettings::fwhm`]).
     pub fn new(c: &Chromatogram, fwhm: f64) -> Result<Self, TooLarge> {
         if c.exact_masses {
             return Self::exact(c);

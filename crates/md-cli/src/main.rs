@@ -226,10 +226,10 @@ fn run(a: Args) -> Result<bool, String> {
         .transpose()?;
     let compounds =
         library::open(&a.library).map_err(|e| format!("{}: {e}", a.library.display()))?;
-    let prepared = PreparedLibrary::new(&compounds, &settings.search())
+    let prepared = PreparedLibrary::new(&compounds, &settings.analysis().search)
         .with_fragment_filter(library::is_nist(&a.library));
 
-    let mut quant = settings.quant();
+    let mut scan = settings.scan(calibration);
     let mut ts = TableSettings {
         replicates: a.replicates,
         ..Default::default()
@@ -257,15 +257,17 @@ fn run(a: Args) -> Result<bool, String> {
             t.columns[group]
         ));
     }
+    let quant = &mut scan.analysis.quant;
     quant.ion_number = a.ions.unwrap_or(quant.ion_number);
     quant.min_dist = a.min_dist.unwrap_or(quant.min_dist);
     quant.quality_cutoff = a.quality_cutoff.unwrap_or(quant.quality_cutoff);
     ts.min_reproducibility = a.min_reproducibility.unwrap_or(ts.min_reproducibility);
     ts.min_ions = a.min_ions.unwrap_or(ts.min_ions);
-    quant.excluded = a.exclude_ions.unwrap_or(quant.excluded);
+    if let Some(ions) = a.exclude_ions {
+        quant.excluded = ions;
+    }
     ts.min_sn = a.min_sn.unwrap_or(ts.min_sn);
     ts.max_discrepancy = a.max_discrepancy.unwrap_or(ts.max_discrepancy);
-    let mut scan = settings.scan(calibration);
     scan.untargeted = a.untargeted;
     scan.baseline_correction = a.baseline_correction;
     if let Some(dir) = a.save_cmp {
@@ -318,7 +320,6 @@ fn run(a: Args) -> Result<bool, String> {
         library: &compounds,
         prepared: &prepared,
         scan: &scan,
-        quant: &quant,
         rescan,
         parallel: a.parallel,
     };
@@ -339,7 +340,7 @@ fn run(a: Args) -> Result<bool, String> {
             ts.group_source(table_source.as_deref(), &paths),
         ),
         ("RT_ONLY", prepared.is_rt_only().to_string()),
-        ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
+        ("SEARCH_CUTOFF", scan.analysis.search.cutoff.to_string()),
         ("RUNS_SCANNED", runs.len().to_string()),
         ("UNKNOWN_SUBSTANCES", extra.len().to_string()),
         ("IONS_ADDED_BY_RESCAN", rescanned.to_string()),
@@ -359,7 +360,7 @@ fn run(a: Args) -> Result<bool, String> {
         written.extend(stats.map(|f| (f, 1)));
         let create = |p: &Path| std::fs::File::create(p).map(std::io::BufWriter::new);
         let f = create(&settings_path(p)).map_err(io)?;
-        ts.write_csv(&quant, &how, f).map_err(io)?;
+        ts.write_csv(&scan.analysis.quant, &how, f).map_err(io)?;
         written.push((settings_path(p), 2));
         if !a.ion_integrals {
             // An older ions file would not match this results file.

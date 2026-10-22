@@ -12,6 +12,32 @@ use crate::peaks::{Detector, PeakSettings};
 use crate::ri::RiCalibration;
 use crate::search::SearchSettings;
 
+/// The settings of every analysis step, derived once from [`GcmsSettings`] by [`GcmsSettings::analysis`].
+/// The batch scan, the analyze run, the md-cli and the app's batch window read this one struct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalysisSettings {
+    pub peaks: PeakSettings,
+    pub deconv: DeconvSettings,
+    pub quant: QuantSettings,
+    pub search: SearchSettings,
+    /// `SF_FWHM`: share of a peak's maximum a point must reach to count in its centroid. Only
+    /// [`IonTraces::new`] reads it; a change re-runs the analysis (the app keys its analysis on it).
+    pub fwhm: f64,
+}
+
+impl Default for AnalysisSettings {
+    /// The step defaults of the old static values, without the settings file's automatic width.
+    fn default() -> Self {
+        Self {
+            peaks: PeakSettings::default(),
+            deconv: DeconvSettings::default(),
+            quant: QuantSettings::default(),
+            search: SearchSettings::default(),
+            fwhm: 0.5,
+        }
+    }
+}
+
 /// Old `GCMSSettings`. Defaults are the old static values (file-formats.md §5.1).
 /// Fields marked "stored only" are kept for the file but no step of the rewrite reads them yet.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +189,50 @@ pub enum Field<'a> {
     Detector(&'a mut Detector),
 }
 
+/// The settings keys: the old file and `QSettings` names. `KEYS` and the app's settings window use these,
+/// so a typo is a compile error.
+pub mod keys {
+    pub const SF_PEAK_THRESHOLD_BEGIN: &str = "SF_PEAK_THRESHOLD_BEGIN";
+    pub const SF_PEAK_THRESHOLD_END: &str = "SF_PEAK_THRESHOLD_END";
+    pub const SF_MAX_BASE_DEV: &str = "SF_MAX_BASE_DEV";
+    pub const SF_FWHM: &str = "SF_FWHM";
+    pub const SF_CENTROID_THRESHOLD_BEGIN: &str = "SF_CENTROID_THRESHOLD_BEGIN";
+    pub const SF_CENTROID_THRESHOLD_END: &str = "SF_CENTROID_THRESHOLD_END";
+    pub const SF_CENTROID_MAX_BASE_DEV: &str = "SF_CENTROID_MAX_BASE_DEV";
+    pub const AN_PEAK_THRESHOLD_BEGIN: &str = "AN_PEAK_THRESHOLD_BEGIN";
+    pub const AN_PEAK_THRESHOLD_END: &str = "AN_PEAK_THRESHOLD_END";
+    pub const AN_MAX_BASE_DEV: &str = "AN_MAX_BASE_DEV";
+    pub const AN_MIN_PEAK_HEIGHT: &str = "AN_MIN_PEAK_HEIGHT";
+    pub const AN_DECONVOLUTION_WIDTH: &str = "AN_DECONVOLUTION_WIDTH";
+    pub const AN_NUMBER_BINS: &str = "AN_NUMBER_BINS";
+    pub const AN_MIN_PEAK_NUMBER: &str = "AN_MIN_PEAK_NUMBER";
+    pub const AN_MIN_HEIGHT_BP: &str = "AN_MIN_HEIGHT_BP";
+    pub const AN_MODELED_VALUES_FOR_INTEGRATION: &str = "AN_MODELED_VALUES_FOR_INTEGRATION";
+    pub const BASELINE_CORRECTION: &str = "baseline_correction";
+    /// Old names of the settings file, kept for the app's alias table (`persist.rs`).
+    pub const LEGACY_AN_BP_HEIGHT: &str = "AN_BP_HEIGHT";
+    pub const LEGACY_MASS_FILTER: &str = "MASS_FILTER";
+    pub const LS_RI_DIFF: &str = "LS_RI_DIFF";
+    pub const LS_PURE_FACTOR: &str = "LS_PURE_FACTOR";
+    pub const LS_IMPURE_FACTOR: &str = "LS_IMPURE_FACTOR";
+    pub const LS_SCALE_FACTOR_ION: &str = "LS_SCALE_FACTOR_ION";
+    pub const LS_SCALE_FACTOR_VALUE: &str = "LS_SCALE_FACTOR_VALUE";
+    pub const LS_SCALE_FACTOR_NO_MATCH: &str = "LS_SCALE_FACTOR_NO_MATCH";
+    pub const LS_RESOLUTION: &str = "LS_RESOLUTION";
+    pub const LS_USE_RI: &str = "LS_USE_RI";
+    pub const LS_USE_SCALED_LIB: &str = "LS_USE_SCALED_LIB";
+    pub const LS_USE_SPEC: &str = "LS_USE_SPEC";
+    pub const LS_MASS_FILTER: &str = "LS_MASS_FILTER";
+    pub const LS_CUTOFF: &str = "LS_CUTOFF";
+    pub const QUANT_ION_NUMBER: &str = "QUANT_ION_NUMBER";
+    pub const QUANT_MIN_DIST_IONS: &str = "QUANT_MIN_DIST_IONS";
+    pub const QUANT_QUALITY_CUTOFF: &str = "QUANT_QUALITY_CUTOFF";
+    pub const QUANT_EXCL_IONS: &str = "QUANT_EXCL_IONS";
+    pub const SQL_MAX_NUMBER_FRAGMENTS: &str = "SQL_MAX_NUMBER_FRAGMENTS";
+    pub const SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS: &str = "SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS";
+    pub const PEAK_DETECTOR: &str = "PEAK_DETECTOR";
+}
+
 /// One setting: its old key, where it lives in the struct and what values it accepts.
 pub struct Key {
     pub name: &'static str,
@@ -198,42 +268,42 @@ const fn key(
 // Rustfmt would put each of the 36 rows on five lines.
 #[rustfmt::skip]
 pub const KEYS: [Key; 36] = [
-    key("SF_PEAK_THRESHOLD_BEGIN", ("Spectrum filter: peak start", "Spektrumfilter: Peakbeginn"), |s| Field::F64(&mut s.sf_peak_threshold_begin), None, true),
-    key("SF_PEAK_THRESHOLD_END", ("Spectrum filter: peak end", "Spektrumfilter: Peakende"), |s| Field::F64(&mut s.sf_peak_threshold_end), None, true),
-    key("SF_MAX_BASE_DEV", ("Spectrum filter: baseline deviation", "Spektrumfilter: Basislinienabweichung"), |s| Field::F64(&mut s.sf_max_base_dev), None, true),
-    key("SF_FWHM", ("Centroid: FWHM share", "Zentroid: FWHM-Anteil"), |s| Field::F64(&mut s.sf_fwhm), Some((0.0, 1.0)), true),
-    key("SF_CENTROID_THRESHOLD_BEGIN", ("Centroid: peak start", "Zentroid: Peakbeginn"), |s| Field::F64(&mut s.sf_centroid_threshold_begin), None, true),
-    key("SF_CENTROID_THRESHOLD_END", ("Centroid: peak end", "Zentroid: Peakende"), |s| Field::F64(&mut s.sf_centroid_threshold_end), None, true),
-    key("SF_CENTROID_MAX_BASE_DEV", ("Centroid: baseline deviation", "Zentroid: Basislinienabweichung"), |s| Field::F64(&mut s.sf_centroid_max_base_dev), None, true),
-    key("AN_PEAK_THRESHOLD_BEGIN", ("Peak start slope", "Steigung am Peakbeginn"), |s| Field::F64(&mut s.an_peak_threshold_begin), None, true),
-    key("AN_PEAK_THRESHOLD_END", ("Peak end slope", "Steigung am Peakende"), |s| Field::F64(&mut s.an_peak_threshold_end), None, true),
-    key("AN_MAX_BASE_DEV", ("Peak baseline deviation", "Peak-Basislinienabweichung"), |s| Field::F64(&mut s.an_max_base_dev), None, true),
-    key("AN_MIN_PEAK_HEIGHT", ("Minimum S/N", "Minimum-S/N"), |s| Field::F64(&mut s.an_min_peak_height), Some((0.0, 1000000000.0)), true),
-    key("AN_DECONVOLUTION_WIDTH", ("Deconvolution width", "Dekonvolutionsbreite"), |s| Field::Auto(&mut s.an_deconvolution_width), Some((0.1, 100.0)), true),
-    key("AN_NUMBER_BINS", ("Apex steps per scan", "Apex-Schritte pro Scan"), |s| Field::I32(&mut s.an_number_bins), Some((1.0, 100.0)), true),
-    key("AN_MIN_PEAK_NUMBER", ("Minimum ions per component", "Mindestzahl Ionen pro Komponente"), |s| Field::I32(&mut s.an_min_peak_number), Some((1.0, 10000.0)), true),
-    key("AN_MIN_HEIGHT_BP", ("Minimum share of base peak", "Mindestanteil am Basispeak"), |s| Field::F64(&mut s.an_min_height_bp), Some((0.0, 1.0)), false),
-    key("AN_MODELED_VALUES_FOR_INTEGRATION", ("Integrate fitted model", "Angepasstes Modell integrieren"), |s| Field::Bool(&mut s.an_modeled_values_for_integration), None, false),
-    key("baseline_correction", ("Baseline correction", "Basislinienkorrektur"), |s| Field::Bool(&mut s.baseline_correction), None, false),
-    key("LS_RI_DIFF", ("RI tolerance (sigma)", "RI-Toleranz (Sigma)"), |s| Field::F64(&mut s.ls_ri_diff), Some((1e-06, 1000000000.0)), true),
-    key("LS_PURE_FACTOR", ("Pure spectrum weight", "Gewicht reines Spektrum"), |s| Field::F64(&mut s.ls_pure_factor), Some((0.0, 1000000000.0)), true),
-    key("LS_IMPURE_FACTOR", ("Impure spectrum weight", "Gewicht unreines Spektrum"), |s| Field::F64(&mut s.ls_impure_factor), Some((0.0, 1000000000.0)), true),
-    key("LS_SCALE_FACTOR_ION", ("Mass exponent", "Massenexponent"), |s| Field::F64(&mut s.ls_scale_factor_ion), None, true),
-    key("LS_SCALE_FACTOR_VALUE", ("Intensity exponent", "Intensitätsexponent"), |s| Field::F64(&mut s.ls_scale_factor_value), None, true),
-    key("LS_SCALE_FACTOR_NO_MATCH", ("Unmatched peak factor", "Faktor für Peaks ohne Partner"), |s| Field::F64(&mut s.ls_scale_factor_no_match), None, true),
-    key("LS_RESOLUTION", ("Search resolution", "Suchauflösung"), |s| Field::F32(&mut s.ls_resolution), None, true),
-    key("LS_USE_RI", ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_ri), None, true),
-    key("LS_USE_SCALED_LIB", ("Use scaled library", "Skalierte Bibliothek verwenden"), |s| Field::Bool(&mut s.ls_use_scaled_lib), None, true),
-    key("LS_USE_SPEC", ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_spec), None, true),
-    key("LS_MASS_FILTER", ("Ignored masses", "Ignorierte Massen"), |s| Field::Ranges(&mut s.ls_mass_filter), Some((0.0, 100000.0)), false),
-    key("LS_CUTOFF", ("Cutoff score", "Mindest-Score"), |s| Field::F64(&mut s.ls_cutoff), Some((0.0, 1.0)), false),
-    key("QUANT_ION_NUMBER", ("Quant ions", "Quant-Ionen"), |s| Field::I32(&mut s.quant_ion_number), Some((0.0, 10000.0)), true),
-    key("QUANT_MIN_DIST_IONS", ("Quant ion minimum distance", "Mindestabstand der Quant-Ionen"), |s| Field::F64(&mut s.quant_min_dist_ions), None, true),
-    key("QUANT_QUALITY_CUTOFF", ("Quant quality cutoff", "Quant-Qualitätsschwelle"), |s| Field::F64(&mut s.quant_quality_cutoff), None, true),
-    key("QUANT_EXCL_IONS", ("Ions left out of the model peak", "Vom Modellpeak ausgenommene Ionen"), |s| Field::Ranges(&mut s.quant_excl_ions), Some((0.0, 100000.0)), false),
-    key("SQL_MAX_NUMBER_FRAGMENTS", ("Number of fragments", "Anzahl Fragmente"), |s| Field::I32(&mut s.sql_max_number_fragments), Some((1.0, 100.0)), false),
-    key("SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS", ("Minimum number of identical frag.", "Mindestzahl gleicher Fragmente"), |s| Field::I32(&mut s.sql_minimal_number_equal_fragments), Some((0.0, 100.0)), false),
-    key("PEAK_DETECTOR", ("Peak detection method", "Peakerkennungsmethode"), |s| Field::Detector(&mut s.peak_detector), Some((1.0, 1000.0)), false),
+    key(keys::SF_PEAK_THRESHOLD_BEGIN, ("Spectrum filter: peak start", "Spektrumfilter: Peakbeginn"), |s| Field::F64(&mut s.sf_peak_threshold_begin), None, true),
+    key(keys::SF_PEAK_THRESHOLD_END, ("Spectrum filter: peak end", "Spektrumfilter: Peakende"), |s| Field::F64(&mut s.sf_peak_threshold_end), None, true),
+    key(keys::SF_MAX_BASE_DEV, ("Spectrum filter: baseline deviation", "Spektrumfilter: Basislinienabweichung"), |s| Field::F64(&mut s.sf_max_base_dev), None, true),
+    key(keys::SF_FWHM, ("Centroid: FWHM share", "Zentroid: FWHM-Anteil"), |s| Field::F64(&mut s.sf_fwhm), Some((0.0, 1.0)), true),
+    key(keys::SF_CENTROID_THRESHOLD_BEGIN, ("Centroid: peak start", "Zentroid: Peakbeginn"), |s| Field::F64(&mut s.sf_centroid_threshold_begin), None, true),
+    key(keys::SF_CENTROID_THRESHOLD_END, ("Centroid: peak end", "Zentroid: Peakende"), |s| Field::F64(&mut s.sf_centroid_threshold_end), None, true),
+    key(keys::SF_CENTROID_MAX_BASE_DEV, ("Centroid: baseline deviation", "Zentroid: Basislinienabweichung"), |s| Field::F64(&mut s.sf_centroid_max_base_dev), None, true),
+    key(keys::AN_PEAK_THRESHOLD_BEGIN, ("Peak start slope", "Steigung am Peakbeginn"), |s| Field::F64(&mut s.an_peak_threshold_begin), None, true),
+    key(keys::AN_PEAK_THRESHOLD_END, ("Peak end slope", "Steigung am Peakende"), |s| Field::F64(&mut s.an_peak_threshold_end), None, true),
+    key(keys::AN_MAX_BASE_DEV, ("Peak baseline deviation", "Peak-Basislinienabweichung"), |s| Field::F64(&mut s.an_max_base_dev), None, true),
+    key(keys::AN_MIN_PEAK_HEIGHT, ("Minimum S/N", "Minimum-S/N"), |s| Field::F64(&mut s.an_min_peak_height), Some((0.0, 1000000000.0)), true),
+    key(keys::AN_DECONVOLUTION_WIDTH, ("Deconvolution width", "Dekonvolutionsbreite"), |s| Field::Auto(&mut s.an_deconvolution_width), Some((0.1, 100.0)), true),
+    key(keys::AN_NUMBER_BINS, ("Apex steps per scan", "Apex-Schritte pro Scan"), |s| Field::I32(&mut s.an_number_bins), Some((1.0, 100.0)), true),
+    key(keys::AN_MIN_PEAK_NUMBER, ("Minimum ions per component", "Mindestzahl Ionen pro Komponente"), |s| Field::I32(&mut s.an_min_peak_number), Some((1.0, 10000.0)), true),
+    key(keys::AN_MIN_HEIGHT_BP, ("Minimum share of base peak", "Mindestanteil am Basispeak"), |s| Field::F64(&mut s.an_min_height_bp), Some((0.0, 1.0)), false),
+    key(keys::AN_MODELED_VALUES_FOR_INTEGRATION, ("Integrate fitted model", "Angepasstes Modell integrieren"), |s| Field::Bool(&mut s.an_modeled_values_for_integration), None, false),
+    key(keys::BASELINE_CORRECTION, ("Baseline correction", "Basislinienkorrektur"), |s| Field::Bool(&mut s.baseline_correction), None, false),
+    key(keys::LS_RI_DIFF, ("RI tolerance (sigma)", "RI-Toleranz (Sigma)"), |s| Field::F64(&mut s.ls_ri_diff), Some((1e-06, 1000000000.0)), true),
+    key(keys::LS_PURE_FACTOR, ("Pure spectrum weight", "Gewicht reines Spektrum"), |s| Field::F64(&mut s.ls_pure_factor), Some((0.0, 1000000000.0)), true),
+    key(keys::LS_IMPURE_FACTOR, ("Impure spectrum weight", "Gewicht unreines Spektrum"), |s| Field::F64(&mut s.ls_impure_factor), Some((0.0, 1000000000.0)), true),
+    key(keys::LS_SCALE_FACTOR_ION, ("Mass exponent", "Massenexponent"), |s| Field::F64(&mut s.ls_scale_factor_ion), None, true),
+    key(keys::LS_SCALE_FACTOR_VALUE, ("Intensity exponent", "Intensitätsexponent"), |s| Field::F64(&mut s.ls_scale_factor_value), None, true),
+    key(keys::LS_SCALE_FACTOR_NO_MATCH, ("Unmatched peak factor", "Faktor für Peaks ohne Partner"), |s| Field::F64(&mut s.ls_scale_factor_no_match), None, true),
+    key(keys::LS_RESOLUTION, ("Search resolution", "Suchauflösung"), |s| Field::F32(&mut s.ls_resolution), None, true),
+    key(keys::LS_USE_RI, ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_ri), None, true),
+    key(keys::LS_USE_SCALED_LIB, ("Use scaled library", "Skalierte Bibliothek verwenden"), |s| Field::Bool(&mut s.ls_use_scaled_lib), None, true),
+    key(keys::LS_USE_SPEC, ("Score", "Score"), |s| Field::Bool(&mut s.ls_use_spec), None, true),
+    key(keys::LS_MASS_FILTER, ("Ignored masses", "Ignorierte Massen"), |s| Field::Ranges(&mut s.ls_mass_filter), Some((0.0, 100000.0)), false),
+    key(keys::LS_CUTOFF, ("Cutoff score", "Mindest-Score"), |s| Field::F64(&mut s.ls_cutoff), Some((0.0, 1.0)), false),
+    key(keys::QUANT_ION_NUMBER, ("Quant ions", "Quant-Ionen"), |s| Field::I32(&mut s.quant_ion_number), Some((0.0, 10000.0)), true),
+    key(keys::QUANT_MIN_DIST_IONS, ("Quant ion minimum distance", "Mindestabstand der Quant-Ionen"), |s| Field::F64(&mut s.quant_min_dist_ions), None, true),
+    key(keys::QUANT_QUALITY_CUTOFF, ("Quant quality cutoff", "Quant-Qualitätsschwelle"), |s| Field::F64(&mut s.quant_quality_cutoff), None, true),
+    key(keys::QUANT_EXCL_IONS, ("Ions left out of the model peak", "Vom Modellpeak ausgenommene Ionen"), |s| Field::Ranges(&mut s.quant_excl_ions), Some((0.0, 100000.0)), false),
+    key(keys::SQL_MAX_NUMBER_FRAGMENTS, ("Number of fragments", "Anzahl Fragmente"), |s| Field::I32(&mut s.sql_max_number_fragments), Some((1.0, 100.0)), false),
+    key(keys::SQL_MINIMAL_NUMBER_EQUAL_FRAGMENTS, ("Minimum number of identical frag.", "Mindestzahl gleicher Fragmente"), |s| Field::I32(&mut s.sql_minimal_number_equal_fragments), Some((0.0, 100.0)), false),
+    key(keys::PEAK_DETECTOR, ("Peak detection method", "Peakerkennungsmethode"), |s| Field::Detector(&mut s.peak_detector), Some((1.0, 1000.0)), false),
 ];
 
 /// Display text of a setting (English, German); panics on a key that is not in the table.
@@ -516,72 +586,61 @@ impl GcmsSettings {
         Ok(s)
     }
 
-    /// `AN_NUMBER_BINS`: the one place `peak` and `deconv` read it from, so they cannot differ.
-    fn number_bins(&self) -> u32 {
-        self.an_number_bins.max(1) as u32
-    }
-
-    pub fn peak(&self) -> PeakSettings {
-        PeakSettings {
-            threshold_begin: self.an_peak_threshold_begin as f32,
-            threshold_end: self.an_peak_threshold_end as f32,
-            min_peak_height: self.an_min_peak_height as f32,
-            number_bins: self.number_bins(),
-            detector: self.peak_detector,
+    /// The settings of every analysis step, the one derivation from these settings. `AN_NUMBER_BINS`
+    /// is read once here, so the peak and the deconvolution step cannot differ.
+    pub fn analysis(&self) -> AnalysisSettings {
+        let number_bins = self.an_number_bins.max(1) as u32;
+        AnalysisSettings {
+            peaks: PeakSettings {
+                threshold_begin: self.an_peak_threshold_begin as f32,
+                threshold_end: self.an_peak_threshold_end as f32,
+                min_peak_height: self.an_min_peak_height as f32,
+                number_bins,
+                detector: self.peak_detector,
+            },
+            deconv: DeconvSettings {
+                width: self.an_deconvolution_width,
+                number_bins,
+                min_peak_number: self.an_min_peak_number.max(1) as usize,
+                min_height_bp: self.an_min_height_bp,
+                modeled_integration: self.an_modeled_values_for_integration,
+                excluded_model_ions: self.quant_excl_ions.clone(),
+            },
+            quant: QuantSettings {
+                ion_number: self.quant_ion_number.max(1) as usize,
+                min_dist: self.quant_min_dist_ions as f32,
+                quality_cutoff: self.quant_quality_cutoff as f32,
+                excluded: self.quant_excl_ions.clone(),
+            },
+            // The search cuts off at `LS_CUTOFF` everywhere, a deliberate deviation from 3.3 (algorithms.md §5.8).
+            search: SearchSettings {
+                ri_diff: self.ls_ri_diff,
+                pure_factor: self.ls_pure_factor,
+                impure_factor: self.ls_impure_factor,
+                scale_ion: self.ls_scale_factor_ion,
+                scale_value: self.ls_scale_factor_value,
+                no_match: self.ls_scale_factor_no_match,
+                use_ri: self.ls_use_ri,
+                use_spec: self.ls_use_spec,
+                mass_filter: self.ls_mass_filter.clone(),
+                cutoff: self.ls_cutoff,
+                max_fragments: self.sql_max_number_fragments.max(1) as usize,
+                min_equal_fragments: self.sql_minimal_number_equal_fragments.max(0) as usize,
+            },
             fwhm: self.sf_fwhm,
         }
     }
 
-    pub fn deconv(&self) -> DeconvSettings {
-        DeconvSettings {
-            width: self.an_deconvolution_width,
-            number_bins: self.number_bins(),
-            min_peak_number: self.an_min_peak_number.max(1) as usize,
-            min_height_bp: self.an_min_height_bp,
-            modeled_integration: self.an_modeled_values_for_integration,
-            excluded_model_ions: self.quant_excl_ions.clone(),
-        }
-    }
-
-    /// Settings of a batch scan: the library is prepared with `search()`, which cuts hits off at
+    /// Settings of a batch scan: the library is prepared with the search settings, which cut hits off at
     /// `LS_CUTOFF` like the old `BatchQuantificator`.
     pub fn scan(&self, calibration: Option<RiCalibration>) -> ScanSettings {
         ScanSettings {
-            peaks: self.peak(),
-            deconv: self.deconv(),
-            search: self.search(),
+            analysis: self.analysis(),
             calibration,
             shift: None,
             untargeted: false,
             save_cmp: None,
             baseline_correction: false,
-        }
-    }
-
-    pub fn quant(&self) -> QuantSettings {
-        QuantSettings {
-            ion_number: self.quant_ion_number.max(1) as usize,
-            min_dist: self.quant_min_dist_ions as f32,
-            quality_cutoff: self.quant_quality_cutoff as f32,
-            excluded: self.quant_excl_ions.clone(),
-        }
-    }
-
-    /// The search cuts off at `LS_CUTOFF` everywhere, a deliberate deviation from 3.3 (algorithms.md §5.8).
-    pub fn search(&self) -> SearchSettings {
-        SearchSettings {
-            ri_diff: self.ls_ri_diff,
-            pure_factor: self.ls_pure_factor,
-            impure_factor: self.ls_impure_factor,
-            scale_ion: self.ls_scale_factor_ion,
-            scale_value: self.ls_scale_factor_value,
-            no_match: self.ls_scale_factor_no_match,
-            use_ri: self.ls_use_ri,
-            use_spec: self.ls_use_spec,
-            mass_filter: self.ls_mass_filter.clone(),
-            cutoff: self.ls_cutoff,
-            max_fragments: self.sql_max_number_fragments.max(1) as usize,
-            min_equal_fragments: self.sql_minimal_number_equal_fragments.max(0) as usize,
         }
     }
 }
@@ -594,17 +653,17 @@ mod tests {
     #[test]
     fn defaults_match_old_static_values() {
         let s = GcmsSettings::default();
-        assert_eq!(s.peak(), PeakSettings::default());
+        assert_eq!(s.analysis().peaks, PeakSettings::default());
         // SF_FWHM reaches every centroiding (#293).
         let f = GcmsSettings {
             sf_fwhm: 0.3,
             ..s.clone()
         };
         let centroid = crate::centroid::CentroidSettings::from(&f);
-        assert_eq!((f.peak().fwhm, centroid.fwhm), (0.3, 0.3));
+        assert_eq!((f.analysis().fwhm, centroid.fwhm), (0.3, 0.3));
         // Except the deconvolution width: automatic (#279), written to the old file as its 1.
         assert_eq!(
-            s.deconv(),
+            s.analysis().deconv,
             DeconvSettings {
                 width: None,
                 ..Default::default()
@@ -612,7 +671,7 @@ mod tests {
         );
         let back = GcmsSettings::default().from_bytes(&s.to_bytes()).unwrap();
         assert_eq!(back.an_deconvolution_width, Some(1.0));
-        assert_eq!(s.search(), SearchSettings::default());
+        assert_eq!(s.analysis().search, SearchSettings::default());
         assert_eq!(
             (
                 s.sf_peak_threshold_end,
@@ -633,7 +692,10 @@ mod tests {
         );
         s.validate().unwrap();
         assert_eq!(
-            (s.search().max_fragments, s.search().min_equal_fragments),
+            (
+                s.analysis().search.max_fragments,
+                s.analysis().search.min_equal_fragments
+            ),
             (5, 3)
         );
         // Not in the old file, so only the dialog can set them; it keeps them in range.
@@ -793,8 +855,17 @@ mod tests {
             quant_excl_ions: vec![(73.0, 73.0)],
             ..Default::default()
         };
-        assert_eq!((s.peak().number_bins, s.deconv().number_bins), (7, 7));
-        assert_eq!(s.deconv().excluded_model_ions, s.quant().excluded);
+        assert_eq!(
+            (
+                s.analysis().peaks.number_bins,
+                s.analysis().deconv.number_bins
+            ),
+            (7, 7)
+        );
+        assert_eq!(
+            s.analysis().deconv.excluded_model_ions,
+            s.analysis().quant.excluded
+        );
     }
 
     #[test]
@@ -807,15 +878,18 @@ mod tests {
             quant_excl_ions: vec![(73.0, 73.0)],
             ..Default::default()
         };
-        let q = s.quant();
+        let q = s.analysis().quant;
         assert_eq!((q.ion_number, q.min_dist, q.quality_cutoff), (1, 1.5, 2.5));
         assert_eq!(q.excluded, [(73.0, 73.0)]);
         let cal = RiCalibration::new([(0.0, 0.0), (60.0, 100.0)]).unwrap();
         let scan = s.scan(Some(cal.clone()));
-        assert_eq!((scan.peaks, scan.calibration), (s.peak(), Some(cal)));
+        assert_eq!(
+            (scan.analysis.peaks, scan.calibration),
+            (s.analysis().peaks, Some(cal))
+        );
         // One cutoff for the library search and the scan (#399).
-        assert_eq!(scan.search, s.search());
-        assert_eq!(scan.search.cutoff, s.ls_cutoff);
+        assert_eq!(scan.analysis.search, s.analysis().search);
+        assert_eq!(scan.analysis.search.cutoff, s.ls_cutoff);
     }
 
     /// §5.2: 191 bytes for the defaults, checksum 20.5.
