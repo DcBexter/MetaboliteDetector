@@ -224,9 +224,8 @@ fn main() {
         let t = Instant::now();
         let found = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
         println!(
-            "run_study, {label} ({} substances found, {} unknown): {:?}",
+            "run_study, {label} ({} substances found): {:?}",
             found.runs.iter().map(|r| r.found.len()).sum::<usize>(),
-            found.runs.iter().map(|r| r.unknown.len()).sum::<usize>(),
             t.elapsed()
         );
     };

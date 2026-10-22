@@ -170,7 +170,7 @@ Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 alte
 
 The removed `fresh.clone()` copied one peak list per run; that is not measurable at this size. The gain is the cleaner interface and no copy on nominal traces.
 
-SIC was the regression: `sic` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
+SIC was the regression: `sic_cancellable` (now `sic`, #378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
 1.4 ms per call. The fix keeps the per-scan `Cancel` check, writes into a preallocated `Vec` and returns `None` at the end;
 `map_compounds_to_library` now collects its hit lists directly instead of collecting `Option` values, which takes about 8 % off the batch run.
 Ion traces (#396): the index build called its per-point callback through `dyn FnMut`, which the dense store could not
