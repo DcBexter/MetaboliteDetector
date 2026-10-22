@@ -1,9 +1,9 @@
-//! Untargeted groups of synthetic exact-mass runs: the group numbers and the assignment of
-//! `add_unknowns` follow the deconvolution order of the components, not their apex order. The fixture
-//! was written at d58c2f3 (before M9), when `analyze_run` did not sort. The apex order is a view rule
-//! of the component list now. On the 15 example runs and on 400 random nominal-mass runs the two orders
-//! agree (0 inversions), so #422 changed nothing on real data; these runs are the ones where they differ
-//! (about 2 % of random exact-mass runs have an inversion).
+//! Untargeted groups of synthetic exact-mass runs, pinned to a fixture written at d58c2f3 (before M9).
+//! The order guard is `has_inversion`: `analyze_run` must return these runs in deconvolution order, which
+//! differs from apex order on them. The group numbers on these seeds are the same with either order, so
+//! the fixture pins the study output rather than proving the order. On the 15 example runs and on 400
+//! random nominal-mass runs the two orders agree (0 inversions), so #422 changed nothing on real data;
+//! about 2 % of random exact-mass runs have an inversion.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -132,7 +132,7 @@ fn groups_text() -> String {
 }
 
 #[test]
-fn untargeted_groups_match_the_fixture_from_before_the_apex_sort() {
+fn untargeted_groups_match_the_pinned_fixture() {
     // The runs must reach the study in deconvolution order that differs from the apex order.
     assert!(SEEDS.iter().all(|&s| has_inversion(&synthetic_run(s))));
     let text = groups_text();
