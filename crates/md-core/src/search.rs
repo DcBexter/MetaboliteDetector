@@ -370,7 +370,8 @@ pub fn map_compounds_to_library(
 }
 
 /// The assignment step of `map_compounds_to_library` on precomputed hits (`hits[c]` best first):
-/// one library compound of `lib_len` per component, best overall scores first.
+/// one library compound of `lib_len` per component, best overall scores first. Each list must be sorted by
+/// overall descending, then compound ascending, as `library_hits` returns it.
 pub fn assign_best_first(hits: &[Vec<LibraryHit>], lib_len: usize) -> Vec<Option<LibraryHit>> {
     // Taking pairs in descending score equals the old loop, which picks the best free pair each round.
     // Ties go to the lower library index, then the lower component index (old: pointer order).

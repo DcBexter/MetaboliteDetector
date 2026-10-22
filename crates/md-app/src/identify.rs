@@ -497,8 +497,8 @@ pub fn nist_list(ui: &mut egui::Ui, run: &Run, k: usize, nist: &Nist) -> bool {
             )
         })
         .on_disabled_hover_text(t(
-            "The NIST library is being prepared",
-            "Die NIST-Bibliothek wird vorbereitet",
+            "The NIST library is being prepared or searched",
+            "Die NIST-Bibliothek wird vorbereitet oder durchsucht",
         ))
         .clicked();
     if let Some(hits) = nist.hits_for(run, k) {
@@ -598,6 +598,16 @@ mod tests {
         assert!(app.nist.hits_for(&app.runs[0], 0).is_some());
         app.ri.cal = Some(Arc::new(RiCalibration::identity()));
         app.update_nist(&ctx);
+        assert!(app.nist.hits.is_none());
+
+        // Settings that change while a search runs drop its hits too.
+        app.nist_search(&ctx);
+        app.settings.applied.sql_minimal_number_equal_fragments = 2;
+        app.update_nist(&ctx);
+        while app.nist.busy() {
+            app.update_nist(&ctx);
+            std::thread::yield_now();
+        }
         assert!(app.nist.hits.is_none());
 
         // The fragment values matter only for a library with the pre-filter.
