@@ -11,7 +11,9 @@ use crate::lang::{Msg, msg, t, tf};
 use crate::layout::ToolWindow;
 use eframe::egui;
 use egui_plot::{Bar, BarChart, BoxElem, BoxPlot, BoxSpread, Legend, LegendGrouping, Plot};
-use md_core::batch::{QuantSettings, ShiftReference, complete_scan, scan_runs};
+use md_core::batch::{
+    DEFAULT_PARALLEL, QuantSettings, ShiftReference, Study, StudyResult, run_study,
+};
 use md_core::isotope::IsotopeTable;
 use md_core::library::LibraryCompound;
 use md_core::mid::{FragmentMid, Method, Mids, determine, group_stat, mid_library};
@@ -286,20 +288,18 @@ impl MidWindow {
                 false => PreparedLibrary::new(&mids_lib, &l.settings),
             };
             let cancelled = || msg!("Cancelled.", "Abgebrochen.");
-            let (mut runs, mut errors) =
-                scan_runs(&paths, &prepared, &s, 4, progress, cancel).ok_or_else(cancelled)?;
             // The quant ions are the fragment ions, so the rescan fills those that were not deconvoluted.
-            let more = complete_scan(
-                &mut runs,
-                &mids_lib,
-                &s,
-                &QuantSettings::default(),
+            let study = Study {
+                runs: &paths,
+                library: &mids_lib,
+                prepared: &prepared,
+                scan: &s,
+                quant: &QuantSettings::default(),
                 rescan,
-                4,
-                cancel,
-            )
-            .ok_or_else(cancelled)?;
-            errors.extend(more.errors);
+                parallel: DEFAULT_PARALLEL,
+            };
+            let StudyResult { runs, errors, .. } =
+                run_study(&study, progress, cancel).ok_or_else(cancelled)?;
             let mut errors: Vec<Msg> = errors.into_iter().map(Msg::from).collect();
             if let Some((n, _)) = shift_ref.filter(|_| s.shift.is_none()) {
                 errors.push(msg!(
@@ -307,7 +307,7 @@ impl MidWindow {
                     "RT-Verschiebungsreferenz {n} ist keine Substanz mit MID-Fragmenten; ohne RT-Verschiebung gescannt."
                 ));
             }
-            // shortcut: a run that fails to load is dropped by scan_runs, which shifts the group
+            // shortcut: a run that fails to load is dropped by run_study, which shifts the group
             // indices; the runs are matched back by path.
             let index = |p: &PathBuf| runs.iter().position(|r| &r.path == p);
             let labelled: Vec<usize> = paths[..nl].iter().filter_map(index).collect();

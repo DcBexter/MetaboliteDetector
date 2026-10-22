@@ -16,9 +16,9 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Library** | Sammlung von Referenzspektren mit RI, Quant-Ionen und FRAG-Angaben (`.lbr`, `.msl`, `.mdlib`). | `md_core::library` |
 | **Library search** | Zuordnung von Components zu Library-Einträgen über Spektrum- und RI-Score, greedy eins zu eins. | `md_core::search` |
 | **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |
-| **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Library, Settings, Sample table, Gruppen. | `md_core::batch`; geplant: `run_study` (#363) |
-| **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{scan_runs, complete_scan, table}` |
-| **Rescan** | Zweiter Pass des Batch: fehlende Substanzen werden je Run an der erwarteten RT mit frischen Peaks nachgesucht. | `md_core::batch::rescan` |
+| **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Runs, Library, Scan- und Quant-Settings, Rescan ja/nein. Ein Aufruf für Batch-Fenster, MID-Fenster und md-cli. | `md_core::batch::{Study, run_study, StudyResult}` |
+| **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{run_study, table}` |
+| **Rescan** | Zweiter Pass des Batch: fehlende Substanzen werden je Run an der erwarteten RT mit frischen Peaks nachgesucht. Nutzt die Fresh-Peak-Liste aus Pass 1, nicht den Ion-Index; liest einen Run nur, wenn dort ein Kandidat liegt. | `md_core::batch::rescan` |
 | **Quant ion** | Die Masse, deren Peakfläche eine Substanz im Batch quantifiziert. | `QuantSettings` |
 | **Normalisierung** | Umrechnung der Batch-Tabelle (interner Standard, Gesamtsignal, Pool, z-Score). | `md_core::normalize` |
 | **MID** | Mass isotopomer distribution: Verteilung der Markierung je Fragment, korrigiert um natürliche Isotope. | `md_core::mid` |

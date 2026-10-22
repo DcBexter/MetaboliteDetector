@@ -5,9 +5,7 @@ use md_core::job::{Cancel, Progress};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use md_core::batch::{
-    QuantSettings, ScanSettings, TableSettings, add_unknowns, rescan_runs, scan_runs, table,
-};
+use md_core::batch::{QuantSettings, ScanSettings, Study, TableSettings, run_study, table};
 use md_core::library::{import_msl, read_lbr};
 use md_core::search::PreparedLibrary;
 
@@ -36,41 +34,28 @@ fn main() {
         ..Default::default()
     };
     let prepared = PreparedLibrary::new(&lib, &s.search);
+    let study = Study {
+        runs: &paths,
+        library: &lib,
+        prepared: &prepared,
+        scan: &s,
+        quant: &QuantSettings::default(),
+        rescan,
+        parallel,
+    };
 
     let t = Instant::now();
-    let (done, cancel) = (Progress::default(), Cancel::default());
-    let (mut runs, errors) = scan_runs(&paths, &prepared, &s, parallel, &done, &cancel).unwrap();
-    let scanned = t.elapsed();
+    let r = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
+    let took = t.elapsed();
     let t = Instant::now();
-    let extra = if untargeted {
-        add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap()
-    } else {
-        Vec::new()
-    };
-    let pooled = t.elapsed();
-    let t = Instant::now();
-    let rescanned = rescan.then(|| {
-        rescan_runs(
-            &mut runs,
-            &lib,
-            &extra,
-            &s,
-            &QuantSettings::default(),
-            parallel,
-            &cancel,
-        )
-        .unwrap()
-    });
-    let rescan_time = t.elapsed();
-    let t = Instant::now();
-    let tab = table(&runs, &lib, &extra, &TableSettings::default()).unwrap();
+    let tab = table(&r.runs, &lib, &r.extra, &TableSettings::default()).unwrap();
     println!(
-        "{} runs ({} errors) x {} library entries, {parallel} in parallel: scan {scanned:?}, pool {pooled:?} ({} unknown), rescan {rescan_time:?} ({:?} ions added), table {:?}",
-        runs.len(),
-        errors.len(),
+        "{} runs ({} errors) x {} library entries, {parallel} in parallel: study {took:?} ({} unknown, {} ions added by the rescan), table {:?}",
+        r.runs.len(),
+        r.errors.len(),
         lib.len(),
-        extra.len(),
-        rescanned.as_ref().map(|r| r.0),
+        r.extra.len(),
+        r.rescanned,
         t.elapsed()
     );
     let cells = tab.rows.iter().flat_map(|r| &r.values).flatten().count();
@@ -79,7 +64,7 @@ fn main() {
         tab.rows.len(),
         tab.rows.len() * tab.runs.len()
     );
-    for e in errors.iter().chain(rescanned.iter().flat_map(|r| &r.1)) {
+    for e in &r.errors {
         println!("error: {e}");
     }
 }
