@@ -14,7 +14,7 @@ use md_core::Chromatogram;
 use md_core::deconv::Component;
 use md_core::job::Cancel;
 use md_core::library::LibraryCompound;
-use md_core::ri::{RiCalibration, marker_peaks, match_mix, series_points};
+use md_core::ri::{RiCalibration, applicable, marker_peaks, match_mix, series_points};
 use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_cancellable};
 
 use crate::identify::Library;
@@ -120,16 +120,18 @@ impl Calibration {
         own.or(self.cal.as_ref())
     }
 
-    /// The run's calibration: shifted onto the reference when it was found there, else `base`.
-    /// While a new search runs (library, calibration or reference changed) its shift is not known yet.
-    /// None in RT-only mode, where "RI" is a time.
+    /// The calibration whose RI the run shows, the one rule in `md_core::ri::applicable`: that of its
+    /// identification (shifted, else the one it was searched with), else `base`. In RT-only mode only an
+    /// identification's calibration applies; there it maps RT to the shifted time.
     pub fn for_run<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
-        let ptr = |c: Option<&Arc<RiCalibration>>| c.map(Arc::as_ptr);
-        let base = self.base(run).filter(|_| !self.rt_only);
-        (run.ident.as_ref())
-            .filter(|i| run.ident_job.is_none() && ptr(i.0.1.as_ref()) == ptr(base))
-            .and_then(|i| i.2.as_ref())
-            .or(base.map(|c| &**c))
+        let ident = (run.ident.as_ref())
+            .map(|((_, used, _), _, shifted)| (used.as_deref(), shifted.as_ref()));
+        applicable(ident, self.base(run).map(|c| &**c), self.rt_only)
+    }
+
+    /// The RI to store or search with: `for_run`, but none in RT-only mode, where "RI" would be a time.
+    pub fn for_library<'a>(&'a self, run: &'a Run) -> Option<&'a RiCalibration> {
+        self.for_run(run).filter(|_| !self.rt_only)
     }
 
     /// What the batch and MID scans search with: the calibration, not while the library is rebuilt
