@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::errors;
 use crate::lang::{self, Msg, msg, tf};
 use crate::layout::ToolWindow;
-use crate::settings::row;
+use crate::settings::{name_of, row};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
@@ -716,7 +716,7 @@ impl Batch {
             save_cmp_row(ui, &mut self.options.save_cmp);
             row(
                 ui,
-                lang::t("Baseline correction", "Basislinienkorrektur"),
+                name_of("baseline_correction"),
                 "",
                 lang::t(
                     "Subtract each scan's stored baseline from every run, like the switch in the old \
