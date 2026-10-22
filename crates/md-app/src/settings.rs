@@ -784,7 +784,7 @@ fn dialog() -> rfd::FileDialog {
 }
 
 /// Display text of a setting from the settings table, in the current language.
-fn name_of(key: &str) -> &'static str {
+pub(crate) fn name_of(key: &str) -> &'static str {
     let (en, de) = md_core::settings::label(key);
     t(en, de)
 }
