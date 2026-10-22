@@ -166,7 +166,8 @@ saves nothing, at 1 in 4 it saves a third of the peak memory for about a quarter
 (20 000 traces) the peak memory falls from 2.8 GiB to 0.3 GiB at the same detection time.
 `reorder_peaks` keeps a running f64 sum per profile, so a join adds one member instead of re-adding all.
 `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
-corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
+corrupt file cannot exhaust memory, and above `MAX_TRACE_CELLS` (8 G masses × scans, sparse too: detection
+reads every cell), so a corrupt exact-mass file with a distinct m/z per point cannot run for minutes. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
 
 `PeakSettings::detector` selects the old "Matched Filtering" method instead (`Detector::Matched`, old

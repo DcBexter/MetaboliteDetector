@@ -124,7 +124,7 @@ retention time shift is not finite	Die Verschiebung der Retentionszeit ist keine
 not a number	Keine Zahl
 expected two numbers: retention time (ms) and RI	Zwei Zahlen erwartet: Retentionszeit (ms) und RI
 # peaks.rs
-ion index of {} masses x {} scans needs more than {} GiB	Der Ionenindex aus {} Massen x {} Scans braucht mehr als {} GiB
+ion index of {} masses x {} scans needs more than {} GiB or {} Gi cells	Der Ionenindex aus {} Massen x {} Scans braucht mehr als {} GiB oder {} Gi Zellen
 # settings.rs
 {}: value out of range	{}: Wert außerhalb des Bereichs
 {}: must be between {} and {}	{}: muss zwischen {} und {} liegen

@@ -9,7 +9,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Run** | Ein GC-MS-Lauf: eine Datei (ANDI-MS `.cdf`, FastFlight, alter Cache) mit Scans, Zeiten und Spektren. | `md_core::Chromatogram` |
 | **Derivative cache** | Erste Ableitung von TIC/SIC, je Run einmal beim ersten Zeichnen berechnet; das SIC-Feld wird mit einem neuen SIC geleert. | `Run::d_tic`, `Run::d_sic` (md-app) |
 | **Scan** | Ein Spektrum zu einem Zeitpunkt des Runs; m/z innerhalb des Scans sortiert. | `Chromatogram` (flache Arrays mit Scan-Offsets) |
-| **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut, dicht oder (bei dünn besetzten Exact-Mass-Runs) sparse. | `md_core::peaks::IonTraces`, `trace(row, scans, buf)` |
+| **Ion trace** | Intensität einer (nominalen oder exakten) Masse über alle Scans. Einmal pro Run als ion-major Index gebaut, dicht oder (bei dünn besetzten Exact-Mass-Runs) sparse. Über `MAX_TRACE_BYTES` oder `MAX_TRACE_CELLS` gibt es `TooLarge`. | `md_core::peaks::IonTraces`, `trace(row, scans, buf)` |
 | **Peak** | Ein Maximum in einem Ion trace mit Grenzen, Apex, interpoliertem Apex und S/N. | `md_core::peaks::Peak` |
 | **Peak pass** | Welche Peak-Erkennung ein Aufrufer will: *Reordered* (Hauptfenster und Batch, `detect_all_peaks` mit `reorder_peaks` auf Exact-Mass-Runs) oder *Fresh* (Rescan, `detect_peaks` wie das alte `ResultSeries::scanIons`). | `md_core::analysis::PeakPass` |
 | **Component** | Ein deconvolvierter Stoff: Peaks mehrerer Ion traces mit gemeinsamer Retentionszeit, Modellpeak und Spektrum. | `md_core::deconv::Component` |

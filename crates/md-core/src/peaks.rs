@@ -308,8 +308,12 @@ const SPARSE_FILL_RATIO: usize = 4;
 /// a corrupt file with huge scan or mass counts must fail instead of exhausting memory.
 pub const MAX_TRACE_BYTES: usize = 8 << 30;
 
+/// Upper bound for masses × scans, sparse or not: detection reads every cell once (about 2 s at the
+/// bound), so a corrupt exact-mass file with a distinct m/z per point must fail instead of running O(n²).
+pub const MAX_TRACE_CELLS: usize = 8 << 30;
+
 #[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
-#[error("ion index of {masses} masses x {scans} scans needs more than {} GiB", MAX_TRACE_BYTES >> 30)]
+#[error("ion index of {masses} masses x {scans} scans needs more than {} GiB or {} Gi cells", MAX_TRACE_BYTES >> 30, MAX_TRACE_CELLS >> 30)]
 pub struct TooLarge {
     pub masses: usize,
     pub scans: usize,
@@ -445,11 +449,15 @@ impl IonTraces {
             scans,
         };
         let cells = masses.len().checked_mul(scans).ok_or(too_large)?;
-        // Every point fills at most one cell; a sparse cell costs two words, a dense one one.
+        // Every point fills at most one cell; a sparse cell costs two words plus a row header, a dense one one.
         let points = c.mz.len();
         let sparse = sparse.unwrap_or(points.saturating_mul(SPARSE_FILL_RATIO) <= cells);
-        let words = if sparse { 2 * points } else { cells };
-        if words > MAX_TRACE_BYTES / size_of::<f32>() {
+        let words = match sparse {
+            true => (2 * points)
+                .saturating_add(masses.len() * size_of::<Vec<(u32, f32)>>() / size_of::<f32>()),
+            false => cells,
+        };
+        if words > MAX_TRACE_BYTES / size_of::<f32>() || cells > MAX_TRACE_CELLS {
             return Err(too_large);
         }
         // A mass missing from a scan reads the scan's baseline mean unless it is corrected (§4.1).
@@ -1646,5 +1654,22 @@ mod tests {
             IonTraces::new(&c, 0.5).unwrap().store,
             Store::Sparse { .. }
         ));
+        // Corrupt exact-mass file: one distinct m/z per scan, 100 000² cells for detection to walk.
+        let n = 100_000;
+        let corrupt = Chromatogram {
+            scan_times_s: vec![0.0; n],
+            offsets: (0..=n).collect(),
+            mz: (0..n).map(|i| 50.0 + i as f32 * 0.01).collect(),
+            intensity: vec![1.0; n],
+            exact_masses: true,
+            baseline: Default::default(),
+        };
+        assert_eq!(
+            IonTraces::new(&corrupt, 0.5).map(|t| t.len()),
+            Err(TooLarge {
+                masses: n,
+                scans: n
+            })
+        );
     }
 }
