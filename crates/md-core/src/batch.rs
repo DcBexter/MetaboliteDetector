@@ -1739,7 +1739,8 @@ NUM PEAKS: 1
         crate::andi::write(&b, &two_substances()).unwrap();
         let paths = [a, dir.join("missing.cdf"), b];
         let lib = two_substances_library();
-        let s = ScanSettings::default();
+        let mut s = ScanSettings::default();
+        s.analysis.quant.ion_number = 2;
         let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
         let study = Study {
             runs: &paths,
