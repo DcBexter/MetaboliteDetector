@@ -610,6 +610,15 @@ mod tests {
         }
         assert!(app.nist.hits.is_none());
 
+        // LS_CUTOFF is part of the search settings: lowering it prepares the library again and
+        // so restarts the identification, whose key holds the library (#399).
+        let before = app.wanted_search();
+        app.settings.applied.ls_cutoff -= 0.1;
+        assert_eq!(app.wanted_search().cutoff, app.settings.applied.ls_cutoff);
+        assert_ne!(app.wanted_search(), before);
+        assert_ne!(app.nist.lib.as_ref().unwrap().settings, app.wanted_search());
+        app.settings.applied.ls_cutoff += 0.1;
+
         // The fragment values matter only for a library with the pre-filter.
         let lib = app.nist.lib.clone().unwrap();
         app.settings.applied.sql_minimal_number_equal_fragments = 1;

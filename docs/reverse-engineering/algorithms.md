@@ -762,6 +762,7 @@ Ties are broken by pointer order (first strictly greater wins), so tie results a
   - DataTableModel::getData (0x4c88db)
   - CompoundMapper::findCompound (0x4b6e1e..0x4b6e32, hit accepted if overall >= cutoff; Inferred from the comisd/jb)
   - BatchQuantificator::startAnalysis/createLibrary
+- Abweichung in der Neuimplementierung: Suche schneidet bei LS_CUTOFF ab (Issue #399).
 
 ### 5.9 Unknowns (library search)
 

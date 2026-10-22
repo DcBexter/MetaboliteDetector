@@ -16,6 +16,7 @@ The old Qt5/C++ version (3.3, 2020) is the behavioural reference; its features a
 | Parallelism | rayon | Data-parallel loops over scans, ions and files. |
 | Updates | `ureq` (rustls), `serde_json`, `sha2`, `semver`, `tar` + `flate2`, app only | `ureq`: HTTPS to the GitHub API and release assets without a system TLS library; `serde_json`: read the release list; `sha2`: verify downloads against `SHA256SUMS.txt`; `semver`: order versions incl. pre-releases; `tar`: unpack the Linux tar.gz. See [Updates](#updates). |
 | R console | Not ported directly | RInside tied the old app to a Linux R install. Decision (#26): no embedded R. The batch table exports as CSV (`Table::write_csv`, shared by app and md-cli) and `scripts/r/load_results.R` loads it as `data` like the old console. Optional embedded scripting later. |
+| Search cutoff | LS_CUTOFF everywhere, also the main window | one rule; hits below are not kept, lowering the cutoff re-runs the identification (#399) |
 
 ## Layout
 
@@ -860,9 +861,8 @@ are not in the old file; loading keeps their current value. `SF_CENTROID_*` stee
 high-resolution import (`IonTraces::new`), the centroid export, the MSL export and the TOF calibration (#293).
 `SF_PEAK_*`, `SF_MAX_BASE_DEV` and `LS_USE_SCALED_LIB` are dead in 3.3 too (algorithms.md §4b.4); they and
 `AN_MAX_BASE_DEV`, `LS_RESOLUTION` and `QUANT_ION_NUMBER`/`_MIN_DIST_IONS`/`_QUALITY_CUTOFF` are
-stored and shown, but no step reads them yet. The search runs with cutoff 0 like the old GUI (§5.8);
-`LS_CUTOFF` then decides which assigned hit counts as a match in the component list, Find substance and the
-batch. The Settings window also chooses the two libraries and holds the old Appearance switches (axis
+stored and shown, but no step reads them yet. The search cuts off at `LS_CUTOFF` everywhere, unlike the old GUI (§5.8, #399);
+the component list, Find substance and the batch use the same cutoff. The Settings window also chooses the two libraries and holds the old Appearance switches (axis
 titles, m/z labels on the 5 highest peaks in view), which apply at once.
 
 In the app (`crates/md-app/src/settings.rs`, Analysis → Settings…) edits go to a draft until Apply.
