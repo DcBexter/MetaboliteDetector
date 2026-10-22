@@ -24,7 +24,7 @@ use md_core::library::LibraryCompound;
 use md_core::mid::frag_export;
 use md_core::normalize::{Normalization, POOL_GROUP, Pool, apply, pool_mapping_text};
 use md_core::ri::RiCalibration;
-use md_core::settings::{GcmsSettings, keys};
+use md_core::settings::{AnalysisSettings, GcmsSettings, keys};
 use md_core::view::{self, BatchView, BatchViewCache, Line, Mode, Stat, Title};
 
 use crate::Job;
@@ -142,6 +142,8 @@ pub struct Batch {
     samples: Option<Samples>,
     /// The applied settings (Analysis → Settings): scan settings and, when they change, the quant ions.
     applied: GcmsSettings,
+    /// `applied.analysis()`, derived in `use_settings` when `applied` changes.
+    analysis: AnalysisSettings,
     /// Whether the search is by retention time only (Analysis → RI calibration).
     rt_only: bool,
     job: Option<Running>,
@@ -457,6 +459,7 @@ impl Default for Batch {
             quant: QuantSettings::default(),
             samples: None,
             applied: GcmsSettings::default(),
+            analysis: GcmsSettings::default().analysis(),
             rt_only: false,
             job: None,
             scan: None,
@@ -479,11 +482,12 @@ impl Batch {
     pub fn use_settings(&mut self, applied: &GcmsSettings, rt_only: bool) {
         self.rt_only = rt_only;
         if self.applied != *applied {
-            let quant = applied.analysis().quant;
-            if quant != self.applied.analysis().quant {
-                self.quant = quant;
+            let analysis = applied.analysis();
+            if analysis.quant != self.analysis.quant {
+                self.quant = analysis.quant.clone();
             }
             self.applied = applied.clone();
+            self.analysis = analysis;
         }
     }
 
@@ -811,7 +815,7 @@ impl Batch {
 
     /// Whether `lib` was prepared for the search settings and the RT-only mode that apply now.
     fn library_ready(&self, lib: &Library) -> bool {
-        lib.settings == self.applied.analysis().search && lib.prepared.is_rt_only() == self.rt_only
+        lib.settings == self.analysis.search && lib.prepared.is_rt_only() == self.rt_only
     }
 
     /// Progress and Cancel while a scan runs, else Start and what it will use.

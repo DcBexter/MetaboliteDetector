@@ -302,6 +302,7 @@ impl App {
         self.batch
             .window(ctx, self.library.as_ref(), cal, reference);
         self.mid.applied.clone_from(&self.settings.applied);
+        self.mid.analysis.clone_from(&self.settings.analysis);
         self.mid.window(ctx, self.library.as_ref(), cal, reference);
         self.statistics
             .window(ctx, self.batch.shown_table(), self.batch.z_scored());

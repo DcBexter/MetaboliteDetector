@@ -25,8 +25,8 @@ pub struct Source<'a> {
     pub run: &'a Run,
     /// The run's RI calibration, if any.
     pub ri: Option<&'a RiCalibration>,
-    pub quant: QuantSettings,
-    pub search: SearchSettings,
+    pub quant: &'a QuantSettings,
+    pub search: &'a SearchSettings,
 }
 
 impl Source<'_> {
@@ -418,8 +418,8 @@ mod tests {
         let src = Source {
             run: &run,
             ri: None,
-            quant: QuantSettings::default(),
-            search: SearchSettings::default(),
+            quant: &QuantSettings::default(),
+            search: &SearchSettings::default(),
         };
         let mut ed = LibraryEditor::default();
         ed.start_add(&src);
@@ -446,8 +446,8 @@ mod tests {
         let src = Source {
             run: &run,
             ri: None,
-            quant: QuantSettings::default(),
-            search: SearchSettings::default(),
+            quant: &QuantSettings::default(),
+            search: &SearchSettings::default(),
         };
         let mut ed = LibraryEditor::default();
         ed.start_add(&src);

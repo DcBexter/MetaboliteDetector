@@ -195,7 +195,7 @@ impl App {
     }
 
     pub fn open_library(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let s = self.settings.applied.analysis().search;
+        let s = self.settings.analysis.search.clone();
         self.library_job = Some(Job::spawn(ctx, move |_, c| {
             load(&path, s, false, c).map(Arc::new)
         }));
@@ -215,7 +215,7 @@ impl App {
     }
 
     pub fn open_nist(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let s = self.settings.applied.analysis().search;
+        let s = self.settings.analysis.search.clone();
         self.nist.hits = None;
         self.nist.search = None;
         self.nist.job = Some(Job::spawn(ctx, move |_, c| {
@@ -225,7 +225,7 @@ impl App {
 
     /// Takes a loaded NIST library and prepares it again when the search settings change.
     pub fn update_nist(&mut self, ctx: &egui::Context) {
-        let wanted = self.settings.applied.analysis().search;
+        let wanted = &self.settings.analysis.search;
         if let Some(job) = &self.nist.job
             && let Some(result) = job.poll(|| t("NIST library", "NIST-Bibliothek").into())
         {
@@ -243,11 +243,11 @@ impl App {
             self.nist.job = None;
         }
         if let Some(lib) = &self.nist.lib
-            && lib.settings != wanted
+            && lib.settings != *wanted
             && self.nist.job.is_none()
-            && self.nist.failed.as_ref() != Some(&wanted)
+            && self.nist.failed.as_ref() != Some(wanted)
         {
-            let lib = lib.clone();
+            let (lib, wanted) = (lib.clone(), wanted.clone());
             self.nist.hits = None;
             self.nist.search = None;
             self.nist.job = Some(Job::spawn(ctx, move |_, _| {
@@ -294,7 +294,7 @@ impl App {
     /// The settings the library is prepared with. The fragment values steer only the NIST
     /// pre-filter, so changing them does not search a library without it again.
     fn wanted_search(&self) -> SearchSettings {
-        let mut s = self.settings.applied.analysis().search;
+        let mut s = self.settings.analysis.search.clone();
         if let Some(lib) = &self.library
             && !md_core::library::is_nist(&lib.path)
         {
@@ -536,7 +536,7 @@ mod tests {
         let mut app = App::default();
         let nist = load(
             &path,
-            app.settings.applied.analysis().search,
+            app.settings.analysis.search.clone(),
             true,
             &Cancel::default(),
         )
@@ -581,7 +581,8 @@ mod tests {
 
         // Settings that change while a search runs drop its hits too.
         app.nist_search(&ctx);
-        app.settings.applied.sql_minimal_number_equal_fragments = 2;
+        app.settings
+            .edit_applied(|s| s.sql_minimal_number_equal_fragments = 2);
         app.update_nist(&ctx);
         while app.nist.busy() {
             app.update_nist(&ctx);
@@ -591,7 +592,8 @@ mod tests {
 
         // The fragment values matter only for a library with the pre-filter.
         let lib = app.nist.lib.clone().unwrap();
-        app.settings.applied.sql_minimal_number_equal_fragments = 1;
+        app.settings
+            .edit_applied(|s| s.sql_minimal_number_equal_fragments = 1);
         app.library = Some(Arc::new(Library {
             path: "other.msl".into(),
             ..reprepare(&lib, lib.settings.clone(), false, false)
@@ -608,12 +610,13 @@ mod tests {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
         let mut app = App::default();
-        app.settings.applied.ls_cutoff = 0.0;
+        app.settings.edit_applied(|s| s.ls_cutoff = 0.0);
         // The pre-filter of a NIST library needs shared fragments; any one will do.
-        app.settings.applied.sql_minimal_number_equal_fragments = 0;
+        app.settings
+            .edit_applied(|s| s.sql_minimal_number_equal_fragments = 0);
         let lib = load(
             &path,
-            app.settings.applied.analysis().search,
+            app.settings.analysis.search.clone(),
             false,
             &Cancel::default(),
         )
@@ -647,10 +650,11 @@ mod tests {
         let assigned = |app: &App| app.runs[0].ident.as_ref().unwrap().1.assigned[0];
         let score = assigned(&app).expect("assigned at cutoff 0").overall;
         assert!((0.0..1.0).contains(&score));
-        app.settings.applied.ls_cutoff = (score + 1.0) / 2.0;
+        app.settings
+            .edit_applied(|s| s.ls_cutoff = (score + 1.0) / 2.0);
         settle(&mut app);
         assert!(assigned(&app).is_none() && app.error.is_none());
-        app.settings.applied.ls_cutoff = 0.0;
+        app.settings.edit_applied(|s| s.ls_cutoff = 0.0);
         settle(&mut app);
         assert_eq!(assigned(&app).map(|h| h.overall), Some(score));
     }
