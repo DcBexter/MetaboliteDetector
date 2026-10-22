@@ -4,7 +4,7 @@ Source: the old Linux binary 3.3 (`/usr/bin/metabolitedetector_app`), read with 
 `rea-wsl` decompiler crashed on these functions. Addresses are `nm` addresses of that binary (Ghidra = nm +
 0x100000). "Observed" is read from the disassembly; "Not determinable" is what the disassembly does not settle.
 The port is `crates/md-core/src/batch.rs` and its submodules `batch/untargeted.rs` and `batch/rescan.rs`;
-`md-cli` and the app only call them (`complete_scan`). The golden harness (`tools/golden/`) drives the single-run
+`md-cli` and the app only call them (`run_study`). The golden harness (`tools/golden/`) drives the single-run
 pipeline only; there is no way to feed it a batch, so nothing here is compared against live output of the old
 program (Observed from the code only).
 

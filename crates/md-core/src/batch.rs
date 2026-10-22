@@ -1,9 +1,10 @@
 //! Batch quantification: finds the library substances in many runs and builds a substance × run
 //! table (old `BatchQuantificator`, feature-inventory.md F10–F12). Quant ions follow algorithms.md §7.
 //!
-//! Passes: `scan_runs` (expensive, once) keeps per run the identified substances and their ion
-//! integrals; the optional untargeted pass (`untargeted`) pools the unidentified components of all runs
-//! into a temporary library and `rescan` looks for quant ions a run lacks in the ion traces; `table`
+//! Passes, all behind [`run_study`]: pass 1 (`scan_and_keep`, expensive, once) keeps per run the identified
+//! substances and their ion integrals; the optional untargeted pass (`untargeted`) pools the unidentified
+//! components of all runs into a temporary library and `rescan` looks for quant ions a run lacks in the
+//! ion traces, reusing pass 1's peak lists; `table`
 //! (cheap) turns the result into the table, so filters and replicate groups can change without rescanning.
 //! Details of the old program: docs/reverse-engineering/batch-quantification.md.
 
@@ -16,7 +17,7 @@ mod untargeted;
 
 pub use detail::{cell_ions, hit_list, ion_integrals, ions_path, settings_path};
 pub use group_stats::{GroupStats, group_label, group_names, group_stats_path};
-pub use rescan::rescan_runs;
+use rescan::{PeakList, rescan_runs};
 pub use samples::{SampleGroups, SampleTable, path_key, run_key};
 pub use untargeted::add_unknowns;
 
@@ -201,14 +202,15 @@ pub fn scan_chromatogram(
 }
 
 /// [`scan_chromatogram`] that also writes the components to `cmp`, with the RI of the search (as
-/// "Save components…" does); a failed write is the second value and leaves the scan as it is.
+/// "Save components…" does); a failed write is the second value and leaves the scan as it is. The
+/// third is the run's [`PeakList`] for the rescan.
 fn scan_and_save(
     c: Chromatogram,
     lib: &PreparedLibrary,
     s: &ScanSettings,
     cmp: Option<&Path>,
     cancel: &Cancel,
-) -> Result<(Scanned, Option<String>), AnalyzeError> {
+) -> Result<(Scanned, Option<String>, PeakList), AnalyzeError> {
     // The run goes in by value: its spectra are dropped once the ion index is built, which halves the
     // peak memory per run.
     let RunAnalysis {
@@ -216,6 +218,8 @@ fn scan_and_save(
         peaks,
         components: comps,
         masses,
+        fresh,
+        fresh_masses,
     } = analyze_run(c, &s.peaks, &s.deconv, PeakPass::Reordered, cancel)?;
     let scanned = scan_components(&times, &comps, &peaks, lib, s, cancel, |i| masses[i])
         .ok_or(AnalyzeError::Cancelled)?;
@@ -228,7 +232,12 @@ fn scan_and_save(
         (crate::cmp::write_cmp(path, &compounds).err())
             .map(|e| format!("could not save {}: {e}", path.display()))
     });
-    Ok((scanned, failed))
+    let list = PeakList {
+        times,
+        peaks: fresh,
+        masses: fresh_masses,
+    };
+    Ok((scanned, failed, list))
 }
 
 /// The run behind a `.cmp` input: its saved components instead of a deconvolution. The scan times
@@ -307,13 +316,9 @@ fn read_scan_run(path: &Path, s: &ScanSettings) -> Result<Chromatogram, String> 
     Ok(c)
 }
 
-/// Scans every file with at most `parallel` runs in memory at once; each run is analysed in parallel
-/// (rayon) as well. A `.cmp` file stands for a run already analysed: its saved components are searched
-/// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
-/// the result is `None`. Unreadable files are listed as errors and do not stop the batch. With
-/// `s.save_cmp` each deconvoluted run is also saved as `.cmp`; a file that cannot be written, or whose
-/// name another run of the batch also maps to, is an error, and the run's result is kept.
-pub fn scan_runs(
+/// [`scan_and_keep`] without the peak lists.
+#[cfg(test)]
+fn scan_runs(
     paths: &[PathBuf],
     lib: &PreparedLibrary,
     s: &ScanSettings,
@@ -321,6 +326,26 @@ pub fn scan_runs(
     done: &Progress,
     cancel: &Cancel,
 ) -> Option<(Vec<RunResult>, Vec<String>)> {
+    let (runs, errors) = scan_and_keep(paths, lib, s, parallel, false, done, cancel)?;
+    Some((runs.into_iter().map(|r| r.0).collect(), errors))
+}
+
+/// Pass 1: scans every file with at most `parallel` runs in memory at once; each run is analysed in
+/// parallel (rayon) as well. With `keep`, each deconvoluted run comes with its [`PeakList`]. A `.cmp` file stands for a run already analysed: its saved components are searched
+/// as they are. `done` counts finished files. Once `cancel` is set, no further file starts and
+/// the result is `None`. Unreadable files are listed as errors and do not stop the batch. With
+/// `s.save_cmp` each deconvoluted run is also saved as `.cmp`; a file that cannot be written, or whose
+/// name another run of the batch also maps to, is an error, and the run's result is kept.
+#[allow(clippy::type_complexity)]
+fn scan_and_keep(
+    paths: &[PathBuf],
+    lib: &PreparedLibrary,
+    s: &ScanSettings,
+    parallel: usize,
+    keep: bool,
+    done: &Progress,
+    cancel: &Cancel,
+) -> Option<(Vec<(RunResult, Option<PeakList>)>, Vec<String>)> {
     done.set_total(paths.len());
     let next = AtomicUsize::new(0);
     let targets: Vec<Option<PathBuf>> = (paths.iter())
@@ -366,50 +391,56 @@ pub fn scan_runs(
             }
         })
         .collect();
-    let mut out: Vec<(usize, Result<RunResult, String>, Option<String>)> =
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
-                .map(|_| {
-                    scope.spawn(|| {
-                        let mut mine = Vec::new();
-                        while !cancel.is_cancelled() {
-                            let i = next.fetch_add(1, Relaxed);
-                            let Some(path) = paths.get(i) else { break };
-                            let mut failed = clashes[i].clone();
-                            let target = targets[i].as_deref().filter(|_| failed.is_none());
-                            // A panic in one file becomes its error, so the other files are kept.
-                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                match crate::cmp::is_cmp(path) {
-                                    true => scan_saved(path, lib, s, cancel),
-                                    false => read_scan_run(path, s).and_then(|c| {
-                                        let (r, e) = scan_and_save(c, lib, s, target, cancel)
-                                            .map_err(|e| e.to_string())?;
-                                        failed = failed.take().or(e);
-                                        Ok(r)
-                                    }),
-                                }
-                            }))
-                            .unwrap_or_else(|_| Err("analysis crashed".into()))
-                            .map(|r| RunResult {
+    let mut out: Vec<(
+        usize,
+        Result<(RunResult, Option<PeakList>), String>,
+        Option<String>,
+    )> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..parallel.clamp(1, paths.len().max(1)))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    while !cancel.is_cancelled() {
+                        let i = next.fetch_add(1, Relaxed);
+                        let Some(path) = paths.get(i) else { break };
+                        let mut failed = clashes[i].clone();
+                        let target = targets[i].as_deref().filter(|_| failed.is_none());
+                        // A panic in one file becomes its error, so the other files are kept.
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            match crate::cmp::is_cmp(path) {
+                                true => scan_saved(path, lib, s, cancel).map(|r| (r, None)),
+                                false => read_scan_run(path, s).and_then(|c| {
+                                    let (r, e, list) = scan_and_save(c, lib, s, target, cancel)
+                                        .map_err(|e| e.to_string())?;
+                                    failed = failed.take().or(e);
+                                    Ok((r, keep.then_some(list)))
+                                }),
+                            }
+                        }))
+                        .unwrap_or_else(|_| Err("analysis crashed".into()))
+                        .map(|(r, list)| {
+                            let run = RunResult {
                                 path: path.clone(),
                                 found: r.found,
                                 unknown: r.unknown,
                                 calibration: r.calibration,
-                            })
-                            .map_err(|e| format!("{}: {e}", path.display()));
-                            let failed = failed.map(|e| format!("{}: {e}", path.display()));
-                            mine.push((i, r, failed));
-                            done.step();
-                        }
-                        mine
-                    })
+                            };
+                            (run, list)
+                        })
+                        .map_err(|e| format!("{}: {e}", path.display()));
+                        let failed = failed.map(|e| format!("{}: {e}", path.display()));
+                        mine.push((i, r, failed));
+                        done.step();
+                    }
+                    mine
                 })
-                .collect();
-            workers
-                .into_iter()
-                .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-                .collect()
-        });
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    });
     if cancel.is_cancelled() {
         return None;
     }
@@ -425,41 +456,69 @@ pub fn scan_runs(
     Some((runs, errors))
 }
 
-/// What `complete_scan` added to the scanned runs.
+/// Runs in memory at once unless the caller says otherwise.
+pub const DEFAULT_PARALLEL: usize = 4;
+
+/// What [`run_study`] analyses: the runs, the library and how.
+pub struct Study<'a> {
+    /// Run files (`.cdf`, `.bin`, …) or `.cmp` files of runs analysed before.
+    pub runs: &'a [PathBuf],
+    pub library: &'a [LibraryCompound],
+    /// `library` prepared for the search (spectra, or RT only).
+    pub prepared: &'a PreparedLibrary,
+    pub scan: &'a ScanSettings,
+    /// Chooses the quant ions the rescan looks for.
+    pub quant: &'a QuantSettings,
+    /// Look for missing quant ions in the ion traces (`rescan_runs`).
+    pub rescan: bool,
+    /// Runs in memory at once ([`DEFAULT_PARALLEL`]); each run is analysed in parallel anyway.
+    pub parallel: usize,
+}
+
+/// What [`run_study`] found.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Completed {
+pub struct StudyResult {
+    /// The runs that could be read, in input order.
+    pub runs: Vec<RunResult>,
     /// The pooled unknown substances (untargeted); `table` takes them as `extra`.
     pub extra: Vec<LibraryCompound>,
     /// Ions the rescan added.
     pub rescanned: usize,
-    /// Run files the rescan could not read.
+    /// Files that could not be read or saved, scan errors first.
     pub errors: Vec<String>,
 }
 
-/// The passes after `scan_runs`, shared by the app and the command line: pools the unknown
-/// components if `s.untargeted`, then rescans missing quant ions (chosen by `q`) if `rescan` is set.
-/// `None` once `cancel` is set.
-#[allow(clippy::too_many_arguments)]
-pub fn complete_scan(
-    runs: &mut [RunResult],
-    lib: &[LibraryCompound],
-    s: &ScanSettings,
-    q: &QuantSettings,
-    rescan: bool,
-    parallel: usize,
-    cancel: &Cancel,
-) -> Option<Completed> {
-    let extra = if s.untargeted {
-        add_unknowns(runs, lib.len(), s, cancel)?
-    } else {
-        Vec::new()
+/// The batch of the app, its MID window and the command line: pass 1 over every run (with the
+/// shift reference of `scan`), the untargeted pooling if `scan.untargeted`, then the rescan if
+/// `study.rescan`. The rescan reuses pass 1's peak lists and reads only the runs where they show a
+/// peak to look at. `progress` counts the scanned files. `None` once `cancel` is set; a run being
+/// analysed stops at its next stage. The table ([`table`]) stays a separate, cheap step, so its
+/// filters and groups can change without a new study.
+pub fn run_study(study: &Study, progress: &Progress, cancel: &Cancel) -> Option<StudyResult> {
+    let s = study.scan;
+    let (scanned, mut errors) = scan_and_keep(
+        study.runs,
+        study.prepared,
+        s,
+        study.parallel,
+        study.rescan,
+        progress,
+        cancel,
+    )?;
+    let (mut runs, lists): (Vec<_>, Vec<_>) = scanned.into_iter().unzip();
+    let extra = match s.untargeted {
+        true => add_unknowns(&mut runs, study.library.len(), s, cancel)?,
+        false => Vec::new(),
     };
-    let (rescanned, errors) = if rescan {
-        rescan_runs(runs, lib, &extra, s, q, parallel, cancel)?
-    } else {
-        (0, Vec::new())
-    };
-    Some(Completed {
+    let mut rescanned = 0;
+    if study.rescan {
+        let (lib, q, n) = (study.library, study.quant, study.parallel);
+        let (added, e) = rescan_runs(&mut runs, lib, &extra, &lists, s, q, n, cancel)?;
+        rescanned = added;
+        errors.extend(e);
+    }
+    Some(StudyResult {
+        runs,
         extra,
         rescanned,
         errors,
@@ -827,6 +886,7 @@ pub fn table(
 mod tests {
     use super::*;
     use crate::library::parse_msl;
+    use crate::peaks::Detector;
 
     fn ion(mass: u32, integral: f64, quality: f32) -> IonPeak {
         IonPeak {
@@ -1295,7 +1355,7 @@ NUM PEAKS: 1
         let (dir, mut runs, lib) = rescan_fixture("fill");
         let (s, q) = (ScanSettings::default(), QuantSettings::default());
         let cancel = Cancel::default();
-        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &s, &q, 2, &cancel).unwrap();
+        let (added, errors) = rescan_runs(&mut runs, &lib, &[], &[], &s, &q, 2, &cancel).unwrap();
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(runs[1].found.len(), 2, "both substances are completed");
         let t = table(&runs, &lib, &[], &TableSettings::default()).unwrap();
@@ -1313,7 +1373,7 @@ NUM PEAKS: 1
         };
         assert!(table(&runs, &lib, &[], &all).unwrap().rows.is_empty());
         cancel.cancel();
-        assert!(rescan_runs(&mut runs, &lib, &[], &s, &q, 1, &cancel).is_none());
+        assert!(rescan_runs(&mut runs, &lib, &[], &[], &s, &q, 1, &cancel).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1325,11 +1385,11 @@ NUM PEAKS: 1
         // A substance seen in fewer than a quarter of the runs (rounded: 2 of 6) is left alone.
         let mut again = vec![runs[0].clone()];
         again.extend((0..5).map(|_| runs[1].clone()));
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
         assert_eq!(added, 0);
         // At the limit (2 of 6) it is rescanned.
         again[1] = runs[0].clone();
-        let (added, _) = rescan_runs(&mut again, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        let (added, _) = rescan_runs(&mut again, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
         assert!(added > 0);
         // Ions added to an identified component do not count for reproducibility either.
         let mut partial = vec![runs[0].clone(), runs[0].clone()];
@@ -1345,7 +1405,7 @@ NUM PEAKS: 1
         };
         let rows = |runs: &[RunResult], s: &TableSettings| table(runs, &lib, &[], s).unwrap().rows;
         assert!(rows(&partial, &all).is_empty());
-        rescan_runs(&mut partial, &lib, &[], &s, &q, 1, &cancel).unwrap();
+        rescan_runs(&mut partial, &lib, &[], &[], &s, &q, 1, &cancel).unwrap();
         assert!(partial[1].found.iter().all(|f| !f.ions.is_empty()));
         assert!(rows(&partial, &all).is_empty());
         assert!(!rows(&partial, &TableSettings::default()).is_empty());
@@ -1409,6 +1469,7 @@ NUM PEAKS: 1
         let (added, errors) = rescan_runs(
             &mut runs,
             &lib,
+            &[],
             &[],
             &s,
             &QuantSettings::default(),
@@ -1593,5 +1654,107 @@ NUM PEAKS: 1
         assert_eq!(done.done(), 1);
         cancel.cancel();
         assert!(scan_runs(&paths, &lib, &s, 2, &done, &cancel).is_none());
+    }
+
+    /// #363 on synthetic files (also where CI has no example data): two full runs, a run with only
+    /// the three largest ions of each substance (read again by the rescan) and a flat run (no
+    /// candidate peak, not read again). The study equals the passes with a full second detection.
+    #[test]
+    fn study_reuses_pass_one_peaks_like_a_full_rescan() {
+        let dir = std::env::temp_dir().join(format!("md-study-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let full = two_substances();
+        let mut partial = full.clone();
+        let mut flat = full.clone();
+        // Ion i of scan s sits at k = s * 24 + i (`two_substances`).
+        for (k, v) in partial.intensity.iter_mut().enumerate() {
+            if k % 12 < 9 {
+                *v = 1000.0;
+            }
+        }
+        flat.intensity.iter_mut().for_each(|v| *v = 1000.0);
+        let paths: Vec<PathBuf> = ["a", "b", "partial", "flat"]
+            .iter()
+            .map(|n| dir.join(format!("{n}.cdf")))
+            .collect();
+        for (p, c) in paths.iter().zip([&full, &full, &partial, &flat]) {
+            crate::andi::write(p, c).unwrap();
+        }
+        // The matched detector rewrites the traces, so its rescan detects again.
+        for detector in [Detector::default(), Detector::MATCHED] {
+            let r = study_equals_the_passes(&paths, &two_substances_library(), 2, detector);
+            assert!(r.rescanned > 0, "the partial run gets ions");
+            // The flat run has nothing to find, read again or not.
+            assert!(r.runs[3].found.is_empty());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Runs the untargeted study with rescan and checks it against the passes one by one, where
+    /// the rescan reads and detects every run again; a set cancel then ends the study.
+    fn study_equals_the_passes(
+        paths: &[PathBuf],
+        lib: &[LibraryCompound],
+        parallel: usize,
+        detector: Detector,
+    ) -> StudyResult {
+        let mut s = ScanSettings {
+            untargeted: true,
+            ..Default::default()
+        };
+        s.peaks.detector = detector;
+        let (prepared, q) = (
+            PreparedLibrary::new(lib, &s.search),
+            QuantSettings::default(),
+        );
+        let (done, cancel) = (Progress::default(), Cancel::default());
+        let study = Study {
+            runs: paths,
+            library: lib,
+            prepared: &prepared,
+            scan: &s,
+            quant: &q,
+            rescan: true,
+            parallel,
+        };
+        let r = run_study(&study, &done, &cancel).unwrap();
+        assert_eq!((done.done(), r.runs.len()), (paths.len(), paths.len()));
+        let (mut runs, errors) = scan_runs(paths, &prepared, &s, parallel, &done, &cancel).unwrap();
+        let extra = add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap();
+        let (added, more) =
+            rescan_runs(&mut runs, lib, &extra, &[], &s, &q, parallel, &cancel).unwrap();
+        assert!(errors.is_empty() && more.is_empty() && r.errors.is_empty());
+        assert_eq!((r.rescanned, &r.extra, &r.runs), (added, &extra, &runs));
+        let ts = TableSettings::default();
+        assert_eq!(
+            table(&r.runs, lib, &r.extra, &ts).unwrap(),
+            table(&runs, lib, &extra, &ts).unwrap()
+        );
+        cancel.cancel();
+        assert!(run_study(&study, &done, &cancel).is_none());
+        r
+    }
+
+    /// #363 on the 15 example runs: the study, whose rescan reuses pass 1's peak lists, gives the
+    /// runs and the table of the passes one by one with a rescan that reads and detects every run
+    /// again. App, MID window and md-cli all take this one call.
+    #[test]
+    fn study_equals_the_passes_with_a_full_rescan() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../example-data/TargetSearchData/inst/gc-ms-data");
+        let Ok(lib) = crate::library::import_targetsearch(dir.join("library.txt")) else {
+            eprintln!("skipped: {} not found", dir.display());
+            return;
+        };
+        let mut paths: Vec<PathBuf> = (std::fs::read_dir(&dir).unwrap())
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "cdf"))
+            .collect();
+        paths.sort();
+        assert_eq!(paths.len(), 15);
+        assert!(
+            study_equals_the_passes(&paths, &lib, DEFAULT_PARALLEL, Detector::default()).rescanned
+                > 0
+        );
     }
 }

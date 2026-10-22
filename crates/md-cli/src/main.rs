@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use md_core::batch::{
-    RunResult, SampleTable, ShiftReference, TableSettings, complete_scan, ions_path, scan_runs,
-    settings_path, table,
+    DEFAULT_PARALLEL, RunResult, SampleTable, ShiftReference, Study, StudyResult, TableSettings,
+    ions_path, run_study, settings_path, table,
 };
 use md_core::library;
 use md_core::ri::RiCalibration;
@@ -115,7 +115,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Args>, Strin
         settings: None,
         calibration: None,
         output: None,
-        parallel: 4,
+        parallel: DEFAULT_PARALLEL,
         replicates: String::new(),
         sample_table: None,
         sample_file_column: None,
@@ -313,16 +313,22 @@ fn run(a: Args) -> Result<bool, String> {
         None => Box::new(std::io::stdout().lock()),
     };
     let started = Instant::now();
-    let (done, cancel) = (Progress::default(), Cancel::default());
-    let (mut runs, mut errors) =
-        scan_runs(&a.runs, &prepared, &scan, a.parallel, &done, &cancel).ok_or("cancelled")?;
-    let more = complete_scan(
-        &mut runs, &compounds, &scan, &ts.quant, rescan, a.parallel, &cancel,
-    )
-    .ok_or("cancelled")?;
-    errors.extend(more.errors);
-    let table =
-        table(&runs, &compounds, &more.extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
+    let study = Study {
+        runs: &a.runs,
+        library: &compounds,
+        prepared: &prepared,
+        scan: &scan,
+        quant: &ts.quant,
+        rescan,
+        parallel: a.parallel,
+    };
+    let StudyResult {
+        runs,
+        extra,
+        rescanned,
+        errors,
+    } = run_study(&study, &Progress::default(), &Cancel::default()).ok_or("cancelled")?;
+    let table = table(&runs, &compounds, &extra, &ts).map_err(|e| format!("--replicates: {e}"))?;
 
     let paths: Vec<_> = runs.iter().map(|r| r.path.clone()).collect();
     how.extend([
@@ -333,8 +339,8 @@ fn run(a: Args) -> Result<bool, String> {
         ("RT_ONLY", prepared.is_rt_only().to_string()),
         ("SEARCH_CUTOFF", settings.search().cutoff.to_string()),
         ("RUNS_SCANNED", runs.len().to_string()),
-        ("UNKNOWN_SUBSTANCES", more.extra.len().to_string()),
-        ("IONS_ADDED_BY_RESCAN", more.rescanned.to_string()),
+        ("UNKNOWN_SUBSTANCES", extra.len().to_string()),
+        ("IONS_ADDED_BY_RESCAN", rescanned.to_string()),
     ]);
     let io = |e: std::io::Error| format!("output: {e}");
     table.write_csv(&mut out).map_err(io)?;

@@ -13,8 +13,8 @@ use crate::settings::{name_of, row};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use md_core::batch::{
-    Completed, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference, Table,
-    TableSettings, complete_scan, path_key, run_key, scan_runs, table,
+    DEFAULT_PARALLEL, Found, RunResult, SampleGroups, SampleTable, ScanSettings, ShiftReference,
+    Study, StudyResult, Table, TableSettings, path_key, run_key, run_study, table,
 };
 use md_core::batch::{cell_ions, group_stats_path, hit_list, ions_path, settings_path};
 use md_core::library::LibraryCompound;
@@ -27,7 +27,7 @@ use md_core::view::{self, BatchView, BatchViewCache, Line, Mode, Stat, Title};
 use crate::Job;
 use crate::identify::Library;
 
-type Scanned = Option<(Vec<RunResult>, Vec<String>, Completed)>;
+type Scanned = Option<StudyResult>;
 
 struct Running {
     started: Instant,
@@ -497,7 +497,7 @@ impl Default for Batch {
             open: false,
             paths: Vec::new(),
             // 15 example runs: 1.1 s with 1, 0.17 s with 4 (90 MiB), 0.10 s with 15 (189 MiB).
-            parallel: 4,
+            parallel: DEFAULT_PARALLEL,
             options: ScanOptions {
                 untargeted: false,
                 rescan: false,
@@ -588,15 +588,14 @@ impl Batch {
         }
         let Some(job) = &self.job else { return };
         match job.job.poll(|| lang::t("Batch", "Der Batch").into()) {
-            Some(Ok(Some((runs, mut errors, done)))) => {
-                errors.extend(done.errors);
+            Some(Ok(Some(done))) => {
                 self.scan = Some(Scan {
                     lib: job.lib.clone(),
-                    index: hit_index(&runs),
-                    runs: Arc::new(runs),
+                    index: hit_index(&done.runs),
+                    runs: Arc::new(done.runs),
                     extra: Arc::new(done.extra),
                     rescanned: done.rescanned,
-                    errors,
+                    errors: done.errors,
                     took: job.started.elapsed(),
                 });
                 (self.table, self.note) = (None, Msg::default());
@@ -634,17 +633,16 @@ impl Batch {
         let (paths, l, parallel) = (self.paths.clone(), lib.clone(), self.parallel);
         let total = paths.len();
         let job = Job::spawn(ctx, move |done, cancel| {
-            let (mut runs, errors) = scan_runs(&paths, &l.prepared, &s, parallel, done, cancel)?;
-            let more = complete_scan(
-                &mut runs,
-                &l.compounds,
-                &s,
-                &quant,
+            let study = Study {
+                runs: &paths,
+                library: &l.compounds,
+                prepared: &l.prepared,
+                scan: &s,
+                quant: &quant,
                 rescan,
                 parallel,
-                cancel,
-            )?;
-            Some((runs, errors, more))
+            };
+            run_study(&study, done, cancel)
         });
         job.progress.set_total(total);
         self.job = Some(Running {

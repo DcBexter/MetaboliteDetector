@@ -6,7 +6,7 @@ use md_core::job::{Cancel, Progress};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use md_core::batch::{TableSettings, scan_runs, table};
+use md_core::batch::{QuantSettings, Study, TableSettings, run_study, table};
 use md_core::library::parse_msl;
 use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
@@ -75,11 +75,18 @@ fn csv_equals_the_core_table_of_the_example_runs() {
     let settings = GcmsSettings::default();
     let compounds = parse_msl(&msl).unwrap();
     let prepared = PreparedLibrary::new(&compounds, &settings.search());
-    let (done, cancel) = (Progress::default(), Cancel::default());
-    let (found, errors) =
-        scan_runs(&runs, &prepared, &settings.scan(None), 4, &done, &cancel).unwrap();
-    assert!(errors.is_empty(), "{errors:?}");
-    let t = table(&found, &compounds, &[], &TableSettings::default()).unwrap();
+    let study = Study {
+        runs: &runs,
+        library: &compounds,
+        prepared: &prepared,
+        scan: &settings.scan(None),
+        quant: &QuantSettings::default(),
+        rescan: false,
+        parallel: 4,
+    };
+    let found = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
+    assert!(found.errors.is_empty(), "{:?}", found.errors);
+    let t = table(&found.runs, &compounds, &[], &TableSettings::default()).unwrap();
     let mut expected = Vec::new();
     t.write_csv(&mut expected).unwrap();
 

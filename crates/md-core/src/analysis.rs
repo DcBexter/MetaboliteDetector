@@ -23,6 +23,9 @@ pub struct RunPeaks {
     pub traces: IonTraces,
     pub times: Vec<f64>,
     pub peaks: Vec<Peak>,
+    /// [`PeakPass::Fresh`]'s peaks (`peaks` before `reorder_peaks`), whatever the pass: the batch
+    /// rescan reuses them from pass 1.
+    pub fresh: Vec<Peak>,
 }
 
 /// A deconvoluted run: components in detection order, their peaks and each peak's trace mass.
@@ -32,6 +35,9 @@ pub struct RunAnalysis {
     pub components: Vec<Component>,
     /// Mass of the trace of each peak (`peaks[i].row`).
     pub masses: Vec<u32>,
+    /// [`RunPeaks::fresh`] and the trace mass of each.
+    pub fresh: Vec<Peak>,
+    pub fresh_masses: Vec<u32>,
 }
 
 /// Why a run was not analysed.
@@ -58,14 +64,16 @@ pub fn find_run_peaks(
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
     }
-    let peaks = match pass {
-        PeakPass::Reordered => traces.detect_all_peaks(s),
-        PeakPass::Fresh => traces.detect_peaks(s),
-    };
+    let fresh = traces.detect_peaks(s);
+    let mut peaks = fresh.clone();
+    if pass == PeakPass::Reordered {
+        traces.reorder(&mut peaks, s);
+    }
     Ok(RunPeaks {
         traces,
         times,
         peaks,
+        fresh,
     })
 }
 
@@ -82,19 +90,20 @@ pub fn analyze_run(
         traces,
         times,
         peaks,
+        fresh,
     } = find_run_peaks(run, peak_settings, pass, cancel)?;
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
     }
     let components = deconvolute(&traces, &peaks, &times, deconv);
-    let masses = (peaks.iter())
-        .map(|p| traces.masses[p.row as usize])
-        .collect();
+    let mass_of = |p: &[Peak]| p.iter().map(|p| traces.masses[p.row as usize]).collect();
     Ok(RunAnalysis {
+        masses: mass_of(&peaks),
+        fresh_masses: mass_of(&fresh),
         times,
         peaks,
         components,
-        masses,
+        fresh,
     })
 }
 
@@ -157,6 +166,7 @@ mod tests {
                 ..Default::default()
             },
         );
+        let fresh = (IonTraces::new(&c, s.fwhm).unwrap()).detect_peaks(&s);
         for pass in [PeakPass::Reordered, PeakPass::Fresh] {
             let mut traces = IonTraces::new(&c, s.fwhm).unwrap();
             let peaks = match pass {
@@ -177,6 +187,9 @@ mod tests {
                 assert_eq!(a.components, components);
                 assert_eq!(a.times, c.scan_times_s);
                 assert_eq!(a.masses, masses);
+                // The rescan's list, whatever the pass.
+                assert_eq!(a.fresh, fresh);
+                assert_eq!(a.fresh_masses.len(), fresh.len());
             }
         }
         // The pass reaches the result: the reordered apexes differ from the fresh ones.

@@ -481,10 +481,16 @@ impl IonTraces {
     /// (algorithms.md §4.0): [`Self::detect_peaks`], then on exact traces [`reorder_peaks`].
     pub fn detect_all_peaks(&mut self, settings: &PeakSettings) -> Vec<Peak> {
         let mut peaks = self.detect_peaks(settings);
-        if self.exact {
-            reorder_peaks(&mut peaks, self, 10.0, 0.05, settings.number_bins);
-        }
+        self.reorder(&mut peaks, settings);
         peaks
+    }
+
+    /// The second step of [`Self::detect_all_peaks`]: [`reorder_peaks`] on exact traces, nothing on
+    /// nominal ones.
+    pub fn reorder(&self, peaks: &mut [Peak], settings: &PeakSettings) {
+        if self.exact {
+            reorder_peaks(peaks, self, 10.0, 0.05, settings.number_bins);
+        }
     }
 
     pub fn len(&self) -> usize {

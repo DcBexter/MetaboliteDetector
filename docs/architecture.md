@@ -184,7 +184,10 @@ precomputed kernel; `detect_peaks_matched` runs the same detector on a single tr
 and the batch, and its peak stage `find_run_peaks` for the rescan, which keeps the index and deconvolutes
 only small windows. `PeakPass` names the one difference: `Reordered` is the main window and batch
 (`detect_all_peaks`, old `detectAllPeaks(reorder=true)`), `Fresh` is the rescan (`detect_peaks` only,
-like the old `ResultSeries::scanIons`, algorithms.md §4.0). The batch passes its run by value so the
+like the old `ResultSeries::scanIons`, algorithms.md §4.0). Both passes also return the `Fresh` peak list
+(`RunPeaks::fresh`, `RunAnalysis::fresh`), which the batch keeps for its rescan. `cancel` is looked at
+between the stages (index, peaks, deconvolution; the batch library search then checks before each component), so a
+cancelled run stops at the end of its current stage. The batch passes its run by value so the
 spectra are dropped once the index is built; the app lends its run and keeps it for the plots.
 
 ![Detected peaks on four traces of 7235eg04.cdf](images/peaks-7235eg04.svg)
@@ -385,11 +388,13 @@ Conscious deviations:
 ## Batch quantification
 
 `md_core::batch` finds the library substances in many runs (old `BatchQuantificator`, F10–F12) in two
-passes. `scan_runs` reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
+passes behind one call, `run_study(&Study, progress, cancel) -> StudyResult`, which the batch window, the MID
+window and `md-cli` all use (`Study`: runs, library, scan and quant settings, rescan switch, runs in memory,
+default `DEFAULT_PARALLEL` = 4). Pass 1 reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
 a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
 `parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as
-well. Progress and cancel are `md_core::job::Progress` and `Cancel`; cancelling stops before the next file, unreadable files are listed
-and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
+well. Progress and cancel are `md_core::job::Progress` and `Cancel`; cancelling stops the runs in work at their
+next stage and starts no further file; unreadable files are listed and skipped. `table` then builds the substance × run table and is cheap, so the app re-filters without a
 rescan:
 
 - **Quant ions** per substance: the library's manual ions, else its automatic ones, else the old
@@ -407,8 +412,12 @@ rescan:
   was before the run; 12 000 unknowns in 20 runs take 0.07 s on 32 logical cores and 0.47 s on one thread (`examples/perf.rs`).
 - **Rescan** (`rescan_runs`): a substance found in at least a quarter of the runs gets its missing quant ions
   from the ion traces of the runs' files, within ΔRI (`SearchSettings::ri_diff`) around the expected
-  position (old `ResultSeries::scanIons`).
-  `complete_scan` runs both passes for the app and `md-cli`.
+  position (old `ResultSeries::scanIons`). It reuses pass 1's `Fresh` peak list of each run (#363; about
+  750 peaks or 27 KiB per example run), not its ion index: a run whose list has no peak of a missing ion
+  in its window is not read again, and a run read again skips the peak detection (the matched detector
+  rewrites the traces it detects on, so it detects again). The result is the same as with a full second
+  detection (`study_equals_the_passes_with_a_full_rescan` on the 15 example runs). The local
+  deconvolution of each missing ion is most of the rescan time; caching the ion index is not done.
 - **RT shift** (`ScanSettings::shift`): the calibration is shifted per run onto a reference substance.
 
 What the old binary does and what is own choice: `docs/reverse-engineering/batch-quantification.md`.
@@ -449,6 +458,9 @@ memory depends on the runs in memory, not on the study size (`examples/batch.rs`
 (~27 ms per run) is the largest share. Untargeted, the 15 runs give 97 unknown substances besides the 5
 library substances; with the rescan 380 of 1530 cells of 102 substances are filled (435 ions added, 2 ms
 pooling, 1.1 s rescan with 4 in parallel), measured 2026-10-20 with `examples/batch.rs` after #110.
+Reusing the pass-1 peaks (#363) takes the rescan of the 15 runs with 4 in parallel from 80 to 66 ms
+(5 substances) and from 186 to 159 ms (untargeted, 474 ions added), medians of 15 in-process runs on a
+loaded machine, 2026-10-22.
 
 ### Command line (`md-cli`)
 
@@ -513,7 +525,7 @@ counts), ascending by mass, so a loaded component lists its peaks in that order.
 range and values only and the name stays empty: the old program accepts that and gives the component a
 numeric name when it reads it (Observed, `make-reference.sh --reread`; apart from that name, `time_stamp` and
 the check value it rewrites our files byte for byte). Settings changes re-analyse and replace loaded components.
-A `.cmp` is also a batch input (`batch::scan_runs`, file picker and `md-cli`): its components are searched
+A `.cmp` is also a batch input (`batch::run_study`, file picker and `md-cli`): its components are searched
 as saved, with RI and shift correction from the apex times; there is no raw data, so `rescan_runs` skips it.
 A saved component keeps one peak per mass, so where a run has two peaks of a quant mass and only the second
 passes `--min-sn`, the table of the `.cmp` lacks that value.

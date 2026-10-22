@@ -13,10 +13,30 @@ use super::{
     hits_by_compound,
 };
 use crate::Chromatogram;
-use crate::analysis::{AnalyzeError, PeakPass, RunPeaks, find_run_peaks};
+use crate::analysis::{AnalyzeError, PeakPass, find_run_peaks};
 use crate::deconv::{DeconvSettings, deconvolute};
 use crate::library::LibraryCompound;
+use crate::peaks::{Detector, IonTraces, Peak};
 use crate::ri::RiCalibration;
+
+/// Pass 1's [`PeakPass::Fresh`] peaks of a run without its ion index (#363): the rescan reads a run
+/// again only where they show a peak to look at, and then skips the peak detection.
+pub(super) struct PeakList {
+    pub times: Vec<f64>,
+    pub peaks: Vec<Peak>,
+    /// Trace mass of each peak.
+    pub masses: Vec<u32>,
+}
+
+impl PeakList {
+    /// Whether some peak of an ion `todo` looks for lies in its window: else the rescan finds nothing.
+    fn has_candidates(&self, todo: &[Todo]) -> bool {
+        (self.peaks.iter().zip(&self.masses)).any(|(p, m)| {
+            let at = self.times[p.apex_scan as usize];
+            (todo.iter()).any(|t| t.ions.contains(m) && (t.from_s..=t.to_s).contains(&at))
+        })
+    }
+}
 
 /// One substance of one run with quant ions to look for, and where.
 struct Todo {
@@ -36,13 +56,16 @@ type Rescued = (usize, Vec<IonPeak>, f64);
 
 /// Looks for the quant ions each substance lacks in a run (see the module doc) and adds them to the
 /// run's `found`. Substances absent from a run get a `Found` with `rescanned` set. Runs are read
-/// again, at most `parallel` at a time, and only if they have gaps; `.cmp` inputs are skipped. Returns the number of ions
+/// again, at most `parallel` at a time, and only if they have gaps; `.cmp` inputs are skipped.
+/// `lists[i]` (optional, by run) is run `i`'s [`PeakList`] from pass 1. Returns the number of ions
 /// added and the files that could not be read (their runs stay as they were), or `None` once `cancel` is set.
 /// The quant ions come from `q`, as `table` would choose them with the same settings.
+#[allow(clippy::too_many_arguments)]
 pub fn rescan_runs(
     runs: &mut [RunResult],
     lib: &[LibraryCompound],
     extra: &[LibraryCompound],
+    lists: &[Option<PeakList>],
     s: &ScanSettings,
     q: &QuantSettings,
     parallel: usize,
@@ -64,10 +87,15 @@ pub fn rescan_runs(
                             break;
                         };
                         let path = &paths[*i];
+                        let list = lists.get(*i).and_then(Option::as_ref);
+                        if list.is_some_and(|l| !l.has_candidates(todo)) {
+                            mine.push((*i, Ok(Vec::new())));
+                            continue;
+                        }
                         // A panic in one file becomes its error, so the other files are kept.
                         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             super::read_scan_run(path, s).and_then(|c| {
-                                rescan_run(c, todo, s, cancel).map_err(|e| e.to_string())
+                                rescan_run(c, list, todo, s, cancel).map_err(|e| e.to_string())
                             })
                         }))
                         .unwrap_or_else(|_| Err("analysis crashed".into()))
@@ -204,19 +232,33 @@ fn span(v: &[f64]) -> (f64, f64, f64) {
     (lo, hi, v.iter().sum::<f64>() / v.len() as f64)
 }
 
+/// The rescan of one run; `list` is its pass-1 [`PeakList`], if kept.
 fn rescan_run(
     c: Chromatogram,
+    list: Option<&PeakList>,
     todo: &[Todo],
     s: &ScanSettings,
     cancel: &Cancel,
 ) -> Result<Vec<Rescued>, AnalyzeError> {
     // Fresh, not Reordered: the old rescan (`ResultSeries::scanIons`) builds a fresh
     // `DefaultPeakDetector` and never calls `reorderPeaks` (reverse-engineering/algorithms.md:268).
-    let RunPeaks {
-        traces,
-        times,
-        peaks,
-    } = find_run_peaks(c, &s.peaks, PeakPass::Fresh, cancel)?;
+    let (traces, times, peaks) = match list {
+        // The default detector leaves the traces as they are, so pass 1's peaks are what it would
+        // find again; the matched filter rewrites the traces it detects on.
+        Some(l) if !matches!(s.peaks.detector, Detector::Matched { .. }) => {
+            // The run itself, which `find_run_peaks` drops too, is not needed any more.
+            let traces = IonTraces::new(&c, s.peaks.fwhm)?;
+            drop(c);
+            (traces, l.times.clone(), l.peaks.clone())
+        }
+        _ => {
+            let r = find_run_peaks(c, &s.peaks, PeakPass::Fresh, cancel)?;
+            (r.traces, r.times, r.peaks)
+        }
+    };
+    if cancel.is_cancelled() {
+        return Err(AnalyzeError::Cancelled);
+    }
     let at = |k: usize| times[peaks[k].apex_scan as usize];
     let mut by_row: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (k, p) in peaks.iter().enumerate() {
@@ -297,7 +339,6 @@ fn rescan_run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peaks::IonTraces;
     use crate::ri::RiCalibration;
 
     /// A run of `scans` scans at 1 s with traces of masses `mz` and the given Gaussian peaks
@@ -324,6 +365,35 @@ mod tests {
     }
 
     #[test]
+    fn pass_one_peaks_give_the_fresh_result_and_skip_runs_without_candidates() {
+        let c = run(80, &[73.0, 74.0], &[(0, 40.0, 50000.0)]);
+        let todo = |ion, from_s| Todo {
+            compound: 0,
+            ions: vec![ion],
+            from_s,
+            to_s: from_s + 20.0,
+            expected: 40.0,
+            calibration: None,
+        };
+        let (s, cancel) = (ScanSettings::default(), Cancel::default());
+        let r = find_run_peaks(&c, &s.peaks, PeakPass::Fresh, &cancel).unwrap();
+        let list = PeakList {
+            masses: (r.peaks.iter())
+                .map(|p| r.traces.masses[p.row as usize])
+                .collect(),
+            times: r.times,
+            peaks: r.peaks,
+        };
+        assert!(list.has_candidates(&[todo(73, 30.0)]));
+        // Another ion, or the ion outside the window: nothing to read the run for.
+        assert!(!list.has_candidates(&[todo(74, 30.0), todo(73, 50.0)]));
+        let fresh = rescan_run(c.clone(), None, &[todo(73, 30.0)], &s, &cancel).unwrap();
+        assert_eq!(fresh.len(), 1);
+        let reused = rescan_run(c, Some(&list), &[todo(73, 30.0)], &s, &cancel).unwrap();
+        assert_eq!(reused, fresh);
+    }
+
+    #[test]
     fn exact_mass_runs_search_every_trace_of_the_ion() {
         // Three traces of nominal mass 73; only the first has a peak.
         let c = run(100, &[73.047, 73.08, 73.09], &[(0, 50.0, 50000.0)]);
@@ -335,7 +405,14 @@ mod tests {
             expected: 50.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
+        let out = rescan_run(
+            c,
+            None,
+            &[todo],
+            &ScanSettings::default(),
+            &Cancel::default(),
+        )
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1[0].mass, 73);
         assert!((out[0].2 - 50.0).abs() <= 1.0, "{}", out[0].2);
@@ -354,11 +431,25 @@ mod tests {
             calibration: None,
         };
         let c = run(80, &[73.0], &[(0, 31.0, 50000.0), (0, 38.0, 50000.0)]);
-        let out = rescan_run(c, &[todo()], &ScanSettings::default(), &Cancel::default()).unwrap();
+        let out = rescan_run(
+            c,
+            None,
+            &[todo()],
+            &ScanSettings::default(),
+            &Cancel::default(),
+        )
+        .unwrap();
         assert!((out[0].2 - 31.0).abs() <= 1.0, "{}", out[0].2);
         // On equal distance the higher peak wins.
         let c = run(80, &[73.0], &[(0, 30.0, 20000.0), (0, 38.0, 50000.0)]);
-        let out = rescan_run(c, &[todo()], &ScanSettings::default(), &Cancel::default()).unwrap();
+        let out = rescan_run(
+            c,
+            None,
+            &[todo()],
+            &ScanSettings::default(),
+            &Cancel::default(),
+        )
+        .unwrap();
         assert!((out[0].2 - 38.0).abs() <= 1.0, "{}", out[0].2);
     }
 
@@ -377,7 +468,14 @@ mod tests {
             expected: 30.0,
             calibration: Some(cal),
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
+        let out = rescan_run(
+            c,
+            None,
+            &[todo],
+            &ScanSettings::default(),
+            &Cancel::default(),
+        )
+        .unwrap();
         assert!((out[0].2 - 20.0).abs() <= 1.0, "{}", out[0].2);
     }
 
@@ -396,14 +494,14 @@ mod tests {
         let s = ScanSettings::default();
         // Alone, the weak peak has a fit and wins.
         let c = run(80, &[73.047, 73.08], &[(1, 41.0, 3000.0)]);
-        let out = rescan_run(c, std::slice::from_ref(&todo), &s, &Cancel::default()).unwrap();
+        let out = rescan_run(c, None, std::slice::from_ref(&todo), &s, &Cancel::default()).unwrap();
         assert!((out[0].2 - 41.0).abs() <= 0.5, "{}", out[0].2);
         let c = run(
             80,
             &[73.047, 73.08],
             &[(0, 42.0, 50000.0), (1, 41.0, 3000.0)],
         );
-        let out = rescan_run(c, &[todo], &s, &Cancel::default()).unwrap();
+        let out = rescan_run(c, None, &[todo], &s, &Cancel::default()).unwrap();
         assert!((out[0].2 - 42.0).abs() <= 0.5, "{}", out[0].2);
         assert!(out[0].1[0].integral > 100_000.0, "{}", out[0].1[0].integral);
     }
@@ -436,7 +534,7 @@ mod tests {
             expected: 40.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &s, &Cancel::default()).unwrap();
+        let out = rescan_run(c, None, &[todo], &s, &Cancel::default()).unwrap();
         assert_eq!(out[0].1[0].integral, raw);
         assert!((out[0].2 - 40.0).abs() <= 0.5, "{}", out[0].2);
     }
@@ -462,7 +560,14 @@ mod tests {
             expected: 313.0,
             calibration: None,
         };
-        let out = rescan_run(c, &[todo], &ScanSettings::default(), &Cancel::default()).unwrap();
+        let out = rescan_run(
+            c,
+            None,
+            &[todo],
+            &ScanSettings::default(),
+            &Cancel::default(),
+        )
+        .unwrap();
         assert!((out[0].2 - apex).abs() < 0.11, "{} vs {apex}", out[0].2);
     }
 
