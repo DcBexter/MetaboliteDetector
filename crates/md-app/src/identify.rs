@@ -635,7 +635,10 @@ mod tests {
                 if app.library_job.is_none() && app.runs[0].ident_job.is_none() {
                     break;
                 }
-                assert!(std::time::Instant::now() < deadline, "identification jobs did not finish");
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "identification jobs did not finish"
+                );
                 std::thread::yield_now();
             }
         };
