@@ -15,7 +15,7 @@ use md_core::deconv::Component;
 use md_core::job::Cancel;
 use md_core::library::LibraryCompound;
 use md_core::ri::{RiCalibration, applicable, marker_peaks, match_mix, series_points};
-use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_cancellable};
+use md_core::search::{PreparedLibrary, SearchSettings, map_compounds_to_library};
 
 use crate::identify::Library;
 use crate::{Run, Slot};
@@ -767,7 +767,7 @@ fn find_mix(
         use_spec: true,
         ..s.clone()
     };
-    let id = map_compounds_cancellable(comps, None, &PreparedLibrary::new(&mix, s), s, cancel)?;
+    let id = map_compounds_to_library(comps, None, &PreparedLibrary::new(&mix, s), s, cancel)?;
     let rts: Vec<f64> = (comps.iter())
         .map(|c| scan_times_s[c.apex_scan as usize])
         .collect();

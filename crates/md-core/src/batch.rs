@@ -36,7 +36,7 @@ use crate::deconv::Component;
 use crate::library::LibraryCompound;
 use crate::peaks::{IonTraces, Peak};
 use crate::ri::RiCalibration;
-use crate::search::{PreparedLibrary, map_compounds_cancellable, shift_to_reference};
+use crate::search::{PreparedLibrary, map_compounds_to_library, shift_to_reference};
 use crate::settings::AnalysisSettings;
 
 /// Settings of the per-run pass: the single-run defaults, one calibration for every run.
@@ -194,7 +194,8 @@ pub fn ion_peaks_by(k: &Component, peaks: &[Peak], mass_of: impl Fn(usize) -> u3
 
 /// Deconvolutes one run and returns the library substances assigned to its components (and, if
 /// `s.untargeted`, the other components).
-pub fn scan_chromatogram(
+#[cfg(test)]
+pub(crate) fn scan_chromatogram(
     c: Chromatogram,
     lib: &PreparedLibrary,
     s: &ScanSettings,
@@ -242,8 +243,8 @@ fn scan_and_save(
     });
     let list = PeakList {
         times,
-        peaks: fresh,
-        masses: fresh_masses,
+        peaks: fresh.unwrap_or(peaks),
+        masses: fresh_masses.unwrap_or(masses),
     };
     Ok((scanned, failed, list))
 }
@@ -289,7 +290,7 @@ fn scan_components(
     let ris = calibration
         .as_ref()
         .map(|cal| cal.component_ris(times, comps));
-    let id = map_compounds_cancellable(comps, ris.as_deref(), lib, &s.analysis.search, cancel)?;
+    let id = map_compounds_to_library(comps, ris.as_deref(), lib, &s.analysis.search, cancel)?;
     let (mut found, mut unknown) = (Vec::new(), Vec::new());
     for (i, (k, hit)) in comps.iter().zip(&id.assigned).enumerate() {
         if hit.is_none() && !s.untargeted {

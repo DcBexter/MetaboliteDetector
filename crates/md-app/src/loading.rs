@@ -147,7 +147,12 @@ impl App {
             }
             if run.sic_for != Some(key) && run.sic_job.as_ref().map(|j| j.0) != Some(key) {
                 let data = run.data.clone();
-                run.sic_job = Some((key, Job::spawn(ctx, move |_, _| data.sic(key.0, key.1))));
+                run.sic_job = Some((
+                    key,
+                    Job::spawn(ctx, move |_, c| {
+                        data.sic(key.0, key.1, c).unwrap_or_default()
+                    }),
+                ));
             }
         }
     }

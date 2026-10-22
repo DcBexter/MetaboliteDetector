@@ -96,9 +96,8 @@ impl Analysis {
 
 /// Peak detection and deconvolution of one run, components ordered by retention time.
 pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
-    let mut a = analyze_run(data, &key.0, key.2, &key.1, PeakPass::Reordered, cancel)
+    let a = analyze_run(data, &key.0, key.2, &key.1, PeakPass::Reordered, cancel)
         .map_err(|e| e.to_string())?;
-    a.components.sort_by_key(|k| k.apex_scan);
     Ok((a.components, a.masses, a.peaks))
 }
 

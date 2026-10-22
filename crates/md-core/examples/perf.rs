@@ -3,15 +3,16 @@
 //! Default: 60 min at 20 scans/s with 500 ions per scan (36 000 scans, 18 M points, 300 000 peaks,
 //! 12 000 substances).
 
+use std::path::PathBuf;
 use std::time::Instant;
 
-use md_core::job::Cancel;
-
+use md_core::andi;
 use md_core::batch::{
-    Found, IonPeak, RunResult, ScanSettings, Unknown, add_unknowns, scan_chromatogram,
+    Found, IonPeak, RunResult, ScanSettings, Study, Unknown, add_unknowns, run_study,
 };
 use md_core::deconv::{DeconvSettings, deconvolute};
 use md_core::isotope::IsotopeTable;
+use md_core::job::{Cancel, Progress};
 use md_core::library::{LibraryCompound, parse_msl};
 use md_core::mid::{Method, determine, frag_export};
 use md_core::peaks::{Detector, IonTraces, PeakSettings, reorder_peaks};
@@ -55,13 +56,13 @@ fn main() {
     println!("TIC: {:?}", t.elapsed());
 
     let t = Instant::now();
-    let sic = c.sic(73.0, 0.5);
+    let sic = c.sic(73.0, 0.5, &Cancel::default()).unwrap();
     println!("SIC m/z 73: {:?}", t.elapsed());
     // The first call also pays for touching the 137 MiB; the median of repeats shows the per-call cost.
     let mut repeats: Vec<_> = (0..15)
         .map(|_| {
             let t = Instant::now();
-            std::hint::black_box(c.sic(73.0, 0.5));
+            std::hint::black_box(c.sic(73.0, 0.5, &Cancel::default()));
             t.elapsed()
         })
         .collect();
@@ -189,7 +190,7 @@ fn main() {
         };
         let t = Instant::now();
         let prepared = PreparedLibrary::new(&lib, &s);
-        let id = map_compounds_to_library(comps, None, &prepared, &s);
+        let id = map_compounds_to_library(comps, None, &prepared, &s, &Cancel::default()).unwrap();
         println!(
             "library search, {} components x {} entries, cutoff {cutoff} ({} hits, {} assigned): {:?}",
             comps.len(),
@@ -200,29 +201,44 @@ fn main() {
         );
     }
 
-    // Batch: one run end to end (ion traces, peaks, deconvolution, search of all components).
+    // The batch window's study on files: the run written as .cdf, then three copies, so 1 and 4 runs
+    // read the same bytes. Four runs are analysed four at a time.
     let s = ScanSettings::default();
     let prepared = PreparedLibrary::new(&lib, &s.analysis.search);
-    let t = Instant::now();
-    let found = scan_chromatogram(c.clone(), &prepared, &s).unwrap();
-    println!(
-        "batch, one run end to end ({} substances found): {:?}",
-        found.found.len(),
-        t.elapsed()
-    );
+    let dir = std::env::temp_dir().join(format!("md-perf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let runs: Vec<PathBuf> = (0..4).map(|r| dir.join(format!("run{r}.cdf"))).collect();
+    andi::write(&runs[0], &c).expect("write run");
+    for r in &runs[1..] {
+        std::fs::copy(&runs[0], r).expect("copy run");
+    }
+    let study_row = |label: &str, runs: &[PathBuf], scan: &ScanSettings| {
+        let study = Study {
+            runs,
+            library: &lib,
+            prepared: &prepared,
+            scan,
+            rescan: true,
+            parallel: 4,
+        };
+        let t = Instant::now();
+        let found = run_study(&study, &Progress::default(), &Cancel::default()).unwrap();
+        println!(
+            "run_study, {label} ({} substances found, {} unknown): {:?}",
+            found.runs.iter().map(|r| r.found.len()).sum::<usize>(),
+            found.runs.iter().map(|r| r.unknown.len()).sum::<usize>(),
+            t.elapsed()
+        );
+    };
+    study_row("1 run targeted", &runs[..1], &s);
     // Untargeted: the same run, also keeping the components without library hit.
     let u = ScanSettings {
         untargeted: true,
-        ..s
+        ..ScanSettings::default()
     };
-    let t = Instant::now();
-    let both = scan_chromatogram(c.clone(), &prepared, &u).unwrap();
-    println!(
-        "batch untargeted, one run ({} substances, {} unknown): {:?}",
-        both.found.len(),
-        both.unknown.len(),
-        t.elapsed()
-    );
+    study_row("1 run untargeted", &runs[..1], &u);
+    study_row("4 runs targeted", &runs, &s);
+    std::fs::remove_dir_all(&dir).expect("remove temp dir");
 
     // MID of a labelling experiment: 1 000 substances with two fragments of 8 ions (sum formula
     // C6H12O2 each), found in 200 runs, then the FRAG export of the same table.

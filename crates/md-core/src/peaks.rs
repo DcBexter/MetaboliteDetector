@@ -497,6 +497,11 @@ impl IonTraces {
         peaks
     }
 
+    /// Whether the traces keep exact masses; only then does [`Self::reorder`] change the peaks.
+    pub fn is_exact(&self) -> bool {
+        self.exact
+    }
+
     /// The second step of [`Self::detect_all_peaks`]: [`reorder_peaks`] on exact traces, nothing on
     /// nominal ones.
     pub fn reorder(&self, peaks: &mut [Peak], settings: &PeakSettings) {

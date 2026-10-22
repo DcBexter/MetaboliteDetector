@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use md_core::deconv::{DeconvSettings, deconvolute};
+use md_core::job::Cancel;
 use md_core::peaks::{IonTraces, PeakSettings};
 
 fn runs() -> Vec<PathBuf> {
@@ -262,7 +263,8 @@ fn amino_acids_get_ri_score_with_lib_aa() {
         let peaks = traces.detect_peaks(&PeakSettings::default());
         let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         let ris = cal.component_ris(&c.scan_times_s, &comps);
-        let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+        let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s, &Cancel::default())
+            .unwrap();
         for h in id.assigned.iter().flatten() {
             // Only clear spectrum matches count; weak ones are other substances.
             let (n, ri) = (&lib[h.compound].name, h.ri_sim.unwrap());
@@ -292,7 +294,9 @@ fn amino_acids_get_ri_score_with_lib_aa() {
             assert!((shifted.shift_s - on_time.unwrap().shift_s - 4.0).abs() < 1e-9);
             // Searched with the shifted RIs, the reference is assigned with its full RI score.
             let ris = shifted.component_ris(&late, &comps);
-            let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+            let id =
+                map_compounds_to_library(&comps, Some(&ris), &prepared, &s, &Cancel::default())
+                    .unwrap();
             let h = id.assigned[k.unwrap()].unwrap();
             assert_eq!(
                 (h.compound, h.ri_sim.map(|r| r > 0.999_999)),
@@ -379,7 +383,8 @@ fn mona_msp_finds_the_targets_with_ri() {
             .into_iter()
             .enumerate()
         {
-            let id = map_compounds_to_library(&comps, Some(&ris), prep, s);
+            let id =
+                map_compounds_to_library(&comps, Some(&ris), prep, s, &Cancel::default()).unwrap();
             let mut n = [0usize; 3];
             let mut found = Vec::new();
             for (i, h) in id.assigned.iter().enumerate() {
@@ -489,7 +494,9 @@ fn targetsearch_library_finds_its_targets() {
         for (n, (_, d)) in configs.iter().enumerate() {
             let comps = deconvolute(&traces, &peaks, &c.scan_times_s, d);
             let ris = cal.component_ris(&c.scan_times_s, &comps);
-            let id = map_compounds_to_library(&comps, Some(&ris), &prepared, &s);
+            let id =
+                map_compounds_to_library(&comps, Some(&ris), &prepared, &s, &Cancel::default())
+                    .unwrap();
             for (i, h) in id.assigned.iter().enumerate() {
                 let Some(h) = h.filter(|h| h.overall >= 0.8) else {
                     continue;
@@ -549,7 +556,14 @@ fn result_table_of_a_real_run() {
         })
         .collect();
     let s = SearchSettings::default();
-    let id = map_compounds_to_library(&comps, None, &PreparedLibrary::new(&lib, &s), &s);
+    let id = map_compounds_to_library(
+        &comps,
+        None,
+        &PreparedLibrary::new(&lib, &s),
+        &s,
+        &Cancel::default(),
+    )
+    .unwrap();
     let rows = result_rows(&comps, &c.scan_times_s, None, &masses, &id, &lib, s.cutoff);
     assert_eq!(rows.len(), comps.len());
     for (i, r) in rows.iter().take(3).enumerate() {

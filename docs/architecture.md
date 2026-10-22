@@ -119,7 +119,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    matching the old `GCMSDiskScan<int, float>`. Accumulate sums in `f64`.
 2. **Never block the UI.** File loading and every analysis step run on worker threads; the UI polls
    results and shows progress. Long jobs must be cancellable: every background job is a `jobs::Job`
-   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, and the long md-core steps take the `Cancel` themselves: `fastflight::bin_spectrum` (per scan), `andi::write_with_tic` (per variable), `Chromatogram::sic_cancellable` / `ri::marker_peaks` (per scan) and `map_compounds_cancellable` (per component); a plain file read still runs to its end. Opening runs can be cancelled from the status bar. Each job has a test that a set `Cancel` gives no result (for `write_with_tic`, `bin_spectrum`, `marker_peaks`, `sic_cancellable` and `map_compounds_cancellable` it is set inside the loop with `Cancel::after(n)`, md-core tests only); closing a job's window or dropping the `Job` discards its result. A cancel-checked parallel loop writes into a preallocated `Vec` instead of collecting `Option`s (the latter cost about 1.4 ms per SIC call).
+   with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Each operation has one function that takes the `Cancel` (callers without a job pass `&Cancel::default()`). Cancel is cooperative: a job checks between steps, and the long md-core steps take the `Cancel` themselves: `fastflight::bin_spectrum` (per scan), `andi::write_with_tic` (per variable), `Chromatogram::sic` / `ri::marker_peaks` (per scan) and `map_compounds_to_library` (per component); a plain file read still runs to its end. Opening runs can be cancelled from the status bar. Each job has a test that a set `Cancel` gives no result (for `write_with_tic`, `bin_spectrum`, `marker_peaks`, `sic` and `map_compounds_to_library` it is set inside the loop with `Cancel::after(n)`, md-core tests only); closing a job's window or dropping the `Job` discards its result. A cancel-checked parallel loop writes into a preallocated `Vec` instead of collecting `Option`s (the latter cost about 1.4 ms per SIC call).
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
    The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame; both are freed when the derivative view is switched off.
@@ -149,20 +149,34 @@ Release build, 36 000 scans × 500 ions (18 M points, 137 MiB). Median of 5 alte
 | Deconvolution (12 000 substances of 25 ions) | 19 ms | 20 ms | 20 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 33 ms | 33 ms | 32 ms |
 | Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 243 ms | 70 ms (#370) | 69 ms |
-| Batch, one run end to end (traces, peaks, deconvolution, search) | 282 ms | 338 ms | 312 ms |
-| Batch, untargeted, one run | 283 ms | 341 ms | 318 ms |
+| `run_study`, 1 run targeted, rescan on (file read, traces, peaks, deconvolution, search) | - | - | 419 ms (#405, see below) |
+| `run_study`, 1 run untargeted | - | - | 441 ms (#405) |
+| `run_study`, 4 runs targeted, 4 in parallel | - | - | 1 277 ms (#405) |
 | Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | not measured (no case in `f16f0a7`; dense peak memory 2.8 GiB) | 459 / 461 / 48 ms (#369, earlier session) | not re-measured |
 
-SIC was the regression: `sic_cancellable` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
+#405 (one session, 6 alternating pairs of `cargo run --release -p md-core --example perf`, medians, `fab16d3` (main) before and this branch after; the batch rows came from a `scan_chromatogram` that is test-only now, so they are replaced by the `run_study` rows). The machine was noisy: the TIC row moved although its code did not change, so differences below about 10 % are not significant.
+
+| Operation | main (before) | #405 (after) |
+|---|---|---|
+| `run_study`, 1 run targeted, rescan on | 426 ms | 419 ms |
+| `run_study`, 1 run untargeted | 437 ms | 441 ms |
+| `run_study`, 4 runs targeted | 1 267 ms | 1 277 ms |
+| Ion traces (500) | 26.0 ms | 26.7 ms |
+| Peaks in all traces | 17.2 ms | 18.7 ms |
+| Deconvolution | 23.1 ms | 23.8 ms |
+
+The removed `fresh.clone()` copied one peak list per run; that is not measurable at this size. The gain is the cleaner interface and no copy on nominal traces.
+
+SIC was the regression: `sic` (#378, `5f7cf5f`) collected `Option`s in its parallel loop, which cost about
 1.4 ms per call. The fix keeps the per-scan `Cancel` check, writes into a preallocated `Vec` and returns `None` at the end;
-`map_compounds_cancellable` now collects its hit lists directly instead of collecting `Option` values, which takes about 8 % off the batch run.
+`map_compounds_to_library` now collects its hit lists directly instead of collecting `Option` values, which takes about 8 % off the batch run.
 Ion traces (#396): the index build called its per-point callback through `dyn FnMut`, which the dense store could not
 inline (#369). The callback is generic now. Median of 7 alternating runs in one session, 36 000 × 500: ion traces 23.0 ms
 before and 20.9 ms after (`f16f0a7`: 20.7 ms); the full batch run (`scan_chromatogram`, median of 5) 102.8 ms before and
 99.3 ms after (`f16f0a7`: 95.1 ms). `examples/perf.rs`, median of 7: ion traces 22.0 ms before and 20.3 ms after
 (`f16f0a7`: 23.9 ms); one batch run 315 ms before and 314 ms after (`f16f0a7`: 303 ms; single runs vary by about ±10 %).
 The step `4f136f9` (#377) does not show in this session: 98.6 ms at `d993ca5` against 97.4 ms there (median of 7).
-Of the batch gap (4.2 ms, about 4 %), the assignment heap of #370 in `map_compounds_cancellable` is a partial cause, about 1.9 ms:
+Of the batch gap (4.2 ms, about 4 %), the assignment heap of #370 in `map_compounds_to_library` is a partial cause, about 1.9 ms:
 the search over the 12 000 components of the run takes 21.2 ms here against 19.3 ms in `f16f0a7` (3 runs). The heap stays on purpose: the pair
 list it replaced needed 16 bytes per hit (about 144 MB at cutoff 0). The rest of the gap, about 2 ms, is not explained.
 Tracked in #396.
@@ -361,7 +375,7 @@ entry: the pure score is a cosine over all peaks of both spectra, the impure sco
 (peaks without a partner are weighted with `LS_SCALE_FACTOR_NO_MATCH`), the spectrum score is
 `0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
 Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
-components in parallel (`map_compounds_cancellable` checks `Cancel` before each component and returns `None` once set; the batch scan uses it) and then assigns library compounds greedily by best overall score, each library compound
+components in parallel (`map_compounds_to_library` checks `Cancel` before each component and returns `None` once set; the batch scan uses it) and then assigns library compounds greedily by best overall score, each library compound
 and each component at most once. The assignment does not build or sort the list of all (component, hit) pairs:
 each component's hits are already best first, so a heap over the components' current best pairs takes them in
 the same order (ties: lower library index, then lower component index) and gives the same result bit for bit
