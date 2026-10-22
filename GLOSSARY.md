@@ -19,7 +19,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Retention index (RI)** | Zeitnormierung über Alkan-Marker; Kalibrierung RT zu RI. | `md_core::ri` |
 | **Study** | Viele Runs einer Fragestellung, die gemeinsam quantifiziert werden: Runs, Library, Scan- und Quant-Settings, Rescan ja/nein. Ein Aufruf für Batch-Fenster, MID-Fenster und md-cli. | `md_core::batch::{Study, run_study, StudyResult}` |
 | **Batch** | Die Quantifizierung einer Study: Substanz × Run Tabelle mit Quant-Ionen. | `md_core::batch::{run_study, table}` |
-| **Rescan** | Zweiter Pass des Batch: fehlende Substanzen werden je Run an der erwarteten RT mit frischen Peaks nachgesucht. Nutzt die Fresh-Peak-Liste aus Pass 1, nicht den Ion-Index; liest einen Run nur, wenn dort ein Kandidat liegt. | `md_core::batch::rescan` |
+| **Rescan** | Zweiter Pass des Batch: fehlende Substanzen werden je Run an der erwarteten RT mit frischen Peaks nachgesucht. Nutzt die Fresh-Peak-Liste aus Pass 1, nicht den Ion-Index; liest einen Run nur, wenn dort ein Kandidat liegt. | `md_core::batch::rescan::rescan_runs` |
 | **Quant ion** | Die Masse, deren Peakfläche eine Substanz im Batch quantifiziert. | `QuantSettings` |
 | **Normalisierung** | Umrechnung der Batch-Tabelle (interner Standard, Gesamtsignal, Pool, z-Score). | `md_core::normalize` |
 | **MID** | Mass isotopomer distribution: Verteilung der Markierung je Fragment, korrigiert um natürliche Isotope. | `md_core::mid` |
