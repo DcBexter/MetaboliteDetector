@@ -159,9 +159,9 @@ before and 20.9 ms after (`f16f0a7`: 20.7 ms); the full batch run (`scan_chromat
 99.3 ms after (`f16f0a7`: 95.1 ms). `examples/perf.rs`, median of 7: ion traces 22.0 ms before and 20.3 ms after
 (`f16f0a7`: 23.9 ms); one batch run 315 ms before and 314 ms after (`f16f0a7`: 303 ms; single runs vary by about ±10 %).
 The step `4f136f9` (#377) does not show in this session: 98.6 ms at `d993ca5` against 97.4 ms there (median of 7).
-The rest of the batch gap (about 4 %) is the assignment heap of #370 in `map_compounds_cancellable`: the search over the
-12 000 components of the run takes 21.2 ms here against 19.3 ms in `f16f0a7` (3 runs). The heap stays on purpose: the pair
-list it replaced needed 16 bytes per hit (about 144 MB at cutoff 0). About 2 ms of the batch gap is not explained.
+Of the batch gap (4.2 ms, about 4 %), the assignment heap of #370 in `map_compounds_cancellable` is a partial cause, about 1.9 ms:
+the search over the 12 000 components of the run takes 21.2 ms here against 19.3 ms in `f16f0a7` (3 runs). The heap stays on purpose: the pair
+list it replaced needed 16 bytes per hit (about 144 MB at cutoff 0). The rest of the gap, about 2 ms, is not explained.
 Tracked in #396.
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
