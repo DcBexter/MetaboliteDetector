@@ -226,10 +226,10 @@ fn run(a: Args) -> Result<bool, String> {
         .transpose()?;
     let compounds =
         library::open(&a.library).map_err(|e| format!("{}: {e}", a.library.display()))?;
-    let prepared = PreparedLibrary::new(&compounds, &settings.analysis().search)
+    let mut scan = settings.scan(calibration);
+    let prepared = PreparedLibrary::new(&compounds, &scan.analysis.search)
         .with_fragment_filter(library::is_nist(&a.library));
 
-    let mut scan = settings.scan(calibration);
     let mut ts = TableSettings {
         replicates: a.replicates,
         ..Default::default()

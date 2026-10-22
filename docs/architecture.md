@@ -413,7 +413,7 @@ Conscious deviations:
 
 `md_core::batch` finds the library substances in many runs (old `BatchQuantificator`, F10–F12) in two
 passes behind one call, `run_study(&Study, progress, cancel) -> StudyResult`, which the batch window, the MID
-window and `md-cli` all use (`Study`: runs, library, scan and quant settings, rescan switch, runs in memory,
+window and `md-cli` all use (`Study`: runs, library, scan settings (which carry the quant settings), rescan switch, runs in memory,
 default `DEFAULT_PARALLEL` = 4). Pass 1 reads each file, runs ion traces, peaks, deconvolution and library search (with RI if
 a calibration is given) and keeps only the assigned substances with their ion integrals. Files go through
 `parallel` worker threads, so at most that many runs are in memory; each run is analysed with rayon as

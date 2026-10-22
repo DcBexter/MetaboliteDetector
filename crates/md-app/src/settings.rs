@@ -19,7 +19,6 @@ use md_core::settings::{ANY, GcmsSettings, MAX_LEN, keys, limits};
 
 use crate::{Job, Run};
 
-/// What the components of a run were computed with.
 /// What the analysis of a run depends on: peak detection, deconvolution and the centroid `fwhm`.
 pub type Key = (PeakSettings, DeconvSettings, f64);
 
