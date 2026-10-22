@@ -237,9 +237,9 @@ fn components_match_old_version() {
     assert_eq!(fitted, 4366, "fitted ions");
 }
 
-/// `fwhm` (`SF_FWHM`) decides which points the centroid sums, so it must reach the centroid stage
-/// that feeds peak detection and deconvolution. One scan with a falling peak; the nominal-mass trace
-/// at 100 holds the centroid sum.
+/// `fwhm` (`SF_FWHM`) decides which points `IonTraces::new` sums into each centroid. One scan with
+/// a falling peak; the nominal-mass trace at 100 holds the centroid sum. This covers the centroid
+/// stage only, not the app or `analyze_run` wiring.
 #[test]
 fn fwhm_reaches_the_centroid_stage() {
     let c = Chromatogram {
