@@ -664,7 +664,7 @@ mod tests {
         assert!((0.0..1.0).contains(&score));
         app.settings.applied.ls_cutoff = (score + 1.0) / 2.0;
         settle(&mut app);
-        assert!(assigned(&app).is_none());
+        assert!(assigned(&app).is_none() && app.error.is_none());
         app.settings.applied.ls_cutoff = 0.0;
         settle(&mut app);
         assert_eq!(assigned(&app).map(|h| h.overall), Some(score));
