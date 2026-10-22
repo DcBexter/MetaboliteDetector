@@ -204,7 +204,7 @@ struct Run {
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
     sic_job: Option<(SicKey, Job<Vec<f64>>)>,
-    /// First derivative of `tic` and `sic`, filled by the first frame that draws it; `sic` is cleared with a new SIC.
+    /// First derivative of `tic` and `sic`, filled by the first frame that draws it; `sic` is cleared with a new SIC. Freed when the derivative view is off.
     d_tic: OnceCell<Vec<f64>>,
     d_sic: OnceCell<Vec<f64>>,
     /// Deconvoluted substances with the applied settings, ordered by retention time.

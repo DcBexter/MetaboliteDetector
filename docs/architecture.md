@@ -119,7 +119,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, so one md-core call (file read or write, summing a run) runs to its end; closing a job's window or dropping the `Job` discards its result.
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
-   The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame.
+   The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame; both are freed when the derivative view is switched off.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
 5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Peak detection
    and deconvolution share one ion-major index per run (`IonTraces`) instead of rescanning spectra per ion.

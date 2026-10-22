@@ -311,11 +311,22 @@ impl App {
         });
     }
 
+    /// Drops the cached derivatives once the view no longer shows them.
+    fn free_derivatives(&mut self) {
+        if !self.view.derivative {
+            for run in &mut self.runs {
+                run.d_tic.take();
+                run.d_sic.take();
+            }
+        }
+    }
+
     fn chromatogram_area(&mut self, ui: &mut egui::Ui) {
         self.trace_controls(ui);
         ui.horizontal_wrapped(|ui| {
             self.view.nav = view::nav_buttons(ui, &chromatogram_help());
             self.view.controls(ui);
+            self.free_derivatives();
             if ui.button(t("Run info", "Laufinfo")).clicked() {
                 self.view.info_open = true;
             }
@@ -738,6 +749,22 @@ mod tests {
         app.mz += 1.0;
         settle(&mut app);
         assert!(app.runs[0].d_sic.get().is_none());
+    }
+
+    #[test]
+    fn leaving_the_derivative_view_frees_the_cache() {
+        let mut app = App::default();
+        app.runs.push(crate::results::tests::run());
+        app.view.derivative = true;
+        let run = &app.runs[0];
+        super::run_points(run, (&run.tic, &run.d_tic), &app.view, (0.0, 1e9), 800);
+        run.d_sic.set(vec![0.0]).unwrap(); // the fixture's SIC is empty
+        assert!(run.d_tic.get().is_some() && run.d_sic.get().is_some());
+        app.free_derivatives();
+        assert!(app.runs[0].d_tic.get().is_some(), "still shown");
+        app.view.derivative = false;
+        app.free_derivatives();
+        assert!(app.runs[0].d_tic.get().is_none() && app.runs[0].d_sic.get().is_none());
     }
 
     /// `cargo test --release -p metabolite-detector frame_time -- --ignored --nocapture`
