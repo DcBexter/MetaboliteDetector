@@ -4,7 +4,7 @@
 
 use std::cell::OnceCell;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
@@ -46,7 +46,7 @@ mod update;
 mod vector;
 mod view;
 
-use jobs::{poll_job, spawn};
+use jobs::Job;
 use lang::Msg;
 
 fn main() -> eframe::Result {
@@ -107,7 +107,9 @@ struct App {
     runs: Vec<Run>,
     /// Index into `runs` whose scan cursor and spectrum are shown.
     active: usize,
-    loading: Vec<(PathBuf, mpsc::Receiver<Result<Loaded, Msg>>)>,
+    loading: Vec<(PathBuf, Job<Result<Loaded, Msg>>)>,
+    /// The single-run NetCDF export of the File menu.
+    export_job: Option<Job<Result<(), Msg>>>,
     load_started: Option<Instant>,
     load_note: lang::Msg,
     error: Option<lang::Msg>,
@@ -149,6 +151,7 @@ impl Default for App {
             runs: Vec::new(),
             active: 0,
             loading: Vec::new(),
+            export_job: None,
             load_started: None,
             load_note: lang::Msg::default(),
             error: None,
@@ -200,7 +203,7 @@ struct Run {
     /// SIC for the (m/z, tolerance) in `sic_for`; recomputed on a worker thread when that changes.
     sic: Vec<f64>,
     sic_for: Option<SicKey>,
-    sic_job: Option<(SicKey, mpsc::Receiver<Vec<f64>>)>,
+    sic_job: Option<(SicKey, Job<Vec<f64>>)>,
     /// First derivative of `tic` and `sic`, filled by the first frame that draws it; `sic` is cleared with a new SIC.
     d_tic: OnceCell<Vec<f64>>,
     d_sic: OnceCell<Vec<f64>>,
@@ -265,6 +268,12 @@ impl App {
     /// Collects finished background work before drawing.
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         self.poll_loading();
+        if let Some(r) = (self.export_job.as_ref())
+            .and_then(|j| j.poll(|| lang::t("The export", "Der Export").into()))
+        {
+            self.error = r.and_then(|r| r).err();
+            self.export_job = None;
+        }
         if let Some(e) = self.settings.update_runs(ctx, &mut self.runs) {
             self.error = Some(e);
         }
