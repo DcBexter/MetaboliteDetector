@@ -315,6 +315,92 @@ pub struct TooLarge {
     pub scans: usize,
 }
 
+/// Rows per build task: each task owns a block of rows and walks the matching m/z range of every
+/// scan once.
+const BLOCK: usize = 8;
+
+/// Calls `put(row in block, scan, value)` for every point of the rows `block` (their m/z) in scan
+/// order. `row_of` maps a nominal mass to its row (unit resolution), `None` for exact traces.
+/// The first point of a cell replaces the missing value, later ones (always next in m/z order) add up.
+fn walk_block(
+    c: &Chromatogram,
+    row_of: Option<&[usize]>,
+    block: &[f32],
+    put: &mut dyn FnMut(usize, usize, f32),
+) {
+    let (first, last) = (block[0], block[block.len() - 1]);
+    for s in 0..c.scan_count() {
+        let (m, i) = c.spectrum(s);
+        let Some(row_of) = row_of else {
+            let a = m.partition_point(|x| *x < first);
+            for (mz, int) in m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last) {
+                put(block.partition_point(|x| x < mz), s, *int);
+            }
+            continue;
+        };
+        let first_row = row_of[first as usize];
+        let a = m.partition_point(|x| *x < first - 0.5);
+        for (mz, int) in m[a..]
+            .iter()
+            .zip(&i[a..])
+            .take_while(|(x, _)| **x < last + 0.5)
+        {
+            // Usually one point per nominal mass and scan, so f32 sums stay exact.
+            put(row_of[nominal(*mz).unwrap()] - first_row, s, *int);
+        }
+    }
+}
+
+type Walk<'a> = dyn Fn(&[f32], &mut dyn FnMut(usize, usize, f32)) + Sync + 'a;
+
+fn sparse_store(rows: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+    let mut rows: Vec<Vec<(u32, f32)>> = vec![Vec::new(); rows];
+    rows.par_chunks_mut(BLOCK)
+        .zip(mz.par_chunks(BLOCK))
+        .for_each(|(rows, block)| {
+            // Count first: growing the rows costs more in fresh pages than a second walk.
+            let mut len = [(0usize, usize::MAX); BLOCK];
+            walk(block, &mut |r, s, _| {
+                if len[r].1 != s {
+                    len[r] = (len[r].0 + 1, s);
+                }
+            });
+            (rows.iter_mut().zip(len)).for_each(|(r, n)| r.reserve_exact(n.0));
+            walk(block, &mut |r, s, v| match rows[r].last_mut() {
+                Some(e) if e.0 == s as u32 => e.1 += v,
+                _ => rows[r].push((s as u32, v)),
+            });
+        });
+    Store::Sparse {
+        rows,
+        fill: fill.to_vec(),
+    }
+}
+
+fn dense_store(cells: usize, scans: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+    let mut values = vec![0.0f32; cells];
+    if !fill.is_empty() {
+        (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(fill));
+    }
+    if scans > 0 {
+        values
+            .par_chunks_mut(scans * BLOCK)
+            .zip(mz.par_chunks(BLOCK))
+            .for_each(|(rows, block)| {
+                let mut prev = usize::MAX;
+                walk(block, &mut |r, s, v| {
+                    let cell = r * scans + s;
+                    match cell == prev {
+                        true => rows[cell] += v,
+                        false => rows[cell] = v,
+                    }
+                    prev = cell;
+                });
+            });
+    }
+    Store::Dense(values)
+}
+
 impl IonTraces {
     /// One trace per nominal mass of the centroided scans (`centroided`); centroids of one nominal
     /// mass in a scan are summed. A run with exact masses (FastFlight) gets [`Self::exact`].
@@ -373,77 +459,13 @@ impl IonTraces {
         } else {
             &[]
         };
-        // Each task owns a block of rows and walks the matching m/z range of every scan once.
-        // `put(row in block, scan, value)`: the first point of a cell replaces the missing value,
-        // later ones (always next in m/z order) add up.
-        const BLOCK: usize = 8;
+        let row_of = (!exact).then_some(&row_of[..]);
         let walk = |block: &[f32], put: &mut dyn FnMut(usize, usize, f32)| {
-            let (first, last) = (block[0], block[block.len() - 1]);
-            for s in 0..scans {
-                let (m, i) = c.spectrum(s);
-                if exact {
-                    let a = m.partition_point(|x| *x < first);
-                    for (mz, int) in m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last) {
-                        put(block.partition_point(|x| x < mz), s, *int);
-                    }
-                    continue;
-                }
-                let first_row = row_of[first as usize];
-                let a = m.partition_point(|x| *x < first - 0.5);
-                for (mz, int) in m[a..]
-                    .iter()
-                    .zip(&i[a..])
-                    .take_while(|(x, _)| **x < last + 0.5)
-                {
-                    // Usually one point per nominal mass and scan, so f32 sums stay exact.
-                    put(row_of[nominal(*mz).unwrap()] - first_row, s, *int);
-                }
-            }
+            walk_block(c, row_of, block, put)
         };
-        let store = if sparse {
-            let mut rows: Vec<Vec<(u32, f32)>> = vec![Vec::new(); masses.len()];
-            rows.par_chunks_mut(BLOCK)
-                .zip(mz.par_chunks(BLOCK))
-                .for_each(|(rows, block)| {
-                    // Count first: growing the rows costs more in fresh pages than a second walk.
-                    let mut len = [(0usize, usize::MAX); BLOCK];
-                    walk(block, &mut |r, s, _| {
-                        if len[r].1 != s {
-                            len[r] = (len[r].0 + 1, s);
-                        }
-                    });
-                    (rows.iter_mut().zip(len)).for_each(|(r, n)| r.reserve_exact(n.0));
-                    walk(block, &mut |r, s, v| match rows[r].last_mut() {
-                        Some(e) if e.0 == s as u32 => e.1 += v,
-                        _ => rows[r].push((s as u32, v)),
-                    });
-                });
-            Store::Sparse {
-                rows,
-                fill: fill.to_vec(),
-            }
-        } else {
-            let mut values = vec![0.0f32; cells];
-            if !fill.is_empty() {
-                (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(fill));
-            }
-            if scans > 0 {
-                values
-                    .par_chunks_mut(scans * BLOCK)
-                    .zip(mz.par_chunks(BLOCK))
-                    .for_each(|(rows, block)| {
-                        let mut prev = usize::MAX;
-                        walk(block, &mut |r, s, v| {
-                            let cell = r * scans + s;
-                            match cell == prev {
-                                true => rows[cell] += v,
-                                false => rows[cell] = v,
-                            }
-                            prev = cell;
-                        });
-                    });
-            }
-            Store::Dense(values)
+        let store = match sparse {
+            true => sparse_store(masses.len(), &mz, fill, &walk),
+            false => dense_store(cells, scans, &mz, fill, &walk),
         };
         Ok(Self {
             masses,
