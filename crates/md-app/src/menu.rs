@@ -295,7 +295,7 @@ impl App {
             {
                 let (data, s) = (
                     r.data.clone(),
-                    CentroidSettings::from(&self.settings.applied),
+                    CentroidSettings::from(self.settings.applied()),
                 );
                 self.export_job = Some(Job::spawn(ui.ctx(), move |_, cancel| {
                     export_run(&path, &data, kind, &s, cancel)
