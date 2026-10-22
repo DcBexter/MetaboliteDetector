@@ -1652,6 +1652,80 @@ NUM PEAKS: 1
         assert!(scan_runs(&paths, &lib, &s, 2, &done, &cancel).is_none());
     }
 
+    /// #363 on synthetic files (also where CI has no example data): two full runs, a run with only
+    /// the three largest ions of each substance (read again by the rescan) and a flat run (no
+    /// candidate peak, not read again). The study equals the passes with a full second detection.
+    #[test]
+    fn study_reuses_pass_one_peaks_like_a_full_rescan() {
+        let dir = std::env::temp_dir().join(format!("md-study-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let full = two_substances();
+        let mut partial = full.clone();
+        let mut flat = full.clone();
+        // Ion i of scan s sits at k = s * 24 + i (`two_substances`).
+        for (k, v) in partial.intensity.iter_mut().enumerate() {
+            if k % 12 < 9 {
+                *v = 1000.0;
+            }
+        }
+        flat.intensity.iter_mut().for_each(|v| *v = 1000.0);
+        let paths: Vec<PathBuf> = ["a", "b", "partial", "flat"]
+            .iter()
+            .map(|n| dir.join(format!("{n}.cdf")))
+            .collect();
+        for (p, c) in paths.iter().zip([&full, &full, &partial, &flat]) {
+            crate::andi::write(p, c).unwrap();
+        }
+        let r = study_equals_the_passes(&paths, &two_substances_library(), 2);
+        assert!(r.rescanned > 0, "the partial run gets ions");
+        // The flat run has nothing to find, read again or not.
+        assert!(r.runs[3].found.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Runs the untargeted study with rescan and checks it against the passes one by one, where
+    /// the rescan reads and detects every run again; a set cancel then ends the study.
+    fn study_equals_the_passes(
+        paths: &[PathBuf],
+        lib: &[LibraryCompound],
+        parallel: usize,
+    ) -> StudyResult {
+        let s = ScanSettings {
+            untargeted: true,
+            ..Default::default()
+        };
+        let (prepared, q) = (
+            PreparedLibrary::new(lib, &s.search),
+            QuantSettings::default(),
+        );
+        let (done, cancel) = (Progress::default(), Cancel::default());
+        let study = Study {
+            runs: paths,
+            library: lib,
+            prepared: &prepared,
+            scan: &s,
+            quant: &q,
+            rescan: true,
+            parallel,
+        };
+        let r = run_study(&study, &done, &cancel).unwrap();
+        assert_eq!((done.done(), r.runs.len()), (paths.len(), paths.len()));
+        let (mut runs, errors) = scan_runs(paths, &prepared, &s, parallel, &done, &cancel).unwrap();
+        let extra = add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap();
+        let (added, more) =
+            rescan_runs(&mut runs, lib, &extra, &[], &s, &q, parallel, &cancel).unwrap();
+        assert!(errors.is_empty() && more.is_empty() && r.errors.is_empty());
+        assert_eq!((r.rescanned, &r.extra, &r.runs), (added, &extra, &runs));
+        let ts = TableSettings::default();
+        assert_eq!(
+            table(&r.runs, lib, &r.extra, &ts).unwrap(),
+            table(&runs, lib, &extra, &ts).unwrap()
+        );
+        cancel.cancel();
+        assert!(run_study(&study, &done, &cancel).is_none());
+        r
+    }
+
     /// #363 on the 15 example runs: the study, whose rescan reuses pass 1's peak lists, gives the
     /// runs and the table of the passes one by one with a rescan that reads and detects every run
     /// again. App, MID window and md-cli all take this one call.
@@ -1669,40 +1743,6 @@ NUM PEAKS: 1
             .collect();
         paths.sort();
         assert_eq!(paths.len(), 15);
-        let s = ScanSettings {
-            untargeted: true,
-            ..Default::default()
-        };
-        let (prepared, q) = (
-            PreparedLibrary::new(&lib, &s.search),
-            QuantSettings::default(),
-        );
-        let (done, cancel) = (Progress::default(), Cancel::default());
-        let study = Study {
-            runs: &paths,
-            library: &lib,
-            prepared: &prepared,
-            scan: &s,
-            quant: &q,
-            rescan: true,
-            parallel: DEFAULT_PARALLEL,
-        };
-        let r = run_study(&study, &done, &cancel).unwrap();
-        assert_eq!(done.done(), 15);
-        let (mut runs, errors) = scan_runs(&paths, &prepared, &s, 4, &done, &cancel).unwrap();
-        let extra = add_unknowns(&mut runs, lib.len(), &s, &cancel).unwrap();
-        let (added, more) = rescan_runs(&mut runs, &lib, &extra, &[], &s, &q, 4, &cancel).unwrap();
-        assert!(errors.is_empty() && more.is_empty() && r.errors.is_empty());
-        assert!(added > 0);
-        assert_eq!((r.rescanned, &r.extra), (added, &extra));
-        assert_eq!(r.runs, runs);
-        let ts = TableSettings::default();
-        assert_eq!(
-            table(&r.runs, &lib, &r.extra, &ts).unwrap(),
-            table(&runs, &lib, &extra, &ts).unwrap()
-        );
-        // A set cancel ends the study.
-        cancel.cancel();
-        assert!(run_study(&study, &done, &cancel).is_none());
+        assert!(study_equals_the_passes(&paths, &lib, DEFAULT_PARALLEL).rescanned > 0);
     }
 }
