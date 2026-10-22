@@ -4,6 +4,7 @@
 use rayon::prelude::*;
 
 use crate::Chromatogram;
+use crate::legacy_numeric::{c_int, sg_trunc};
 
 /// The old `AN_*` settings; defaults are the old static values (file-formats.md §5.1).
 /// `AN_MAX_BASE_DEV` is not read by the old peak detector, so it has no field here.
@@ -58,7 +59,7 @@ impl Default for PeakSettings {
 }
 
 /// A peak in one ion trace. Scan numbers are indices into the run; the intensities are
-/// `IonTraces::trace(row)[first_scan..=last_scan]` (filtered values after a matched detection).
+/// `IonTraces::trace(row, first_scan..last_scan + 1, buf)` (filtered values after a matched detection).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Peak {
     /// Row in `IonTraces` (`IonTraces::masses[row]` is the nominal mass, `IonTraces::mz[row]` the exact one).
@@ -92,6 +93,9 @@ impl Peak {
 /// `new` makes one trace per nominal mass, like the old CDF import, which centroids every scan to
 /// nominal masses. `exact` makes one trace per distinct m/z, like the old `GCMSDiskScan` for runs
 /// that keep their exact masses (FastFlight); algorithms.md §4.1.
+///
+/// Dense (masses × scans) or sparse (the points of each row) by the run's fill ratio; readers get a
+/// row through [`Self::trace`] into their own buffer and never see which.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IonTraces {
     /// Nominal mass (m/z rounded) of each row, ascending. Repeats in a high-resolution run.
@@ -102,7 +106,48 @@ pub struct IonTraces {
     /// One trace per exact m/z (`IonTraces::exact`).
     exact: bool,
     scans: usize,
-    values: Vec<f32>,
+    store: Store,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Store {
+    /// masses × scans, row after row.
+    Dense(Vec<f32>),
+    /// Per row the scans that have a point, ascending, with their intensity; every other scan reads
+    /// `fill[scan]` (the missing value; empty = 0).
+    Sparse {
+        rows: Vec<Vec<(u32, f32)>>,
+        fill: Vec<f32>,
+    },
+}
+
+/// Three scratch rows of the calling rayon worker. `map_init` would allocate them per task, nearly
+/// once per row, and fresh scan-long buffers cost page faults (7x slower sparse detection, #369).
+fn with_scratch<R>(f: impl FnOnce(&mut [Vec<f32>; 3]) -> R) -> R {
+    thread_local!(static SCRATCH: std::cell::RefCell<[Vec<f32>; 3]> = Default::default());
+    SCRATCH.with_borrow_mut(f)
+}
+
+/// Scans `range` of a sparse row into `buf`.
+fn materialize<'a>(
+    row: &[(u32, f32)],
+    fill: &[f32],
+    range: std::ops::Range<usize>,
+    buf: &'a mut Vec<f32>,
+) -> &'a [f32] {
+    buf.clear();
+    match fill.is_empty() {
+        true => buf.resize(range.len(), 0.0),
+        false => buf.extend_from_slice(&fill[range.clone()]),
+    }
+    let a = row.partition_point(|(s, _)| (*s as usize) < range.start);
+    for (s, v) in row[a..]
+        .iter()
+        .take_while(|(s, _)| (*s as usize) < range.end)
+    {
+        buf[*s as usize - range.start] = *v;
+    }
+    buf
 }
 
 const MASS_LIMIT: usize = 1 << 16;
@@ -213,7 +258,7 @@ fn centroid_scan(m: &[f32], v: &[f32], fwhm: f64, out: &mut Vec<(f32, f32)>) {
             (mz, sum)
         };
         if mz >= 0.0 {
-            out.push((mz as f32, (sum + 0.5).trunc() as f32)); // C `(int)` truncates
+            out.push((mz as f32, c_int(sum + 0.5) as f32));
         }
         i += 1;
     }
@@ -256,7 +301,11 @@ fn centroided(c: &Chromatogram, fwhm: f64) -> Option<Chromatogram> {
     })
 }
 
-/// Upper bound for the ion-major index (masses × scans × 4 bytes). Real runs need well under 1 GiB;
+/// A run that fills at most 1 in this many cells of its index gets the sparse store: from there it
+/// saves memory for little time (measured with `examples/perf.rs`, docs/architecture.md).
+const SPARSE_FILL_RATIO: usize = 4;
+
+/// Upper bound for the ion-major index (masses × scans × 4 bytes, or 8 bytes per point sparse). Real runs need well under 1 GiB;
 /// a corrupt file with huge scan or mass counts must fail instead of exhausting memory.
 pub const MAX_TRACE_BYTES: usize = 8 << 30;
 
@@ -265,6 +314,92 @@ pub const MAX_TRACE_BYTES: usize = 8 << 30;
 pub struct TooLarge {
     pub masses: usize,
     pub scans: usize,
+}
+
+/// Rows per build task: each task owns a block of rows and walks the matching m/z range of every
+/// scan once.
+const BLOCK: usize = 8;
+
+/// Calls `put(row in block, scan, value)` for every point of the rows `block` (their m/z) in scan
+/// order. `row_of` maps a nominal mass to its row (unit resolution), `None` for exact traces.
+/// The first point of a cell replaces the missing value, later ones (always next in m/z order) add up.
+fn walk_block(
+    c: &Chromatogram,
+    row_of: Option<&[usize]>,
+    block: &[f32],
+    put: &mut dyn FnMut(usize, usize, f32),
+) {
+    let (first, last) = (block[0], block[block.len() - 1]);
+    for s in 0..c.scan_count() {
+        let (m, i) = c.spectrum(s);
+        let Some(row_of) = row_of else {
+            let a = m.partition_point(|x| *x < first);
+            for (mz, int) in m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last) {
+                put(block.partition_point(|x| x < mz), s, *int);
+            }
+            continue;
+        };
+        let first_row = row_of[first as usize];
+        let a = m.partition_point(|x| *x < first - 0.5);
+        for (mz, int) in m[a..]
+            .iter()
+            .zip(&i[a..])
+            .take_while(|(x, _)| **x < last + 0.5)
+        {
+            // Usually one point per nominal mass and scan, so f32 sums stay exact.
+            put(row_of[nominal(*mz).unwrap()] - first_row, s, *int);
+        }
+    }
+}
+
+type Walk<'a> = dyn Fn(&[f32], &mut dyn FnMut(usize, usize, f32)) + Sync + 'a;
+
+fn sparse_store(rows: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+    let mut rows: Vec<Vec<(u32, f32)>> = vec![Vec::new(); rows];
+    rows.par_chunks_mut(BLOCK)
+        .zip(mz.par_chunks(BLOCK))
+        .for_each(|(rows, block)| {
+            // Count first: growing the rows costs more in fresh pages than a second walk.
+            let mut len = [(0usize, usize::MAX); BLOCK];
+            walk(block, &mut |r, s, _| {
+                if len[r].1 != s {
+                    len[r] = (len[r].0 + 1, s);
+                }
+            });
+            (rows.iter_mut().zip(len)).for_each(|(r, n)| r.reserve_exact(n.0));
+            walk(block, &mut |r, s, v| match rows[r].last_mut() {
+                Some(e) if e.0 == s as u32 => e.1 += v,
+                _ => rows[r].push((s as u32, v)),
+            });
+        });
+    Store::Sparse {
+        rows,
+        fill: fill.to_vec(),
+    }
+}
+
+fn dense_store(cells: usize, scans: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+    let mut values = vec![0.0f32; cells];
+    if !fill.is_empty() {
+        (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(fill));
+    }
+    if scans > 0 {
+        values
+            .par_chunks_mut(scans * BLOCK)
+            .zip(mz.par_chunks(BLOCK))
+            .for_each(|(rows, block)| {
+                let mut prev = usize::MAX;
+                walk(block, &mut |r, s, v| {
+                    let cell = r * scans + s;
+                    match cell == prev {
+                        true => rows[cell] += v,
+                        false => rows[cell] = v,
+                    }
+                    prev = cell;
+                });
+            });
+    }
+    Store::Dense(values)
 }
 
 impl IonTraces {
@@ -276,18 +411,19 @@ impl IonTraces {
             return Self::exact(c);
         }
         match centroided(c, fwhm) {
-            Some(cc) => Self::build(&cc, false),
-            None => Self::build(c, false),
+            Some(cc) => Self::build_as(&cc, false, None),
+            None => Self::build_as(c, false, None),
         }
     }
 
     /// One trace per distinct m/z (the old `getSignal` takes the point of exactly that mass; a
     /// missing mass reads [`Chromatogram::missing_value`]). Masses outside the nominal mass range are dropped.
     pub fn exact(c: &Chromatogram) -> Result<Self, TooLarge> {
-        Self::build(c, true)
+        Self::build_as(c, true, None)
     }
 
-    fn build(c: &Chromatogram, exact: bool) -> Result<Self, TooLarge> {
+    /// `sparse`: force a store (tests, perf); `None` picks it by fill ratio.
+    fn build_as(c: &Chromatogram, exact: bool, sparse: Option<bool>) -> Result<Self, TooLarge> {
         let scans = c.scan_count();
         let (masses, mz): (Vec<u32>, Vec<f32>) = if exact {
             let mz = exact_masses(c);
@@ -310,62 +446,34 @@ impl IonTraces {
             scans,
         };
         let cells = masses.len().checked_mul(scans).ok_or(too_large)?;
-        if cells > MAX_TRACE_BYTES / size_of::<f32>() {
+        // Every point fills at most one cell; a sparse cell costs two words, a dense one one.
+        let points = c.mz.len();
+        let sparse = sparse.unwrap_or(points.saturating_mul(SPARSE_FILL_RATIO) <= cells);
+        let words = if sparse { 2 * points } else { cells };
+        if words > MAX_TRACE_BYTES / size_of::<f32>() {
             return Err(too_large);
         }
-        let mut values = vec![0.0f32; cells];
         // A mass missing from a scan reads the scan's baseline mean unless it is corrected (§4.1).
-        if !c.baseline.corrected && c.baseline.means.len() == scans && scans > 0 {
-            (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(&c.baseline.means));
-        }
-        // Each task owns a block of rows and walks the matching m/z range of every scan once.
-        const BLOCK: usize = 8;
-        if scans > 0 {
-            values
-                .par_chunks_mut(scans * BLOCK)
-                .zip(mz.par_chunks(BLOCK))
-                .for_each(|(rows, block)| {
-                    let (first, last) = (block[0], block[block.len() - 1]);
-                    for s in 0..scans {
-                        let (m, i) = c.spectrum(s);
-                        // The first point of a cell replaces the missing value, later ones add up.
-                        let mut prev = usize::MAX;
-                        let mut put = |cell: usize, v: f32| {
-                            match cell == prev {
-                                true => rows[cell] += v,
-                                false => rows[cell] = v,
-                            }
-                            prev = cell;
-                        };
-                        if exact {
-                            let a = m.partition_point(|x| *x < first);
-                            for (mz, int) in
-                                m[a..].iter().zip(&i[a..]).take_while(|(x, _)| **x <= last)
-                            {
-                                put(block.partition_point(|x| x < mz) * scans + s, *int);
-                            }
-                            continue;
-                        }
-                        let first_row = row_of[first as usize];
-                        let a = m.partition_point(|x| *x < first - 0.5);
-                        for (mz, int) in m[a..]
-                            .iter()
-                            .zip(&i[a..])
-                            .take_while(|(x, _)| **x < last + 0.5)
-                        {
-                            let row = row_of[nominal(*mz).unwrap()] - first_row;
-                            // Usually one point per nominal mass and scan, so f32 sums stay exact.
-                            put(row * scans + s, *int);
-                        }
-                    }
-                });
-        }
+        let fill: &[f32] = if !c.baseline.corrected && c.baseline.means.len() == scans && scans > 0
+        {
+            &c.baseline.means
+        } else {
+            &[]
+        };
+        let row_of = (!exact).then_some(&row_of[..]);
+        let walk = |block: &[f32], put: &mut dyn FnMut(usize, usize, f32)| {
+            walk_block(c, row_of, block, put)
+        };
+        let store = match sparse {
+            true => sparse_store(masses.len(), &mz, fill, &walk),
+            false => dense_store(cells, scans, &mz, fill, &walk),
+        };
         Ok(Self {
             masses,
             mz,
             exact,
             scans,
-            values,
+            store,
         })
     }
 
@@ -397,9 +505,37 @@ impl IonTraces {
         self.scans
     }
 
-    /// Intensity of one mass (row) in every scan.
-    pub fn trace(&self, row: usize) -> &[f32] {
-        &self.values[row * self.scans..(row + 1) * self.scans]
+    /// Intensity of one mass (row) in the scans `range`, read into `buf` where the store needs it
+    /// (one buffer per worker).
+    pub fn trace<'a>(
+        &'a self,
+        row: usize,
+        range: std::ops::Range<usize>,
+        buf: &'a mut Vec<f32>,
+    ) -> &'a [f32] {
+        match &self.store {
+            Store::Dense(v) => &v[row * self.scans..][range],
+            Store::Sparse { rows, fill } => materialize(&rows[row], fill, range, buf),
+        }
+    }
+
+    /// A whole row, for tests.
+    #[cfg(test)]
+    pub(crate) fn row(&self, row: usize) -> Vec<f32> {
+        self.trace(row, 0..self.scans, &mut Vec::new()).to_vec()
+    }
+
+    /// Intensity of one mass (row) in one scan.
+    pub fn value(&self, row: usize, scan: usize) -> f32 {
+        match &self.store {
+            Store::Dense(v) => v[row * self.scans + scan],
+            Store::Sparse { rows, fill } => {
+                match rows[row].binary_search_by_key(&(scan as u32), |e| e.0) {
+                    Ok(k) => rows[row][k].1,
+                    Err(_) => fill.get(scan).copied().unwrap_or(0.0),
+                }
+            }
+        }
     }
 
     /// Peaks of every trace, detected in parallel; sorted by row, then scan.
@@ -414,40 +550,65 @@ impl IonTraces {
             return Vec::new();
         }
         let kernel = matched_kernel(4 * width as usize);
-        self.values
-            .par_chunks_mut(self.scans)
-            .enumerate()
-            .map_init(Vec::new, |raw, (row, trace)| {
-                raw.clear();
-                raw.extend_from_slice(trace);
-                let mut peaks = Vec::new();
-                matched_peaks(
-                    raw,
-                    &kernel,
-                    threshold,
-                    settings.number_bins,
-                    trace,
-                    &mut peaks,
-                );
-                peaks.iter_mut().for_each(|p| p.row = row as u32);
+        let scans = self.scans;
+        let detect = |row: usize, raw: &[f32], f: &mut [f32]| {
+            let mut peaks = Vec::new();
+            matched_peaks(raw, &kernel, threshold, settings.number_bins, f, &mut peaks);
+            peaks.iter_mut().for_each(|p| p.row = row as u32);
+            peaks
+        };
+        match &mut self.store {
+            Store::Dense(values) => values
+                .par_chunks_mut(scans)
+                .enumerate()
+                .map(|(row, trace)| {
+                    with_scratch(|[raw, ..]| {
+                        raw.clear();
+                        raw.extend_from_slice(trace);
+                        detect(row, raw, trace)
+                    })
+                })
+                .flat_map_iter(|p| p)
+                .collect(),
+            Store::Sparse { rows, fill } => {
+                // shortcut: the filtered rows keep every non-zero value, which on an uncorrected
+                // baseline can be most scans; store such rows densely if matched runs get large.
+                let peaks = rows
+                    .par_iter_mut()
+                    .enumerate()
+                    .map(|(row, entries)| {
+                        with_scratch(|[raw, f, _]| {
+                            materialize(entries, fill, 0..scans, raw);
+                            f.clear();
+                            f.resize(scans, 0.0);
+                            let peaks = detect(row, raw, f);
+                            *entries = (f.iter().enumerate())
+                                .filter(|(_, v)| v.to_bits() != 0)
+                                .map(|(s, v)| (s as u32, *v))
+                                .collect();
+                            peaks
+                        })
+                    })
+                    .flat_map_iter(|p| p)
+                    .collect();
+                fill.clear();
                 peaks
-            })
-            .flat_map_iter(|p| p)
-            .collect()
+            }
+        }
     }
 
     fn detect_default(&self, settings: &PeakSettings) -> Vec<Peak> {
         (0..self.len())
             .into_par_iter()
-            .map_init(
-                || (Vec::new(), Vec::new()),
-                |(smooth, slope), row| {
+            .map(|row| {
+                with_scratch(|[smooth, slope, buf]| {
                     let mut peaks = Vec::new();
-                    detect_peaks(self.trace(row), settings, smooth, slope, &mut peaks);
+                    let trace = self.trace(row, 0..self.scans, buf);
+                    detect_peaks(trace, settings, smooth, slope, &mut peaks);
                     peaks.iter_mut().for_each(|p| p.row = row as u32);
                     peaks
-                },
-            )
+                })
+            })
             .flat_map_iter(|p| p)
             .collect()
     }
@@ -463,8 +624,8 @@ fn savitzky_golay(v: &[f32], smooth: &mut Vec<f32>, slope: &mut Vec<f32>) {
     slope.clear();
     slope.resize(n, 0.0);
     for (k, w) in v.windows(5).enumerate() {
-        let [a, b, c, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
-        smooth[k + 2] = ((-3.0 * (a + e) + 12.0 * (b + d) + 17.0 * c) / 35.0).trunc() as f32;
+        smooth[k + 2] = sg_trunc([w[0], w[1], w[2], w[3], w[4]]);
+        let [a, b, _, d, e] = [w[0], w[1], w[2], w[3], w[4]].map(f64::from);
         slope[k + 2] = ((-2.0 * a - b + d + 2.0 * e) / 10.0) as f32;
     }
     (smooth[0], smooth[1]) = (smooth[2], smooth[2]);
@@ -476,10 +637,12 @@ struct Baseline {
     sd: f64,
 }
 
-/// Old `analyzeBaseline` (§2.1): pooled mean and standard deviation of the non-overlapping
-/// segments of `len` scans whose slopes all stay inside the peak thresholds. The old function
-/// also returns a noise factor and MAD, which the detector never reads, so they are not computed.
-fn analyze_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings) -> Baseline {
+/// Old `AbstractPeakDetector::analyzeBaseline<int,float>` (§2.1): pooled mean and standard deviation
+/// of the non-overlapping segments of `len` scans whose slopes all stay inside the peak thresholds.
+/// The old function also returns a noise factor and MAD, which the detector never reads, so they
+/// are not computed. Not the same as [`crate::centroid::spectrum_baseline`], the old spectrum
+/// function of the same name: that one accepts segments by mean crossings, not by slope.
+fn trace_baseline(smooth: &[f32], slope: &[f32], len: usize, s: &PeakSettings) -> Baseline {
     let (mut count, mut mean, mut m2) = (0.0f64, 0.0f64, 0.0f64);
     let mut start = 0;
     while start + len < smooth.len() {
@@ -525,7 +688,7 @@ pub fn detect_peaks(
     }
     savitzky_golay(v, smooth, slope);
     let (sm, d) = (&smooth[..], &slope[..]);
-    let base = analyze_baseline(sm, d, 15, s);
+    let base = trace_baseline(sm, d, 15, s);
 
     let mut tailing = false;
     let mut i = 2;
@@ -600,7 +763,7 @@ pub const NOISE_FACTOR: f64 = 1.0;
 
 /// Index of the highest value, starting from `start`: a later index wins only with a strictly
 /// higher value (strict `>`, like the old code).
-fn argmax(w: &[f32], start: usize) -> usize {
+fn argmax<T: PartialOrd>(w: &[T], start: usize) -> usize {
     (0..w.len()).fold(start, |m, k| if w[k] > w[m] { k } else { m })
 }
 
@@ -696,7 +859,7 @@ pub fn reorder_peaks(
     struct Profile {
         peaks: Vec<usize>,
         last_row: usize,
-        apex: u32,
+        sum: Summed,
         /// insertIonProfile puts the profile into bins `lo..hi`.
         lo: usize,
         hi: usize,
@@ -710,8 +873,8 @@ pub fn reorder_peaks(
     let block = dist.max(1);
     let mut blocks: Vec<Vec<usize>> = vec![Vec::new(); len / block + 1];
     let mut profiles: Vec<Profile> = Vec::new();
-    for k in 0..peaks.len() {
-        let p = peaks[k];
+    let mut buf = Vec::new();
+    for (k, p) in peaks.iter().copied().enumerate() {
         let b = (p.interpolated_max_scan() * nb as f64 + 0.5) as usize;
         if b >= len {
             continue; // the old code throws here; detected peaks never get this far
@@ -727,7 +890,7 @@ pub fn reorder_peaks(
                     p.row as usize == n && (traces.mz[last] - traces.mz[n]).abs() <= ion_dist
                 })
             })
-            .min_by_key(|j| p.apex_scan.abs_diff(profiles[*j].apex));
+            .min_by_key(|j| p.apex_scan.abs_diff(profiles[*j].sum.apex()));
         match winner {
             None => {
                 // insertIonProfile: the new profile sits in bins [b - dist, b + dist).
@@ -738,22 +901,22 @@ pub fn reorder_peaks(
                 profiles.push(Profile {
                     peaks: vec![k],
                     last_row: p.row as usize,
-                    apex: summed_apex(traces, peaks, &[k], None).0,
+                    sum: Summed::new(traces, &p, &mut buf),
                     lo,
                     hi,
                 });
             }
-            Some(j) if p.first_scan < profiles[j].apex && profiles[j].apex < p.last_scan => {
+            Some(j) if (p.first_scan + 1..p.last_scan).contains(&profiles[j].sum.apex()) => {
                 let w = &mut profiles[j];
                 w.peaks.push(k);
                 w.last_row = p.row as usize;
-                w.apex = summed_apex(traces, peaks, &w.peaks, None).0;
+                w.sum.add(traces, &p, &mut buf);
             }
             Some(_) => {}
         }
     }
     for w in profiles.iter().filter(|w| w.peaks.len() >= 2) {
-        let (apex, precise) = summed_apex(traces, peaks, &w.peaks, Some(number_bins));
+        let (apex, precise) = (w.sum.apex(), w.sum.precise_apex(number_bins));
         for k in &w.peaks {
             let q = &mut peaks[*k];
             if (q.first_scan..=q.last_scan).contains(&apex) {
@@ -764,26 +927,53 @@ pub fn reorder_peaks(
     }
 }
 
-/// Apex and precise apex of the old summed `Peak(list)` (§4.3): the members' intensities added
-/// per scan over their joint range. The precise apex only with `bins` (the fit is the costly part).
-fn summed_apex(
-    traces: &IonTraces,
-    peaks: &[Peak],
-    members: &[usize],
-    bins: Option<u32>,
-) -> (u32, Option<f32>) {
-    let first = members.iter().map(|k| peaks[*k].first_scan).min().unwrap();
-    let last = members.iter().map(|k| peaks[*k].last_scan).max().unwrap();
-    let mut sum = vec![0.0f32; (last - first + 1) as usize];
-    for p in members.iter().map(|k| &peaks[*k]) {
-        let trace = traces.trace(p.row as usize);
-        for sc in p.first_scan..=p.last_scan {
-            sum[(sc - first) as usize] += trace[sc as usize];
-        }
+/// The old summed `Peak(list)` of a profile (§4.3): the members' intensities added per scan over
+/// their joint range, kept as a running f64 sum so a join costs one member, not the whole profile.
+struct Summed {
+    first: u32,
+    sum: Vec<f64>,
+    apex: usize,
+}
+
+impl Summed {
+    fn new(traces: &IonTraces, p: &Peak, buf: &mut Vec<f32>) -> Self {
+        let mut s = Self {
+            first: p.first_scan,
+            sum: Vec::new(),
+            apex: 0,
+        };
+        s.add(traces, p, buf);
+        s
     }
-    let apex = argmax(&sum, 0);
-    let precise = bins.and_then(|b| precise_apex(&sum, first as usize, apex, b));
-    (first + apex as u32, precise)
+
+    fn add(&mut self, traces: &IonTraces, p: &Peak, buf: &mut Vec<f32>) {
+        if p.first_scan < self.first {
+            let grow = (self.first - p.first_scan) as usize;
+            self.sum.splice(0..0, std::iter::repeat_n(0.0, grow));
+            self.first = p.first_scan;
+        }
+        let end = (p.last_scan - self.first + 1) as usize;
+        if self.sum.len() < end {
+            self.sum.resize(end, 0.0);
+        }
+        let (lo, hi) = (p.first_scan as usize, p.last_scan as usize + 1);
+        let at = lo - self.first as usize;
+        for (s, v) in self.sum[at..]
+            .iter_mut()
+            .zip(traces.trace(p.row as usize, lo..hi, buf))
+        {
+            *s += f64::from(*v);
+        }
+        self.apex = argmax(&self.sum, 0);
+    }
+
+    fn apex(&self) -> u32 {
+        self.first + self.apex as u32
+    }
+
+    fn precise_apex(&self, bins: u32) -> Option<f32> {
+        precise_apex(&self.sum, self.first as usize, self.apex, bins)
+    }
 }
 
 /// Kernel of the old `tools::Filter::matched2ndDerivativeGaussianFilter` (§3.3): a negative second
@@ -865,7 +1055,7 @@ fn matched_peaks(
     out: &mut Vec<Peak>,
 ) {
     for (i, y) in f.iter_mut().enumerate() {
-        *y = correlate(v, kernel, i).trunc() as f32;
+        *y = c_int(correlate(v, kernel, i)) as f32;
     }
     hold_edges(f, kernel.len() / 2);
     let thr = threshold as f32;
@@ -905,21 +1095,17 @@ fn fit_line(points: impl Iterator<Item = (f64, f64)> + Clone) -> (f64, f64) {
 /// scan) like the old program and truncated to `1 / bins` scan after adding half a bin. `None` at
 /// the peak edge or for a vertex ≥ 1 scan from the apex. The fit is the old one bit for bit
 /// ([`crate::quadfit`]), so half-bin ties and flat tops land where the old program puts them.
-fn precise_apex(v: &[f32], first: usize, apex: usize, bins: u32) -> Option<f32> {
+fn precise_apex<T: Copy + Into<f64>>(v: &[T], first: usize, apex: usize, bins: u32) -> Option<f32> {
     if apex == 0 || apex + 1 >= v.len() {
         return None;
     }
     let scan = (first + apex) as f64;
     let bins = bins as f64;
     let x = [-1.0, 0.0, 1.0].map(|k| bins * (scan + k));
-    let y = [0, 1, 2].map(|k| v[apex - 1 + k] as f64);
+    let y = [0, 1, 2].map(|k| v[apex - 1 + k].into());
     let c = crate::quadfit::quadratic(x, y);
-    let q = c[1] / (c[2] * -2.0) + 0.5;
-    // C's `(int)q`; outside the int range (or NaN) x86 gives INT_MIN, never within a scan.
-    if q.is_nan() || q.abs() >= 2_147_483_648.0 {
-        return None;
-    }
-    let t = q.trunc() / bins;
+    // Outside the int range (or NaN) `c_int` gives INT_MIN, never within a scan.
+    let t = f64::from(c_int(c[1] / (c[2] * -2.0) + 0.5)) / bins;
     ((t - scan).abs() < 1.0).then_some(t as f32)
 }
 
@@ -962,6 +1148,25 @@ fn sharpness(w: &[f32], apex: usize, nu: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two old `analyzeBaseline` disagree on a slow ramp: its slope stays inside the trace
+    /// thresholds, but each segment crosses its own mean only once, so the spectrum one rejects all.
+    #[test]
+    fn trace_and_spectrum_baselines_differ() {
+        let ramp: Vec<i32> = (0..100).collect();
+        let spectrum = crate::centroid::spectrum_baseline(&ramp);
+        assert_eq!((spectrum.mean, spectrum.sd), (0.0, 0.0));
+        let v: Vec<f32> = ramp.iter().map(|x| *x as f32).collect();
+        let (mut smooth, mut slope) = (Vec::new(), Vec::new());
+        savitzky_golay(&v, &mut smooth, &mut slope);
+        let trace = trace_baseline(&smooth, &slope, 15, &PeakSettings::default());
+        // Segments 0..15 to 75..90 of the smoothed ramp (its two first values copy the third).
+        assert!(
+            (trace.mean - 44.5).abs() < 0.1 && trace.sd > 20.0,
+            "{}",
+            trace.mean
+        );
+    }
 
     #[test]
     fn precise_apex_breaks_ties_like_the_old_fit() {
@@ -1109,7 +1314,7 @@ mod tests {
             .iter()
             .map(|x| x.trunc() as f32)
             .collect();
-        assert_eq!(t.trace(0), &f[..]);
+        assert_eq!(&t.row(0)[..], &f[..]);
         // The old filter holds the 40 scans at each end at the nearest inner value.
         let (head, tail) = (&f[..40], &f[260..]);
         assert!(head.iter().all(|y| *y == f[40]) && tail.iter().all(|y| *y == f[259]));
@@ -1128,7 +1333,7 @@ mod tests {
         };
         let t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![0, 1]);
-        assert_eq!((t.trace(0), t.trace(1)), (&[3.0][..], &[4.0][..]));
+        assert_eq!((&t.row(0)[..], &t.row(1)[..]), (&[3.0][..], &[4.0][..]));
     }
 
     #[test]
@@ -1168,7 +1373,7 @@ mod tests {
             baseline: Default::default(),
         };
         let t = IonTraces::new(&c, 0.5).unwrap();
-        assert_eq!((t.trace(0), t.trace(1)), (&[10.0][..], &[5.0][..]));
+        assert_eq!((&t.row(0)[..], &t.row(1)[..]), (&[10.0][..], &[5.0][..]));
     }
 
     #[test]
@@ -1289,6 +1494,93 @@ mod tests {
         assert_eq!((apart[0].apex_scan, apart[1].apex_scan), (100, 105));
     }
 
+    /// Exact-mass run with `f` exact m/z per nominal mass, each present in 1/f of the scans, a peak
+    /// every 60 scans per trace, two points in one cell of scan 0 and uncorrected baseline means.
+    fn exact_run(scans: usize, ions: usize, f: usize) -> Chromatogram {
+        let block = scans.div_ceil(f);
+        let mut c = Chromatogram {
+            scan_times_s: (0..scans).map(|s| s as f64 / 20.0).collect(),
+            offsets: (0..=scans).map(|s| s * ions).collect(),
+            mz: (0..scans * ions)
+                .map(|k| {
+                    let (s, j) = (k / ions, k % ions);
+                    50.0 + j as f32 + 0.001 * ((s / block + j) % f) as f32
+                })
+                .collect(),
+            intensity: (0..scans * ions)
+                .map(|k| {
+                    let x = ((k / ions + 7 * (k % ions % 20)) % 60) as f32 - 30.0;
+                    ((k % 997) as f32 * 0.05 + 20_000.0 * (-x * x / 8.0).exp()).round()
+                })
+                .collect(),
+            exact_masses: true,
+            baseline: crate::Baseline {
+                means: (0..scans).map(|s| (s % 7) as f32).collect(),
+                corrected: false,
+            },
+        };
+        c.mz[1] = c.mz[0];
+        c
+    }
+
+    /// Both stores of `c` read the same rows and give the same peaks, components and matched peaks.
+    fn assert_stores_agree(c: &Chromatogram, exact: bool) {
+        let build = |sparse| IonTraces::build_as(c, exact, Some(sparse)).unwrap();
+        let (mut dense, mut sparse) = (build(false), build(true));
+        assert!(matches!(dense.store, Store::Dense(_)));
+        assert!(matches!(sparse.store, Store::Sparse { .. }));
+        for row in 0..dense.len() {
+            assert_eq!(dense.row(row), sparse.row(row));
+            let mut buf = Vec::new();
+            assert_eq!(
+                dense.trace(row, 7..9, &mut Vec::new()),
+                sparse.trace(row, 7..9, &mut buf)
+            );
+            assert_eq!(dense.value(row, 8), sparse.value(row, 8));
+        }
+        let s = PeakSettings::default();
+        let peaks = dense.detect_all_peaks(&s);
+        assert!(peaks.len() > 100, "{}", peaks.len());
+        assert_eq!(peaks, sparse.detect_all_peaks(&s));
+        let d = crate::deconv::DeconvSettings {
+            min_peak_number: 2,
+            ..Default::default()
+        };
+        let comps = crate::deconv::deconvolute(&dense, &peaks, &c.scan_times_s, &d);
+        assert!(!comps.is_empty());
+        assert_eq!(
+            comps,
+            crate::deconv::deconvolute(&sparse, &peaks, &c.scan_times_s, &d)
+        );
+        let m = PeakSettings {
+            detector: Detector::MATCHED,
+            ..s
+        };
+        assert_eq!(dense.detect_peaks(&m), sparse.detect_peaks(&m));
+        assert!((0..dense.len()).all(|r| dense.row(r) == sparse.row(r)));
+    }
+
+    #[test]
+    fn sparse_and_dense_traces_give_the_same_results() {
+        let c = exact_run(1200, 100, 4);
+        for (exact, corrected) in [(true, false), (true, true), (false, false)] {
+            let mut c = c.clone();
+            c.exact_masses = exact;
+            c.baseline.corrected = corrected;
+            assert_stores_agree(&c, exact);
+        }
+        // 4 exact m/z per mass fill 1 in 4 cells and get the sparse store, 2 per mass stay dense.
+        assert!(matches!(
+            IonTraces::new(&c, 0.5).unwrap().store,
+            Store::Sparse { .. }
+        ));
+        let half = exact_run(1200, 100, 2);
+        assert!(matches!(
+            IonTraces::new(&half, 0.5).unwrap().store,
+            Store::Dense(_)
+        ));
+    }
+
     #[test]
     fn exact_traces_keep_close_masses_apart() {
         // Scan 1 lacks 73.089, which reads 0 there.
@@ -1300,13 +1592,13 @@ mod tests {
             exact_masses: false,
             baseline: Default::default(),
         };
-        assert_eq!(IonTraces::new(&c, 0.5).unwrap().trace(0), &[3.0, 4.0][..]);
+        assert_eq!(IonTraces::new(&c, 0.5).unwrap().row(0), &[3.0, 4.0][..]);
         let t = IonTraces::exact(&c).unwrap();
         assert_eq!(t.masses, vec![73, 73, 147]);
         assert_eq!(t.mz, vec![73.047, 73.089, 147.0]);
-        assert_eq!(t.trace(0), &[1.0, 4.0][..]);
-        assert_eq!(t.trace(1), &[2.0, 0.0][..]);
-        assert_eq!(t.trace(2), &[3.0, 5.0][..]);
+        assert_eq!(&t.row(0)[..], &[1.0, 4.0][..]);
+        assert_eq!(&t.row(1)[..], &[2.0, 0.0][..]);
+        assert_eq!(&t.row(2)[..], &[3.0, 5.0][..]);
         // A FastFlight run gets the exact traces from `new` too.
         let ff = Chromatogram {
             exact_masses: true,
@@ -1331,8 +1623,8 @@ mod tests {
         let mut t = IonTraces::new(&c, 0.5).unwrap();
         assert_eq!(t.masses, vec![73, 147]);
         assert_eq!(t.mz, vec![73.0, 147.0]);
-        assert_eq!(t.trace(0), &big[..]);
-        assert_eq!(t.trace(1), &vec![5.0; scans][..]);
+        assert_eq!(&t.row(0)[..], &big[..]);
+        assert_eq!(&t.row(1)[..], &vec![5.0; scans][..]);
         let p = t.detect_peaks(&PeakSettings::default());
         assert_eq!(p.len(), 1, "{p:?}");
         assert_eq!((p[0].row, p[0].apex_scan), (0, 80));
@@ -1354,7 +1646,7 @@ mod tests {
 
     #[test]
     fn ion_traces_refuse_absurd_sizes() {
-        // 65 536 masses in the first scan, 40 000 scans: 10 GB of f32 if it were allocated.
+        // 65 536 masses in the first scan, 40 000 scans: 10 GB of f32 if it were allocated densely.
         let scans = 40_000;
         let mut offsets = vec![0, 65_536];
         offsets.resize(scans + 1, 65_536);
@@ -1367,11 +1659,16 @@ mod tests {
             baseline: Default::default(),
         };
         assert_eq!(
-            IonTraces::new(&c, 0.5),
+            IonTraces::build_as(&c, false, Some(false)),
             Err(TooLarge {
                 masses: 65_536,
                 scans
             })
         );
+        // The sparse store needs only the points.
+        assert!(matches!(
+            IonTraces::new(&c, 0.5).unwrap().store,
+            Store::Sparse { .. }
+        ));
     }
 }

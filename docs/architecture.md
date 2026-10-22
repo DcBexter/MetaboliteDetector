@@ -47,6 +47,7 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/centroid.rs       centroided and nominal-mass spectra (NetCDF and MSL export)
   src/fastflight.rs     FastFlight TOF raw data (MsData.FFT/.FFC) import; src/tof.rs: its m/z calibration (.mzcalib)
   src/quadfit.rs        clean-room parabola fit that reproduces the old rounding of precise apexes (gsl-clean-room.md)
+  src/legacy_numeric.rs the deliberate 3.3 roundings: C `(int)`, SG truncation, `roundSignificantFigures`, glibc pow(x, 2) and hypot
   src/library_add.rs    add a found component to a library, copy RTs into a target library
   src/spectrum.rs       spectrum normalisation (none, base peak, unit, relative)
   src/stats.rs          two-group biomarker table (Welch/paired t-test), five-number summary, PCA
@@ -118,7 +119,7 @@ Large studies (hundreds of runs, tens of millions of points each) are the normal
    with the `Cancel` and `Progress` of `md_core::job`, which the command line uses too. Cancel is cooperative: a job checks between steps, so one md-core call (file read or write, summing a run) runs to its end; closing a job's window or dropping the `Job` discards its result.
 3. **Draw proportional to pixels, not data.** Line plots go through `md_core::decimate`
    (min/max per pixel bucket of the visible range), so peaks stay visible at any zoom.
-   The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame.
+   The first derivative of a trace is cached per run (`Run::d_tic`, `Run::d_sic`), not computed per frame; both are freed when the derivative view is switched off.
 4. **Parallel by default.** Per-scan, per-ion and per-file work uses rayon.
 5. **Index once, query many.** m/z is sorted within each scan (binary search for SICs). Peak detection
    and deconvolution share one ion-major index per run (`IonTraces`) instead of rescanning spectra per ion.
@@ -139,8 +140,9 @@ Measured 2026-10-19, release build, 36 000 scans × 500 ions (18 M points, 137 M
 | Peaks in all 500 traces (300 000 peaks) | 20 ms |
 | Deconvolution (12 000 substances of 25 ions) | 19 ms |
 | Library search, 1 000 components × 10 000 entries, cutoff 0.8 | 31 ms |
-| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 250 ms |
+| Library search, same, cutoff 0 (9 M hits kept, like the old GUI) | 83 ms (250 ms with the sorted pair list) |
 | Batch, one run end to end (traces, peaks, deconvolution, search) | 300 ms |
+| Exact-mass run, 20 000 m/z (sparse index ≈ 0.15 GiB): traces / peaks + reorder / deconvolution | 470 / 450 / 47 ms (2026-10-22) |
 
 Real runs (TargetSearchData, 4 400 scans, ~745 000 points, 6 MB `.cdf`): read + TIC 13–25 ms per
 file; all 15 runs in 0.27 s; ion traces + peak detection 4–8 ms per file, 630–950 peaks in 236 traces;
@@ -154,8 +156,17 @@ plain `File`).
 
 `md_core::peaks` ports the old `DefaultPeakDetector` ([algorithms.md](reverse-engineering/algorithms.md)
 §2–3): `IonTraces::new` builds the ion-major index once per run, `IonTraces::detect_peaks` runs the
-detector on every trace in parallel. The index needs masses × scans × 4 bytes (the example runs: about
-0.1 GiB); `IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
+detector on every trace in parallel. The index is dense (masses × scans × 4 bytes; the example runs:
+about 0.1 GiB) or, when the run fills at most 1 in 4 cells (`SPARSE_FILL_RATIO`, typical for exact-mass
+runs), sparse: per row the scans with a point (8 bytes each), every other scan reads the missing value.
+Readers call `IonTraces::trace(row, scans, buf)`, which returns the dense slice or fills `buf` (one per
+rayon worker; peak detection keeps it thread-local because `map_init` would allocate it per row), and
+`IonTraces::value(row, scan)` for single points. The ratio is measured with `examples/perf.rs` on
+36 000 scans × 500 points per scan spread over 1, 2, 4, 8 and 40 exact m/z per mass: at 1 in 2 sparse
+saves nothing, at 1 in 4 it saves a third of the peak memory for about a quarter more time, at 1 in 40
+(20 000 traces) the peak memory falls from 2.8 GiB to 0.3 GiB at the same detection time.
+`reorder_peaks` keeps a running f64 sum per profile, so a join adds one member instead of re-adding all.
+`IonTraces::new` returns `TooLarge` above `MAX_TRACE_BYTES` (8 GiB) before allocating, so a
 corrupt file cannot exhaust memory. The app shows that error in place of the run. `PeakSettings::default()` holds the old `AN_*` defaults.
 `matched_filter` ports the old filter, which the deconvolution also uses (§4.5).
 
@@ -198,13 +209,18 @@ peaks of the example runs:
   `analyzeBaseline(values, 100)` statistics set the noise factor (§2.3). The noise factor and MAD of
   `analyzeBaseline` are not computed because the detector never reads them.
 - **f32 intensities instead of int.** Only the SG smoothing and the matched filter output are truncated
-  to integers like the old int filters. S/N is not rounded to 8 significant digits.
+  to integers like the old int filters (`legacy_numeric::sg_trunc` and `c_int`, the x86 `(int)`
+  with `INT_MIN` out of range). S/N and sharpness are not rounded to 8 significant digits.
+- **Two `analyzeBaseline`.** The old program has two functions of that name: the peak detector's
+  (`peaks::trace_baseline`, segments of 15 scans accepted by slope) and the spectrum one
+  (`centroid::spectrum_baseline`, segments of 25 points accepted by mean crossings). They stay
+  separate; a test shows a ramp where they disagree.
 - **Precise apex: not a deviation.** The old app fits the parabola with `gsl_multifit_linear` in absolute
   bin coordinates; at an exact half-bin tie and on a flat top (three equal values) the fit's rounding
   decides the result. `quadfit` rebuilds that fit bit for bit from black-box outputs of the old binary,
   without GSL code (`docs/reverse-engineering/gsl-clean-room.md`), so ties and flat tops land where the
   old app puts them, for every bin count while bins × scan stays below 9.4e7. Above, the x² entry may
-  round differently from the old `pow` (shortcut in `quadfit.rs`).
+  round differently from the old `pow` (shortcut in `legacy_numeric::glibc_pow2`).
 - **No progress or cancel per 100 traces.** A whole run takes milliseconds (table above).
 - **Border extension off** like the old default (`setPeakBorderExtensionEnabled` has no known caller),
   so the extension code is not ported.
@@ -238,8 +254,11 @@ Conscious deviations:
   detector, whose peaks can start at their apex.
 - **Collinear fits drop the peak.** The old code uses an SVD (`gsl_multifit_linear`), which also returns a
   minimum-norm fit when model and scan are collinear; here those peaks are skipped.
-- **Filter edges are zero-padded** (old edge handling unknown, §4.11), and `roundSignificantFigures` is
-  re-implemented (round to 8 significant digits).
+- **Filter edges are zero-padded** (old edge handling unknown, §4.11).
+- **Not a deviation: `roundSignificantFigures`.** `legacy_numeric::round_sig8` follows the old code
+  step by step: round half up to one digit more, then floor, so a share below 1 keeps 8 significant
+  digits and one from 1 up keeps 9. With it every model share, height and integral of the stage
+  fixtures matches (a plain round to 8 digits missed 1938 of 4366 shares by one unit).
 - **No `reorderPeaks`** (unit-mass data only, see peak detection).
 - `AN_MIN_HEIGHT_BP` has no static value in the old binary (zero-initialised), so the default keeps all ions.
 
@@ -312,7 +331,11 @@ entry: the pure score is a cosine over all peaks of both spectra, the impure sco
 `0.5 · pure + 0.5 · impure`, and with an RI the overall score is `(spec² · ri)^(1/3)`, where the RI score is a
 Gaussian with sigma `LS_RI_DIFF` that is zero beyond 3 sigma. `map_compounds_to_library` searches all
 components in parallel and then assigns library compounds greedily by best overall score, each library compound
-and each component at most once. `SearchSettings::default()` holds the old `LS_*` defaults.
+and each component at most once. The assignment does not build or sort the list of all (component, hit) pairs:
+each component's hits are already best first, so a heap over the components' current best pairs takes them in
+the same order (ties: lower library index, then lower component index) and gives the same result bit for bit
+(`assign_best_first`, checked against the sorted pair list in a test). All hits stay, the colouring needs them.
+`SearchSettings::default()` holds the old `LS_*` defaults.
 With nominal masses each pair is one pass over the library peaks with a dense lookup into the component
 spectrum, so no fragment pre-filter is needed for speed (table above). For NIST text libraries (`.sdf`,
 `library::is_nist`) the app and `md-cli` turn on the old NIST pre-filter
@@ -322,9 +345,9 @@ the old NIST search. Both are in the settings dialog ("Number of fragments", "Mi
 frag."; old `SQL_*`).
 
 File → Open NIST library loads a second library next to the normal one, always with the pre-filter (old
-`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on the
-UI thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
-entries) and its NIST hits are listed below the library hits, which stay
+`SQLLibrary`). The component panel then has "NIST search": the selected component is searched in it on a
+worker thread (about 10 ms for 300 000 entries with the default pre-filter; a low minimum scores almost all
+entries; the button waits meanwhile) and its NIST hits are listed below the library hits, which stay
 as they are (old "NIST search..."). The NIST hits belong to that component and spectrum; a re-analysis hides
 them.
 
@@ -591,7 +614,7 @@ intermediate output for each of the 15 runs (default detector, static `AN_*` def
 `detectAllPeaks` in list order, every region of `detectComponents` (§4.5, rejected ones too, as peak
 lines), and every compound with its model peak and per-ion fit. `make-reference.sh --stages` writes them
 (the same driver, plus `stages.py`; format there), about 1.3 MB. `tests/legacy_stages.rs` compares
-`find_run_peaks` and `analyze_run` against them, in order:
+`find_run_peaks`, `deconv::component_regions` and `analyze_run` against them, in order:
 
 | Compared | Tolerance | Reason |
 |---|---|---|
@@ -599,10 +622,9 @@ lines), and every compound with its model peak and per-ion fit. `make-reference.
 | Interpolated apex | 5e-4 scan | md-core keeps it as f32 |
 | Peak S/N, quality, sharpness | 1e-6 relative | md-core computes them in f32 |
 | Component count, order, apex; model peak bounds and values | exact | integer sums |
-| Ion height | ±1 | as in the golden test |
-| Model share `c2` and ion integral | 2e-7 relative | 1938 of 4366 shares land on the neighbouring 8th digit (issue #365) |
-
-The regions are only recorded so far; md-core does not expose them.
+| Regions (`deconv::component_regions`): count, order, peak lines | exact | same algorithm; bin bounds not compared |
+| Ion height, model share `c2` | exact | `legacy_numeric::round_sig8` (#365) |
+| Ion integral | 5e-9 relative | the dump's 9 digits |
 
 The golden test found three porting errors in peak detection, now fixed:
 

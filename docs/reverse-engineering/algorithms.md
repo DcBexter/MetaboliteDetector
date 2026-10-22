@@ -477,7 +477,7 @@ gsl_multifit_linear(X, Y) -> c = (c0, c1, c2)
 return [roundSig(c0, 8), roundSig(c1, 8), roundSig(c2, 8)]
 ```
 
-So intensity_ion(scan) ~ c0 + c1*scan + c2*model(scan). c0 + c1*scan is a local linear baseline. c2 is the share of the model peak in this ion trace. `roundSig` is `PeakEssential::roundSignificantFigures(x, 8)`.
+So intensity_ion(scan) ~ c0 + c1*scan + c2*model(scan). c0 + c1*scan is a local linear baseline. c2 is the share of the model peak in this ion trace. `roundSig` is `PeakEssential::roundSignificantFigures(x, 8)` (0x6fa301, Observed from the disassembly): `p = 8 - (int)log10(x) + 1; y = floor(0.5 + 10^p x) / 10^p; p = 8 - (int)log10(y); return floor(10^p y) / 10^p`, with `std::pow(10.0, (unsigned) p)`. It floors, so values below 1 keep 8 significant digits and values from 1 up keep 9; `(int)log10` of 0 or a negative value is 0 (the 64-bit `cvttsd2si` of -inf or NaN), so these get 8 decimal places. Port: `legacy_numeric::round_sig8`.
 
 ### 4.9 calculatePeakIntegral(model, c2, peak) (0x5ea99e, Observed)
 

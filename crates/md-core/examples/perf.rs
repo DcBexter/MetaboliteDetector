@@ -269,6 +269,7 @@ fn main() {
         t.elapsed()
     );
     pool_unknowns();
+    exact_mass_run(scans, ions);
 }
 
 /// Untargeted pooling (`add_unknowns`) with many unknown components: 20 runs share a pool of
@@ -315,4 +316,45 @@ fn pool_unknowns() {
             t.elapsed()
         );
     }
+}
+
+/// Exact-mass run (FastFlight-like): `ions` points per scan spread over 40 exact m/z per nominal
+/// mass, each active for 1/40 of the run, so the index has `40 * ions` sparse traces (2.5 % filled).
+fn exact_mass_run(scans: usize, ions: usize) {
+    let block = scans.div_ceil(40);
+    let c = Chromatogram {
+        scan_times_s: (0..scans).map(|s| s as f64 / 20.0).collect(),
+        offsets: (0..=scans).map(|s| s * ions).collect(),
+        mz: (0..scans * ions)
+            .map(|k| {
+                let (s, j) = (k / ions, k % ions);
+                50.0 + j as f32 + 0.001 * ((s / block + j) % 40) as f32
+            })
+            .collect(),
+        intensity: (0..scans * ions)
+            .map(|k| {
+                let x = ((k / ions + 7 * (k % ions % 20)) % 60) as f32 - 30.0;
+                (k % 997) as f32 * 0.05 + 20_000.0 * (-x * x / 8.0).exp()
+            })
+            .collect(),
+        exact_masses: true,
+        baseline: Default::default(),
+    };
+    let t = Instant::now();
+    let mut traces = IonTraces::new(&c, 0.5).unwrap();
+    let tt = t.elapsed();
+    drop(c);
+    let t = Instant::now();
+    let peaks = traces.detect_all_peaks(&PeakSettings::default());
+    let tp = t.elapsed();
+    let times: Vec<f64> = (0..scans).map(|s| s as f64 / 20.0).collect();
+    let t = Instant::now();
+    let comps = deconvolute(&traces, &peaks, &times, &DeconvSettings::default());
+    println!(
+        "exact-mass run: traces ({} x {scans}) {tt:?}, peaks + reorder ({}) {tp:?}, deconvolution ({} components) {:?}",
+        traces.len(),
+        peaks.len(),
+        comps.len(),
+        t.elapsed()
+    );
 }
