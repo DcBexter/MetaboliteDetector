@@ -374,6 +374,9 @@ pub fn map_compounds_cancellable(
     s: &SearchSettings,
     cancel: &Cancel,
 ) -> Option<Identification> {
+    if cancel.is_cancelled() {
+        return None; // also for no components
+    }
     let hits: Vec<Vec<LibraryHit>> = comps
         .par_iter()
         .enumerate()
@@ -747,6 +750,7 @@ mod tests {
         assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_some());
         cancel.cancel();
         assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_none());
+        assert!(map_compounds_cancellable(&[], None, &prepared, &s, &cancel).is_none());
     }
 
     #[test]
