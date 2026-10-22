@@ -15,8 +15,7 @@ use md_core::batch::{
     DEFAULT_PARALLEL, QuantSettings, ShiftReference, Study, StudyResult, run_study,
 };
 use md_core::isotope::IsotopeTable;
-use md_core::library::LibraryCompound;
-use md_core::mid::{FragmentMid, Method, Mids, determine, group_stat, mid_library};
+use md_core::mid::{FragmentMid, Method, MidReport, Move, determine, mid_library};
 use md_core::ri::RiCalibration;
 use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
@@ -33,27 +32,28 @@ enum Kind {
     Formula,
 }
 
+/// A finished scan: the report (`md_core::mid::MidReport`, without egui) and what the window keeps
+/// beside it. Derefs to the report, so the window reads its fields as before.
 struct Done {
-    method: Method,
-    /// The substances with fragments the MIDs refer to.
-    lib: Vec<LibraryCompound>,
-    /// One per fit: the labelled runs' names, or the group.
-    columns: Vec<String>,
-    /// Full path of each per-run column, for its hover; empty for the group methods.
-    paths: Vec<String>,
-    /// Position of each column when determined, before the user moved runs.
-    runs: Vec<usize>,
-    mids: Mids,
-    /// Per-run methods: mean and standard error of the labelled runs per substance, fragment and
-    /// isotopomer (old group `GL`); empty for the group methods.
-    stats: Vec<Vec<Vec<(f64, f64)>>>,
-    /// The old program's text exports: the MIDs, and for the per-run methods the statistics.
-    text: String,
-    stats_text: Option<String>,
+    report: MidReport,
     errors: Vec<Msg>,
     /// Runs that loaded and were scanned.
     scanned: usize,
     took: Duration,
+}
+
+impl std::ops::Deref for Done {
+    type Target = MidReport;
+
+    fn deref(&self) -> &MidReport {
+        &self.report
+    }
+}
+
+impl std::ops::DerefMut for Done {
+    fn deref_mut(&mut self) -> &mut MidReport {
+        &mut self.report
+    }
 }
 
 /// The one column of the group methods, kept in English as the plot key; [`shown_name`] translates it.
@@ -64,74 +64,6 @@ fn shown_name<'a>(columns: &'a [String], paths: &[String], i: usize) -> &'a str 
     match paths.is_empty() {
         true => t("labelled", "markiert"),
         false => &columns[i],
-    }
-}
-
-/// A move in the result view: run columns (old "Change column order…") or substances with their
-/// diagrams (old "Change order of diagrams…"), from one position to another.
-#[derive(Clone, Copy)]
-enum Move {
-    Run(usize, usize),
-    Compound(usize, usize),
-}
-
-impl Done {
-    /// Applies a move to the table, the diagrams and the exports. The values stay as determined:
-    /// the statistics keep summing the runs in their first order, so not even the last bit moves.
-    fn apply(&mut self, m: Move) {
-        match m {
-            Move::Run(a, b) => {
-                self.columns.swap(a, b);
-                self.runs.swap(a, b);
-                if !self.paths.is_empty() {
-                    self.paths.swap(a, b);
-                }
-                (self.mids.compounds.iter_mut())
-                    .flat_map(|c| &mut c.fragments)
-                    .for_each(|f| f.fits.swap(a, b));
-            }
-            Move::Compound(a, b) => {
-                self.mids.compounds.swap(a, b);
-                if !self.stats.is_empty() {
-                    self.stats.swap(a, b);
-                }
-                if self.stats_text.is_some() {
-                    let mut first = self.mids.clone();
-                    for f in first.compounds.iter_mut().flat_map(|c| &mut c.fragments) {
-                        let mut fits = vec![None; f.fits.len()];
-                        for (j, fit) in std::mem::take(&mut f.fits).into_iter().enumerate() {
-                            fits[self.runs[j]] = fit;
-                        }
-                        f.fits = fits;
-                    }
-                    self.stats_text = Some(first.stats_text(&self.lib));
-                }
-            }
-        }
-        self.text = self.mids_text();
-    }
-
-    /// Statistics and text exports of the MIDs as determined.
-    fn refresh(&mut self) {
-        let per_run = self.method.per_run();
-        self.runs = (0..self.columns.len()).collect();
-        self.stats = (self.mids.compounds.iter())
-            .filter(|_| per_run)
-            .map(|c| {
-                (c.fragments.iter())
-                    .map(|f| (0..f.isotopomers).map(|k| group_stat(f, k)).collect())
-                    .collect()
-            })
-            .collect();
-        self.text = self.mids_text();
-        self.stats_text = per_run.then(|| self.mids.stats_text(&self.lib));
-    }
-
-    fn mids_text(&self) -> String {
-        match self.method.per_run() {
-            true => (self.mids).run_text(&self.lib, self.method, &self.columns),
-            false => self.mids.group_text(&self.lib),
-        }
     }
 }
 
@@ -340,15 +272,17 @@ impl MidWindow {
                 }
             }
             let mut done = Done {
-                method,
-                lib: mids_lib,
-                columns,
-                paths: column_paths,
-                runs: Vec::new(),
-                mids,
-                stats: Vec::new(),
-                text: String::new(),
-                stats_text: None,
+                report: MidReport {
+                    method,
+                    lib: mids_lib,
+                    columns,
+                    paths: column_paths,
+                    runs: Vec::new(),
+                    mids,
+                    stats: Vec::new(),
+                    text: String::new(),
+                    stats_text: None,
+                },
                 errors,
                 scanned: runs.len(),
                 took: started.elapsed(),
@@ -931,7 +865,8 @@ impl MidWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use md_core::mid::{CompoundMid, MidFit};
+    use md_core::library::LibraryCompound;
+    use md_core::mid::{CompoundMid, MidFit, Mids};
 
     /// Two substances, runs `a`/`b` with the shares `x` and `1 - x` per run.
     fn done(method: Method, columns: &[&str]) -> Done {
@@ -954,61 +889,26 @@ mod tests {
             }],
         };
         let mut d = Done {
-            method,
-            lib: ["Alanine", "Glycine"].map(LibraryCompound::new).to_vec(),
-            columns: columns.iter().map(|c| c.to_string()).collect(),
-            paths: Vec::new(),
-            runs: Vec::new(),
-            mids: Mids {
-                compounds: vec![compound(0), compound(1)],
-                errors: Vec::new(),
+            report: MidReport {
+                method,
+                lib: ["Alanine", "Glycine"].map(LibraryCompound::new).to_vec(),
+                columns: columns.iter().map(|c| c.to_string()).collect(),
+                paths: Vec::new(),
+                runs: Vec::new(),
+                mids: Mids {
+                    compounds: vec![compound(0), compound(1)],
+                    errors: Vec::new(),
+                },
+                stats: Vec::new(),
+                text: String::new(),
+                stats_text: None,
             },
-            stats: Vec::new(),
-            text: String::new(),
-            stats_text: None,
             errors: Vec::new(),
             scanned: 0,
             took: Duration::ZERO,
         };
         d.refresh();
         d
-    }
-
-    #[test]
-    fn exports_follow_the_moved_runs_and_substances() {
-        let mut d = done(Method::Formula, &["a", "b"]);
-        let before = (d.text.clone(), d.stats_text.clone());
-        d.apply(Move::Run(1, 0));
-        assert_eq!(d.columns, ["b", "a"]);
-        let head = "\tb\ta\t\tCI (b)\tCI (a)\t\tR2 (b)\tR2 (a)\n";
-        assert!(d.text.starts_with(head), "{}", d.text);
-        // Run b of Alanine is 0.2, run a 0.1: the values move with their column.
-        assert!(
-            d.text
-                .contains("73 (M0)\t0.2\t0.1\t\t0.02\t0.01\t\t0.2\t0.1\n")
-        );
-        d.apply(Move::Compound(0, 1));
-        assert!(d.text.starts_with("\tb\ta"));
-        assert!(d.text.find("Glycine").unwrap() < d.text.find("Alanine").unwrap());
-        let stats = d.stats_text.as_deref().unwrap();
-        assert!(stats.find("Glycine").unwrap() < stats.find("Alanine").unwrap());
-        // The table's mean of Glycine M0 (0.4 and 0.5) moved up with it.
-        assert!((d.stats[0][0][0].0 - 0.45).abs() < 1e-12);
-        d.apply(Move::Compound(1, 0));
-        d.apply(Move::Run(0, 1));
-        assert_eq!((d.text, d.stats_text), before);
-    }
-
-    #[test]
-    fn moving_runs_keeps_the_statistics_bit_for_bit() {
-        // Alanine M0 is 0.1, 0.2, 0.3: the mean is 0.20000000000000004, summed backwards 0.19999999999999998.
-        let mut d = done(Method::Formula, &["a", "b", "c"]);
-        let (stats, stats_text) = (d.stats.clone(), d.stats_text.clone());
-        d.apply(Move::Run(2, 0));
-        d.apply(Move::Compound(0, 1));
-        d.apply(Move::Compound(1, 0));
-        assert_eq!(d.columns, ["c", "b", "a"]);
-        assert_eq!((d.stats, d.stats_text), (stats, stats_text));
     }
 
     #[test]

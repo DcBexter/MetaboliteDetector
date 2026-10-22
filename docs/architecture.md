@@ -40,9 +40,12 @@ crates/md-core/         library: data model, import/export, analysis algorithms 
   src/cmp.rs            saved components of the old version (.cmp): read and write
   src/search.rs         library search: spectrum and RI scores, one-to-one assignment of components
   src/batch.rs          batch quantification: many runs → substance × run table, quant ions
+  src/batch/edit.rs     edits of the shown table (Edits, Act: drop or move runs and substances), hit index per run
+  src/batch/export.rs   the export file set as contents in memory (results, groups, group statistics, settings, ions); md-app writes them
   src/normalize.rs      normalisation of the batch table (internal standard, total signal, pool, z-score)
-  src/view.rs           view model of the tables: display rules (missing as 0, NaN sort, digits, axis index), batch view cached per generation
+  src/view.rs           view model of the tables: display rules (missing as 0, NaN sort, digits, axis index), batch view cached per generation; hit labels on the TIC, label overlap, LABELLED_PEAKS
   src/mid.rs            MID solver (corrections by sum formula, reference spectra, replicate mean)
+  src/mid/report.rs     MidReport: the result of a MID scan, run and substance moves (shares `batch::pick` with the batch table), statistics, text exports (no egui)
   src/mid/              MID wizard pipeline (fragments, MID library, per-substance MIDs, group
                         statistics, the old text exports) and the FRAG "Export MIDs" of the batch table
   src/centroid.rs       centroided and nominal-mass spectra (NetCDF and MSL export)
@@ -61,7 +64,7 @@ crates/md-app/          egui desktop app (binary `metabolite-detector`), drawing
   src/menu.rs           top menu bar (File, Analysis, View, Help)
   src/status.rs         bottom status bar
   src/run_list.rs       left area: the open runs, the component list below them
-  src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp
+  src/results.rs        the component list: sortable, works without a library, ↑/↓, CSV and .cmp (rows, order and filter in md-core)
   src/central.rs        centre: TIC/SIC plots, scan cursor, scan/RT entry, spectrum
   src/detected_peaks.rs Detected Peaks: ion traces of the selected component beside the spectrum
   src/view.rs           chromatogram view options (derivative, time unit, auto Y, score filter) and the run info window

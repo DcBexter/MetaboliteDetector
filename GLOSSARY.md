@@ -24,7 +24,7 @@ folgen dem Skill `codebase-design` und werden nicht übersetzt.
 | **Normalisierung** | Umrechnung der Batch-Tabelle (interner Standard, Gesamtsignal, Pool, z-Score). | `md_core::normalize` |
 | **MID** | Mass isotopomer distribution: Verteilung der Markierung je Fragment, korrigiert um natürliche Isotope. | `md_core::mid` |
 | **Job** | Hintergrundarbeit der App mit Progress und Cancel; die UI pollt den Zustand. Cancel wirkt zwischen Scans, Variablen oder Komponenten des langen Schritts. | `md_app::jobs::Job`; `md_core::job::{Cancel, Progress}` |
-| **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`) |
+| **View model** | Fertig sortierte, gefilterte und formatierte Zeilen einer Tabelle, aus der Core-Tabelle plus Ansichtsoptionen gebaut und per Generation gecacht. | `md_core::view` (`BatchViewCache`), `md_core::results::order`, `md_core::batch::Edits`, `md_core::mid::MidReport` |
 | **Legacy numeric** | Benannte Rundungen und Rechenwege, die 3.3 bit für bit nachbilden (C-Trunkierung `c_int`, `sg_trunc`, `round_sig8`, glibc `pow`/`hypot`). | `md-core/src/legacy_numeric.rs` (crate-intern) |
 | **Golden test** | Vergleich der neuen Kette gegen Ergebnisse des alten Binary 3.3 auf den Beispiel-Runs. | `crates/md-core/tests/golden_old_md.rs` |
 | **Stage fixture** | Zwischenausgabe einer Stufe von 3.3 (Peaks, Regionen, Components mit Modellpeak) je Beispiel-Run als TSV, für den Vergleich Stufe für Stufe. | `crates/md-core/tests/fixtures/legacy/`, Test `legacy_stages.rs` |

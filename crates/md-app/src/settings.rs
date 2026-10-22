@@ -16,6 +16,7 @@ use md_core::deconv::{AUTO_WIDTH_S, Component, DeconvSettings, auto_width};
 use md_core::job::Cancel;
 use md_core::peaks::{Detector, Peak, PeakSettings};
 use md_core::settings::{ANY, GcmsSettings, MAX_LEN, limits};
+use md_core::view::LABELLED_PEAKS;
 
 use crate::{Job, Run};
 
@@ -40,9 +41,6 @@ impl Default for Appearance {
         }
     }
 }
-
-/// How many of the highest peaks in view get a label (old `SpectrumPlot`: 5).
-pub const LABELLED_PEAKS: usize = 5;
 
 /// A library the user wants to choose from the Settings window.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -396,25 +396,22 @@ impl App {
     }
 }
 
-/// Names of the assigned library compounds at the component apexes on the TIC.
+/// Names of the assigned library compounds at the component apexes on the TIC, coloured by score.
 pub fn labels(run: &Run, show: impl Fn(f64) -> bool) -> Vec<Label> {
     let Some(((lib, ..), id, _)) = &run.ident else {
         return Vec::new();
     };
-    run.components
-        .iter()
-        .zip(&id.assigned)
-        .filter_map(|(k, hit)| {
-            let h = hit.as_ref().filter(|h| show(h.overall))?;
-            let s = k.apex_scan as usize;
-            Some((
-                [run.minutes[s], run.tic[s]],
-                lib.compounds[h.compound].name.clone(),
-                score_color(h.overall),
-                h.overall,
-            ))
-        })
-        .collect()
+    md_core::view::hit_labels(
+        &run.components,
+        &id.assigned,
+        &lib.compounds,
+        &run.minutes,
+        &run.tic,
+        show,
+    )
+    .into_iter()
+    .map(|l| (l.at, l.name, score_color(l.score), l.score))
+    .collect()
 }
 
 /// Best hits of the selected component, the assigned one marked.
@@ -516,25 +513,6 @@ pub fn nist_list(ui: &mut egui::Ui, run: &Run, k: usize, nist: &Nist) -> bool {
 
 pub type LibraryJob = Job<Result<Arc<Library>, String>>;
 pub type IdentJob = (Key, Job<(Identification, Option<RiCalibration>)>);
-
-/// Which labels stay visible when they are drawn left-aligned at `starts` (pixels) with the
-/// given `widths`: the highest score wins, a label overlapping a kept one is hidden.
-pub fn visible_labels(starts: &[f32], widths: &[f32], scores: &[f64]) -> Vec<bool> {
-    let mut order: Vec<usize> = (0..starts.len()).collect();
-    order.sort_by(|a, b| scores[*b].total_cmp(&scores[*a]));
-    let mut keep = vec![false; starts.len()];
-    let mut kept: Vec<usize> = Vec::new();
-    for i in order {
-        if kept
-            .iter()
-            .all(|k| starts[i] >= starts[*k] + widths[*k] || starts[*k] >= starts[i] + widths[i])
-        {
-            keep[i] = true;
-            kept.push(i);
-        }
-    }
-    keep
-}
 
 #[cfg(test)]
 mod tests {
@@ -689,18 +667,6 @@ mod tests {
             assignment_note(&hits, None)
                 .unwrap()
                 .starts_with("Not assigned")
-        );
-    }
-
-    #[test]
-    fn overlapping_labels_keep_the_best_score() {
-        // 0 and 1 overlap (1 scores higher), 2 is clear of both.
-        let keep = visible_labels(&[0.0, 30.0, 100.0], &[50.0, 50.0, 40.0], &[0.8, 0.95, 0.5]);
-        assert_eq!(keep, [false, true, true]);
-        // Touching labels do not overlap.
-        assert_eq!(
-            visible_labels(&[0.0, 50.0], &[50.0, 50.0], &[0.9, 0.8]),
-            [true, true]
         );
     }
 }
