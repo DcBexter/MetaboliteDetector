@@ -385,7 +385,8 @@ impl Calibration {
                 let (data, mz, density, threshold) = (run.data.clone(), self.mz, self.density, self.threshold);
                 let ris: Vec<f64> = (self.first..=self.last).map(|n| 100.0 * n as f64).collect();
                 let source = Msg::from(format!("{}, m/z {mz}, C{}–C{}", run.name, self.first, self.last));
-                self.job.start(ui.ctx(), t("RI calibration", "RI-Kalibrierung").into(), move |_, cancel| {
+                let what = Msg::new(|| t("RI calibration", "RI-Kalibrierung").into());
+                self.job.start(ui.ctx(), what, move |_, cancel| {
                     alkane_calibration(&data, mz, density, threshold, &ris, cancel)
                 });
                 self.job_source = source;
@@ -500,7 +501,8 @@ impl Calibration {
                     run.name,
                     self.mix.len()
                 );
-                self.mix_job.start(ui.ctx(), t("calibration mix", "Kalibriermischung").into(), move |_, cancel| {
+                let what = Msg::new(|| t("calibration mix", "Kalibriermischung").into());
+                self.mix_job.start(ui.ctx(), what, move |_, cancel| {
                     find_mix(mix, &comps, &data.scan_times_s, &s, cancel)
                         .ok_or_else(|| msg!("Cancelled.", "Abgebrochen."))
                 });
