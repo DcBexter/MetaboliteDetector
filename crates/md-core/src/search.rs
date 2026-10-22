@@ -8,6 +8,7 @@ use std::collections::BinaryHeap;
 use rayon::prelude::*;
 
 use crate::deconv::Component;
+use crate::job::Cancel;
 use crate::library::LibraryCompound;
 use crate::ri::{RiCalibration, pick_reference};
 
@@ -360,13 +361,29 @@ pub fn map_compounds_to_library(
     lib: &PreparedLibrary,
     s: &SearchSettings,
 ) -> Identification {
+    map_compounds_cancellable(comps, ris, lib, s, &Cancel::default())
+        .expect("a fresh Cancel is never set")
+}
+
+/// [`map_compounds_to_library`] that checks `cancel` before each component's search and returns `None`
+/// once it is set; otherwise the result is identical.
+pub fn map_compounds_cancellable(
+    comps: &[Component],
+    ris: Option<&[f64]>,
+    lib: &PreparedLibrary,
+    s: &SearchSettings,
+    cancel: &Cancel,
+) -> Option<Identification> {
     let hits: Vec<Vec<LibraryHit>> = comps
         .par_iter()
         .enumerate()
-        .map(|(i, c)| library_hits(&c.spectrum, ris.and_then(|r| r.get(i).copied()), lib, s))
-        .collect();
+        .map(|(i, c)| {
+            (!cancel.is_cancelled())
+                .then(|| library_hits(&c.spectrum, ris.and_then(|r| r.get(i).copied()), lib, s))
+        })
+        .collect::<Option<_>>()?;
     let assigned = assign_best_first(&hits, lib.len());
-    Identification { hits, assigned }
+    Some(Identification { hits, assigned })
 }
 
 /// The assignment step of `map_compounds_to_library` on precomputed hits (`hits[c]` best first):
@@ -718,6 +735,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, Some(0), None]
         );
+    }
+
+    #[test]
+    fn set_cancel_ends_the_search_without_result() {
+        let lib = vec![entry("A", 100.0, &[(50.0, 999)])];
+        let s = all(SearchSettings::default());
+        let comps = [component(&[(50, 100)])];
+        let prepared = PreparedLibrary::new(&lib, &s);
+        let cancel = Cancel::default();
+        let id = map_compounds_cancellable(&comps, None, &prepared, &s, &cancel);
+        assert_eq!(
+            id,
+            Some(map_compounds_to_library(&comps, None, &prepared, &s))
+        );
+        cancel.cancel();
+        assert!(map_compounds_cancellable(&comps, None, &prepared, &s, &cancel).is_none());
     }
 
     #[test]
