@@ -113,7 +113,7 @@ impl Analysis {
     }
 }
 
-/// Peak detection and deconvolution of one run, components ordered by retention time.
+/// Peak detection and deconvolution of one run, components in deconvolution order.
 pub fn analyze(data: &Chromatogram, key: &Key, cancel: &Cancel) -> Analyzed {
     let a = analyze_run(
         data,

@@ -30,7 +30,7 @@ pub struct ResultRow {
     pub quant_ions: Vec<f32>,
 }
 
-/// Rows of all components in component order (ascending RT). `peak_masses[p]` is the ion mass of
+/// Rows of all components in component order. `peak_masses[p]` is the ion mass of
 /// peak `p` of the peak list the components were deconvoluted from; `ris` as in `map_compounds_to_library`.
 /// An assigned hit below `cutoff` (`LS_CUTOFF`) is shown as no match, like the old `DataTableModel`.
 pub fn result_rows(
@@ -68,6 +68,19 @@ pub fn result_rows(
             }
         })
         .collect()
+}
+
+/// The one apex rule: component indices by apex scan, stable, so equal apexes keep the deconvolution
+/// order. The list sorts by it and ↓/↑ with the list hidden steps along it; the run keeps its order.
+pub fn apex_order(comps: &[Component]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..comps.len()).collect();
+    order.sort_by_key(|&k| comps[k].apex_scan);
+    order
+}
+
+/// The rows of the component list in [`apex_order`] of their components (rows come in component order).
+pub fn sort_by_apex(rows: &mut [ResultRow], comps: &[Component]) {
+    rows.sort_by_key(|r| comps[r.component].apex_scan);
 }
 
 /// Old `getIntegral`: the sum over the quant ions of the largest peak of that ion (a duplicate peak
@@ -370,6 +383,20 @@ mod tests {
             (rows[0].name.as_str(), rows[0].overall),
             ("No match: 1", None)
         );
+    }
+
+    #[test]
+    fn rows_sort_by_apex_and_keep_deconvolution_order_on_ties() {
+        let comps = vec![comp(2, &[]), comp(1, &[]), comp(2, &[]), comp(0, &[])];
+        let id = Identification {
+            hits: vec![Vec::new(); 4],
+            assigned: vec![None; 4],
+        };
+        let mut rows = result_rows(&comps, &[0.0, 60.0, 120.0], None, &[], &id, &[], 0.8);
+        sort_by_apex(&mut rows, &comps);
+        let order: Vec<usize> = rows.iter().map(|r| r.component).collect();
+        assert_eq!(order, vec![3, 1, 0, 2]);
+        assert_eq!(apex_order(&comps), vec![3, 1, 0, 2]);
     }
 
     #[test]

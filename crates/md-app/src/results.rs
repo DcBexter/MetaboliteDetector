@@ -8,7 +8,7 @@ use egui_extras::{Column, TableBuilder};
 use md_core::Chromatogram;
 use md_core::results::{
     Col, ListRow as Row, PLAIN, ResultRow, WITH_LIBRARY, find_substance, next_sort, order,
-    result_rows, write_csv,
+    result_rows, sort_by_apex, write_csv,
 };
 use md_core::ri::RiCalibration;
 use md_core::search::Identification;
@@ -367,7 +367,7 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
     };
     let times = &run.data.scan_times_s;
     let ris = cal.map(|c| c.component_ris(times, &run.components));
-    let rows = result_rows(
+    let mut rows = result_rows(
         &run.components,
         times,
         ris.as_deref(),
@@ -376,6 +376,7 @@ fn build_rows(run: &Run, cal: Option<&RiCalibration>, cutoff: f64) -> Vec<Row> {
         compounds,
         cutoff,
     );
+    sort_by_apex(&mut rows, &run.components);
     (rows.into_iter())
         .map(|res| {
             let c = &run.components[res.component];

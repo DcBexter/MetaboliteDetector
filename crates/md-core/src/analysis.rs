@@ -28,7 +28,7 @@ pub struct RunPeaks {
     pub fresh: Option<Vec<Peak>>,
 }
 
-/// A deconvoluted run: components by apex scan, their peaks and each peak's trace mass.
+/// A deconvoluted run: components in deconvolution order, their peaks and each peak's trace mass.
 pub struct RunAnalysis {
     pub times: Vec<f64>,
     pub peaks: Vec<Peak>,
@@ -83,8 +83,7 @@ pub fn find_run_peaks(
     })
 }
 
-/// [`find_run_peaks`], then the deconvolution of all peaks, components ordered by apex scan; the ion
-/// index is dropped. A set `cancel` gives [`AnalyzeError::Cancelled`] at the next stage boundary.
+/// [`find_run_peaks`], then the deconvolution of all peaks; the ion index is dropped. A set `cancel` gives [`AnalyzeError::Cancelled`] at the next stage boundary.
 pub fn analyze_run(
     run: impl Borrow<Chromatogram>,
     peak_settings: &PeakSettings,
@@ -102,9 +101,7 @@ pub fn analyze_run(
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
     }
-    let mut components = deconvolute(&traces, &peaks, &times, deconv);
-    // The order the app shows; a stable sort keeps the detection order of equal apexes.
-    components.sort_by_key(|c| c.apex_scan);
+    let components = deconvolute(&traces, &peaks, &times, deconv);
     let mass_of =
         |p: &[Peak]| -> Vec<u32> { p.iter().map(|p| traces.masses[p.row as usize]).collect() };
     Ok(RunAnalysis {
@@ -186,8 +183,7 @@ mod tests {
                 PeakPass::Reordered => traces.detect_all_peaks(&s),
                 PeakPass::Fresh => traces.detect_peaks(&s),
             };
-            let mut components = deconvolute(&traces, &peaks, &c.scan_times_s, &d);
-            components.sort_by_key(|c| c.apex_scan);
+            let components = deconvolute(&traces, &peaks, &c.scan_times_s, &d);
             assert!(!components.is_empty());
             let masses: Vec<u32> = (peaks.iter())
                 .map(|p| traces.masses[p.row as usize])
@@ -216,22 +212,6 @@ mod tests {
                 .peaks
         };
         assert_ne!(analyzed(PeakPass::Reordered), analyzed(PeakPass::Fresh));
-    }
-
-    #[test]
-    fn components_are_ordered_by_apex_scan() {
-        let (c, s) = (split_masses(), PeakSettings::default());
-        let d = DeconvSettings {
-            min_peak_number: 1,
-            ..Default::default()
-        };
-        let a = analyze_run(c, &s, FWHM, &d, PeakPass::Fresh, &Cancel::default()).unwrap();
-        assert!(!a.components.is_empty());
-        assert!(
-            a.components
-                .windows(2)
-                .all(|w| w[0].apex_scan <= w[1].apex_scan)
-        );
     }
 
     #[test]

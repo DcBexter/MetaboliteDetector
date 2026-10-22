@@ -76,7 +76,7 @@ impl App {
         }
     }
 
-    /// ↑/↓ with the component list hidden: previous or next component by retention time. With the
+    /// ↑/↓ with the component list hidden: previous or next component by apex. With the
     /// list shown it steps in the order of the list (filter, sort) itself.
     fn step_component(&mut self, ctx: &egui::Context) {
         if self.panels.components || ctx.text_edit_focused() {
@@ -88,8 +88,15 @@ impl App {
         let step = ctx.input(|i| {
             i32::from(i.key_pressed(Key::ArrowDown)) - i32::from(i.key_pressed(Key::ArrowUp))
         });
-        let to = (step != 0).then(|| stepped(run.components.len(), run.component, step));
-        if let Some(k) = to.flatten() {
+        if step == 0 {
+            return;
+        }
+        // Along the apex order, as the list shows it; the list itself steps when it is shown.
+        let order = md_core::results::apex_order(&run.components);
+        let at = run
+            .component
+            .and_then(|k| order.iter().position(|&x| x == k));
+        if let Some(k) = stepped(order.len(), at, step).map(|p| order[p]) {
             run.component = Some(k);
             run.scan = run.components[k].apex_scan as usize;
         }
@@ -133,6 +140,25 @@ mod tests {
         assert_eq!(app.runs[0].component, Some(1));
         press(&mut app, Key::ArrowUp);
         assert_eq!(app.runs[0].component, Some(0));
+    }
+
+    #[test]
+    fn hidden_list_arrows_follow_the_apex_order() {
+        let mut app = App::default();
+        app.runs.push(crate::results::tests::run());
+        // Deconvolution order with an inversion: component 0 has the later apex (2), 1 the earlier (1).
+        app.runs[0].components.reverse();
+        app.panels.components = false;
+        press(&mut app, Key::ArrowDown);
+        assert_eq!(app.runs[0].component, Some(1), "apex 1 first");
+        press(&mut app, Key::ArrowDown);
+        assert_eq!(
+            app.runs[0].component,
+            Some(0),
+            "next later apex, not the next index"
+        );
+        press(&mut app, Key::ArrowUp);
+        assert_eq!(app.runs[0].component, Some(1));
     }
 
     #[test]

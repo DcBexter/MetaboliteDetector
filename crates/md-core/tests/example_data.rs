@@ -693,8 +693,7 @@ fn example_components_save_and_load_again() {
             .iter()
             .map(|p| traces.masses[p.row as usize])
             .collect();
-        let mut comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
-        comps.sort_by_key(|k| k.apex_scan);
+        let comps = deconvolute(&traces, &peaks, &c.scan_times_s, &DeconvSettings::default());
         assert!(comps.len() > 10, "{}", name(&path));
 
         let saved = compounds_of_components(&comps, &masses, &peaks, &c.scan_times_s, &[]);
