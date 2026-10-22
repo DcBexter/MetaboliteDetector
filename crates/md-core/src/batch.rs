@@ -883,6 +883,7 @@ pub fn table(
 mod tests {
     use super::*;
     use crate::library::parse_msl;
+    use crate::peaks::Detector;
 
     fn ion(mass: u32, integral: f64, quality: f32) -> IonPeak {
         IonPeak {
@@ -1676,10 +1677,13 @@ NUM PEAKS: 1
         for (p, c) in paths.iter().zip([&full, &full, &partial, &flat]) {
             crate::andi::write(p, c).unwrap();
         }
-        let r = study_equals_the_passes(&paths, &two_substances_library(), 2);
-        assert!(r.rescanned > 0, "the partial run gets ions");
-        // The flat run has nothing to find, read again or not.
-        assert!(r.runs[3].found.is_empty());
+        // The matched detector rewrites the traces, so its rescan detects again.
+        for detector in [Detector::default(), Detector::MATCHED] {
+            let r = study_equals_the_passes(&paths, &two_substances_library(), 2, detector);
+            assert!(r.rescanned > 0, "the partial run gets ions");
+            // The flat run has nothing to find, read again or not.
+            assert!(r.runs[3].found.is_empty());
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1689,11 +1693,13 @@ NUM PEAKS: 1
         paths: &[PathBuf],
         lib: &[LibraryCompound],
         parallel: usize,
+        detector: Detector,
     ) -> StudyResult {
-        let s = ScanSettings {
+        let mut s = ScanSettings {
             untargeted: true,
             ..Default::default()
         };
+        s.peaks.detector = detector;
         let (prepared, q) = (
             PreparedLibrary::new(lib, &s.search),
             QuantSettings::default(),
@@ -1743,6 +1749,9 @@ NUM PEAKS: 1
             .collect();
         paths.sort();
         assert_eq!(paths.len(), 15);
-        assert!(study_equals_the_passes(&paths, &lib, DEFAULT_PARALLEL).rescanned > 0);
+        assert!(
+            study_equals_the_passes(&paths, &lib, DEFAULT_PARALLEL, Detector::default()).rescanned
+                > 0
+        );
     }
 }
