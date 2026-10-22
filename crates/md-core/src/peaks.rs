@@ -331,7 +331,7 @@ fn walk_block(
     c: &Chromatogram,
     row_of: Option<&[usize]>,
     block: &[f32],
-    put: &mut dyn FnMut(usize, usize, f32),
+    mut put: impl FnMut(usize, usize, f32),
 ) {
     let (first, last) = (block[0], block[block.len() - 1]);
     for s in 0..c.scan_count() {
@@ -356,22 +356,26 @@ fn walk_block(
     }
 }
 
-type Walk<'a> = dyn Fn(&[f32], &mut dyn FnMut(usize, usize, f32)) + Sync + 'a;
-
-fn sparse_store(rows: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+fn sparse_store(
+    rows: usize,
+    mz: &[f32],
+    fill: &[f32],
+    c: &Chromatogram,
+    row_of: Option<&[usize]>,
+) -> Store {
     let mut rows: Vec<Vec<(u32, f32)>> = vec![Vec::new(); rows];
     rows.par_chunks_mut(BLOCK)
         .zip(mz.par_chunks(BLOCK))
         .for_each(|(rows, block)| {
             // Count first: growing the rows costs more in fresh pages than a second walk.
             let mut len = [(0usize, usize::MAX); BLOCK];
-            walk(block, &mut |r, s, _| {
+            walk_block(c, row_of, block, |r, s, _| {
                 if len[r].1 != s {
                     len[r] = (len[r].0 + 1, s);
                 }
             });
             (rows.iter_mut().zip(len)).for_each(|(r, n)| r.reserve_exact(n.0));
-            walk(block, &mut |r, s, v| match rows[r].last_mut() {
+            walk_block(c, row_of, block, |r, s, v| match rows[r].last_mut() {
                 Some(e) if e.0 == s as u32 => e.1 += v,
                 _ => rows[r].push((s as u32, v)),
             });
@@ -382,7 +386,14 @@ fn sparse_store(rows: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
     }
 }
 
-fn dense_store(cells: usize, scans: usize, mz: &[f32], fill: &[f32], walk: &Walk) -> Store {
+fn dense_store(
+    cells: usize,
+    scans: usize,
+    mz: &[f32],
+    fill: &[f32],
+    c: &Chromatogram,
+    row_of: Option<&[usize]>,
+) -> Store {
     let mut values = vec![0.0f32; cells];
     if !fill.is_empty() {
         (values.par_chunks_mut(scans)).for_each(|row| row.copy_from_slice(fill));
@@ -393,7 +404,7 @@ fn dense_store(cells: usize, scans: usize, mz: &[f32], fill: &[f32], walk: &Walk
             .zip(mz.par_chunks(BLOCK))
             .for_each(|(rows, block)| {
                 let mut prev = usize::MAX;
-                walk(block, &mut |r, s, v| {
+                walk_block(c, row_of, block, |r, s, v| {
                     let cell = r * scans + s;
                     match cell == prev {
                         true => rows[cell] += v,
@@ -469,12 +480,9 @@ impl IonTraces {
             &[]
         };
         let row_of = (!exact).then_some(&row_of[..]);
-        let walk = |block: &[f32], put: &mut dyn FnMut(usize, usize, f32)| {
-            walk_block(c, row_of, block, put)
-        };
         let store = match sparse {
-            true => sparse_store(masses.len(), &mz, fill, &walk),
-            false => dense_store(cells, scans, &mz, fill, &walk),
+            true => sparse_store(masses.len(), &mz, fill, c, row_of),
+            false => dense_store(cells, scans, &mz, fill, c, row_of),
         };
         Ok(Self {
             masses,
