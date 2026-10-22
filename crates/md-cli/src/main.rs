@@ -14,7 +14,7 @@ use md_core::batch::{
 };
 use md_core::library;
 use md_core::ri::RiCalibration;
-use md_core::search::{PreparedLibrary, SearchSettings};
+use md_core::search::PreparedLibrary;
 use md_core::settings::GcmsSettings;
 
 const USAGE: &str = "\
@@ -277,7 +277,7 @@ fn run(a: Args) -> Result<bool, String> {
         if scan.calibration.is_none() {
             return Err("--shift-reference needs a calibration (-c)".into());
         }
-        let cutoff = a.shift_cutoff.unwrap_or(SearchSettings::default().cutoff);
+        let cutoff = a.shift_cutoff.unwrap_or(settings.ls_cutoff);
         scan.shift = Some(
             ShiftReference::find(&compounds, name, cutoff)
                 .ok_or_else(|| format!("--shift-reference: no substance with RI named {name}"))?,

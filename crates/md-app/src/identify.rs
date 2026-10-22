@@ -622,6 +622,54 @@ mod tests {
         assert_eq!(app.wanted_search().min_equal_fragments, 1);
     }
 
+    /// Changing LS_CUTOFF prepares the library again and identifies the runs again (#399): a hit
+    /// below the new cutoff is gone, one above it is back.
+    #[test]
+    fn a_new_ls_cutoff_identifies_again() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../md-core/tests/data/synthetic-nist.sdf");
+        let mut app = App::default();
+        app.settings.applied.ls_cutoff = 0.0;
+        // The pre-filter of a NIST library needs shared fragments; any one will do.
+        app.settings.applied.sql_minimal_number_equal_fragments = 0;
+        let lib = load(
+            &path,
+            app.settings.applied.search(),
+            false,
+            &Cancel::default(),
+        )
+        .unwrap();
+        let alpha = &lib.compounds[0].spectrum;
+        let mut run = crate::results::tests::run();
+        // One ion missing: a good hit, but below a cutoff of 1.
+        run.components[0].spectrum = (alpha.masses.iter().zip(&alpha.values))
+            .map(|(m, v)| (*m as u32, *v as u32))
+            .skip(1)
+            .collect();
+        app.runs.push(run);
+        app.library = Some(Arc::new(lib));
+        let ctx = egui::Context::default();
+        let settle = |app: &mut App| {
+            for _ in 0..10_000 {
+                app.update_identification(&ctx);
+                if app.library_job.is_none() && app.runs[0].ident_job.is_none() {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut app);
+        let assigned = |app: &App| app.runs[0].ident.as_ref().unwrap().1.assigned[0];
+        let score = assigned(&app).expect("assigned at cutoff 0").overall;
+        assert!((0.0..1.0).contains(&score));
+        app.settings.applied.ls_cutoff = (score + 1.0) / 2.0;
+        settle(&mut app);
+        assert!(assigned(&app).is_none() && app.error.is_none());
+        app.settings.applied.ls_cutoff = 0.0;
+        settle(&mut app);
+        assert_eq!(assigned(&app).map(|h| h.overall), Some(score));
+    }
+
     #[test]
     fn note_explains_an_assignment_other_than_the_first_hit() {
         let hit = |compound| LibraryHit {

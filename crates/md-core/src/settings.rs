@@ -543,16 +543,13 @@ impl GcmsSettings {
         }
     }
 
-    /// Settings of a batch scan: the library is prepared with `search()`, but hits are cut off at
+    /// Settings of a batch scan: the library is prepared with `search()`, which cuts hits off at
     /// `LS_CUTOFF` like the old `BatchQuantificator`.
     pub fn scan(&self, calibration: Option<RiCalibration>) -> ScanSettings {
         ScanSettings {
             peaks: self.peak(),
             deconv: self.deconv(),
-            search: SearchSettings {
-                cutoff: self.ls_cutoff,
-                ..self.search()
-            },
+            search: self.search(),
             calibration,
             shift: None,
             untargeted: false,
@@ -570,8 +567,7 @@ impl GcmsSettings {
         }
     }
 
-    /// The GUI searches with cutoff 0 and colours by score (algorithms.md §5.8); `LS_CUTOFF` applies
-    /// later, to the result table and Find substance.
+    /// The search cuts off at `LS_CUTOFF` everywhere, a deliberate deviation from 3.3 (algorithms.md §5.8).
     pub fn search(&self) -> SearchSettings {
         SearchSettings {
             ri_diff: self.ls_ri_diff,
@@ -583,7 +579,7 @@ impl GcmsSettings {
             use_ri: self.ls_use_ri,
             use_spec: self.ls_use_spec,
             mass_filter: self.ls_mass_filter.clone(),
-            cutoff: 0.0,
+            cutoff: self.ls_cutoff,
             max_fragments: self.sql_max_number_fragments.max(1) as usize,
             min_equal_fragments: self.sql_minimal_number_equal_fragments.max(0) as usize,
         }
@@ -616,13 +612,7 @@ mod tests {
         );
         let back = GcmsSettings::default().from_bytes(&s.to_bytes()).unwrap();
         assert_eq!(back.an_deconvolution_width, Some(1.0));
-        assert_eq!(
-            s.search(),
-            SearchSettings {
-                cutoff: 0.0,
-                ..Default::default()
-            }
-        );
+        assert_eq!(s.search(), SearchSettings::default());
         assert_eq!(
             (
                 s.sf_peak_threshold_end,
@@ -823,15 +813,9 @@ mod tests {
         let cal = RiCalibration::new([(0.0, 0.0), (60.0, 100.0)]).unwrap();
         let scan = s.scan(Some(cal.clone()));
         assert_eq!((scan.peaks, scan.calibration), (s.peak(), Some(cal)));
-        // The library is prepared with cutoff 0, the scan itself cuts hits off.
-        assert_eq!(scan.search.cutoff, 0.6);
-        assert_eq!(
-            SearchSettings {
-                cutoff: 0.0,
-                ..scan.search
-            },
-            s.search()
-        );
+        // One cutoff for the library search and the scan (#399).
+        assert_eq!(scan.search, s.search());
+        assert_eq!(scan.search.cutoff, s.ls_cutoff);
     }
 
     /// §5.2: 191 bytes for the defaults, checksum 20.5.
