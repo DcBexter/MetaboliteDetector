@@ -324,19 +324,15 @@ impl IonTraces {
             return Self::exact(c);
         }
         match centroided(c, fwhm) {
-            Some(cc) => Self::build(&cc, false),
-            None => Self::build(c, false),
+            Some(cc) => Self::build_as(&cc, false, None),
+            None => Self::build_as(c, false, None),
         }
     }
 
     /// One trace per distinct m/z (the old `getSignal` takes the point of exactly that mass; a
     /// missing mass reads [`Chromatogram::missing_value`]). Masses outside the nominal mass range are dropped.
     pub fn exact(c: &Chromatogram) -> Result<Self, TooLarge> {
-        Self::build(c, true)
-    }
-
-    fn build(c: &Chromatogram, exact: bool) -> Result<Self, TooLarge> {
-        Self::build_as(c, exact, None)
+        Self::build_as(c, true, None)
     }
 
     /// `sparse`: force a store (tests, perf); `None` picks it by fill ratio.
