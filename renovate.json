@@ -15,7 +15,8 @@
     "automerge": true
   },
   "git-submodules": {
-    "enabled": true
+    "enabled": true,
+    "minimumReleaseAge": null
   },
   "customManagers": [
     {
