@@ -1,12 +1,15 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
   "dependencyDashboard": false,
   "minimumReleaseAge": "3 days",
   "automerge": true,
   "automergeType": "pr",
-  "platformAutomerge": false,
-  "rebaseWhen": "conflicted",
+  "platformAutomerge": true,
+  "rebaseWhen": "behind-base-branch",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
@@ -28,5 +31,6 @@
       "packageNameTemplate": "rust-lang/rust",
       "datasourceTemplate": "github-releases"
     }
-  ]
+  ],
+  "ignoreTests": false
 }
