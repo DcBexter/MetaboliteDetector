@@ -18,6 +18,14 @@
     "enabled": true,
     "minimumReleaseAge": null
   },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchUpdateTypes": ["pinDigest"],
+      "minimumReleaseAge": null
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
