@@ -20,6 +20,19 @@ env:
   # No debug info: faster builds and a smaller cache; panics still name the function.
   CARGO_PROFILE_DEV_DEBUG: 0
 jobs:
+  dependencies:
+    name: Dependency review
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-scopes: runtime,development,unknown
+
   check:
     name: Rust (${{ matrix.os }})
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -32,7 +45,7 @@ jobs:
       # The Sonar scan is skipped until the repo secret exists and Automatic Analysis is off (see CONTRIBUTING.md).
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Linux: full history for Sonar blame and new-code detection. Windows: HEAD^1 for the change check.
           fetch-depth: ${{ runner.os != 'Linux' && 2 || 0 }}
@@ -88,11 +101,12 @@ jobs:
   # The one required result for main: a fixed name, and it reports even when the matrix fails or is cancelled.
   ci:
     name: CI
-    needs: check
+    needs: [check, dependencies]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - run: test "$RESULT" = success
+      - run: test "$RESULT" = success && { test "$DEPENDENCIES" = success || test "$DEPENDENCIES" = skipped; }
         env:
           RESULT: ${{ needs.check.result }}
+          DEPENDENCIES: ${{ needs.dependencies.result }}
