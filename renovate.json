@@ -8,16 +8,25 @@
   "minimumReleaseAge": "3 days",
   "automerge": true,
   "automergeType": "pr",
-  "platformAutomerge": true,
+  "platformAutomerge": false,
   "rebaseWhen": "behind-base-branch",
   "lockFileMaintenance": {
     "enabled": true,
+    "minimumReleaseAge": null,
     "automerge": true
   },
   "git-submodules": {
     "enabled": true,
     "minimumReleaseAge": null
   },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchUpdateTypes": ["pinDigest"],
+      "minimumReleaseAge": null
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
