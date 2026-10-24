@@ -12,6 +12,7 @@
   "rebaseWhen": "behind-base-branch",
   "lockFileMaintenance": {
     "enabled": true,
+    "minimumReleaseAge": null,
     "automerge": true
   },
   "git-submodules": {
