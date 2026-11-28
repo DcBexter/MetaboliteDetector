@@ -1,5 +1,5 @@
 [toolchain]
 # Pinned so a new Clippy cannot turn main red without a code change, and the CI cache key stays stable.
 # Renovate raises it (customManagers in renovate.json).
-channel = "1.99.1"
+channel = "1.100.0"
 components = ["clippy", "rustfmt"]
